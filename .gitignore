@@ -13,3 +13,10 @@ CLAUDE.local.md
 .DS_Store
 Thumbs.db
 .mcp-tls/
+
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yaml
+docker-compose.override.yml
+*.keystore
+*.jks
