@@ -32,9 +32,11 @@ export async function listParties(db: Queryable, table: PartyTable, householdId:
   if (f.q) where.push(`t.name ilike $${params.push(like(f.q))}`);
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(lower(t.name), t.id) > ($${params.push(cur[0])}, $${params.push(cur[1])}::uuid)`);
-  const { rows } = await db.query<Party>(
-    `select ${PARTY_COLS(table)} from ${table} t where ${where.join(' and ')} order by lower(t.name), t.id limit $${params.push(f.limit + 1)}`, params);
-  return pageOf(rows, f.limit, (r) => [r.name.toLowerCase(), r.id]);
+  // The cursor carries lower(name) as computed by the database, the same expression the order and the comparison use.
+  const { rows } = await db.query<Party & { sortKey: string }>(
+    `select ${PARTY_COLS(table)}, lower(t.name) as "sortKey" from ${table} t where ${where.join(' and ')} order by lower(t.name), t.id limit $${params.push(f.limit + 1)}`, params);
+  const page = pageOf(rows, f.limit, (r) => [r.sortKey, r.id]);
+  return { items: page.items.map(({ sortKey: _key, ...party }) => party), nextCursor: page.nextCursor };
 }
 
 export async function insertMember(db: Queryable, v: { householdId: string; userId: string; name: string; dateOfBirth: string | null; notes: string }): Promise<string> {
@@ -309,18 +311,16 @@ export async function touchBill(db: Queryable, householdId: string, id: string):
 export async function findDuplicateBills(db: Queryable, householdId: string, c: {
   providerId: string; memberId: string; providerReference: string | null; statementDate: string; originalCents: bigint; excludeId?: string;
 }): Promise<string[]> {
+  // The reference is normalized by the database with the same expression as the generated column bills.reference_norm,
+  // so entry-time hints and stored-column hints always agree, including for non-ASCII references.
   const { rows } = await db.query<{ id: string }>(
-    `select o.id from bills o where o.household_id = $1 and o.provider_id = $2 and ($7::uuid is null or o.id <> $7)
-       and (($3 <> '' and o.reference_norm = $3)
+    `with probe as (select lower(regexp_replace(coalesce($3::text, ''), '[^[:alnum:]]', '', 'g')) as norm)
+     select o.id from bills o, probe where o.household_id = $1 and o.provider_id = $2 and ($7::uuid is null or o.id <> $7)
+       and ((probe.norm <> '' and o.reference_norm = probe.norm)
          or (o.member_id = $4 and o.statement_date = $5 and o.original_cents = $6))
      order by o.statement_date desc, o.id limit 10`,
-    [householdId, c.providerId, normalizeReference(c.providerReference), c.memberId, c.statementDate, c.originalCents.toString(), c.excludeId ?? null]);
+    [householdId, c.providerId, c.providerReference, c.memberId, c.statementDate, c.originalCents.toString(), c.excludeId ?? null]);
   return rows.map((r) => r.id);
-}
-
-/** Must match the generated column bills.reference_norm for ASCII input: lower case with non-alphanumerics removed. */
-export function normalizeReference(ref: string | null): string {
-  return (ref ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 export async function listDuplicatesOf(db: Queryable, householdId: string, id: string): Promise<Array<{

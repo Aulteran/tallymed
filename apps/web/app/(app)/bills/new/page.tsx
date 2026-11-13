@@ -1,20 +1,25 @@
 import Link from 'next/link';
-import { listMembers, listProviders, listVisits } from '../../../../server/services/expenses.ts';
-import { AMOUNT_SOURCES, Banner, Csrf, flat, label, newKey, Options, requireSession, type SearchParams } from '../../../components/ui.tsx';
+import { pickParties, pickVisits } from '../../../../server/services/expenses.ts';
+import { AMOUNT_SOURCES, Banner, Csrf, flatWithFlash, label, NarrowForm, newKey, Options, q80, requireSession, Truncated, type SearchParams } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Enter a bill · TallyMed' };
 
 export default async function NewBill({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
-  const p = await flat(searchParams);
+  const p = await flatWithFlash(searchParams, '/bills/new');
   const [members, providers, visits] = await Promise.all([
-    listMembers(ctx.pool, actor, { limit: 100 }), listProviders(ctx.pool, actor, { limit: 100 }),
-    listVisits(ctx.pool, actor, { ...(p.memberId ? { memberId: p.memberId } : {}), limit: 100 }).catch(() => ({ items: [] })),
+    pickParties(ctx.pool, actor, 'members', { q: q80(p.memberQ), currentId: p.memberId }),
+    pickParties(ctx.pool, actor, 'providers', { q: q80(p.providerQ), currentId: p.providerId }),
+    pickVisits(ctx.pool, actor, { memberId: p.memberId, q: q80(p.visitQ), currentId: p.visitId }).catch(() => ({ items: [], truncated: false })),
   ]);
   return <main>
     <h1>Enter a bill</h1>
     <Banner code={p.error} />
+    {(members.truncated || providers.truncated || visits.truncated || p.memberQ || p.providerQ || p.visitQ) && <>
+      {members.truncated && <Truncated what="family members" />}{providers.truncated && <Truncated what="providers" />}{visits.truncated && <Truncated what="visits" />}
+      <NarrowForm fields={[{ name: 'memberQ', label: 'Find a family member' }, { name: 'providerQ', label: 'Find a provider' }, { name: 'visitQ', label: 'Find a visit' }]} values={p} />
+    </>}
     <form className="card" method="post" action="/api/expenses/bills/create">
       <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
       <label htmlFor="memberId">Family member</label>

@@ -1,23 +1,30 @@
 import Link from 'next/link';
-import { listMembers, listProviders, listVisits } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, flat, load, Options, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { listVisits, pickParties } from '../../../server/services/expenses.ts';
+import { Banner, Csrf, flatWithFlash, load, NarrowForm, Options, Pager, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Visits · TallyMed' };
 
 export default async function VisitsPage({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
-  const p = await flat(searchParams);
+  const p = await flatWithFlash(searchParams, '/visits');
   const [members, providers, activeMembers, activeProviders] = await Promise.all([
-    listMembers(ctx.pool, actor, { archived: 'yes', limit: 100 }), listProviders(ctx.pool, actor, { archived: 'yes', limit: 100 }),
-    listMembers(ctx.pool, actor, { limit: 100 }), listProviders(ctx.pool, actor, { limit: 100 }),
+    pickParties(ctx.pool, actor, 'members', { archived: true, q: q80(p.memberQ), currentId: p.memberId }),
+    pickParties(ctx.pool, actor, 'providers', { archived: true, q: q80(p.providerQ), currentId: p.providerId }),
+    pickParties(ctx.pool, actor, 'members', { q: q80(p.memberQ), currentId: p.memberId }),
+    pickParties(ctx.pool, actor, 'providers', { q: q80(p.providerQ), currentId: p.providerId }),
   ]);
   const filters = Object.fromEntries(['q', 'memberId', 'providerId', 'from', 'to'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listVisits(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
+  const truncated = members.truncated || providers.truncated || activeMembers.truncated || activeProviders.truncated;
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
   return <main className="wide">
     <h1>Visits</h1>
     <Banner code={p.error} invalid={invalid} />
+    {(truncated || p.memberQ || p.providerQ) && <>
+      {(members.truncated || activeMembers.truncated) && <Truncated what="family members" />}{(providers.truncated || activeProviders.truncated) && <Truncated what="providers" />}
+      <NarrowForm fields={[{ name: 'memberQ', label: 'Find a family member' }, { name: 'providerQ', label: 'Find a provider' }]} values={p} />
+    </>}
     <form method="get" className="card row" role="search">
       <div><label htmlFor="q">Search</label><input id="q" name="q" defaultValue={p.q} /></div>
       <div><label htmlFor="memberId">Family member</label><select id="memberId" name="memberId" defaultValue={p.memberId ?? ''}><Options items={opt(members)} blank="Everyone" /></select></div>

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { listProviders } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, flat, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Csrf, flat, flatWithFlash, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Providers · TallyMed' };
@@ -8,7 +8,7 @@ const KINDS = ['facility', 'clinician', 'lab', 'pharmacy', 'other'];
 
 export default async function Page({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
-  const params = await flat(searchParams);
+  const params = await flatWithFlash(searchParams, '/providers');
   const { data, invalid } = await load(() => listProviders(ctx.pool, actor, { q: params.q, archived: params.archived, cursor: params.cursor }), { items: [], nextCursor: null });
   return <main>
     <h1>Providers</h1>

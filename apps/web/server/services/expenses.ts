@@ -129,6 +129,41 @@ async function requireActive(tx: Queryable, table: repo.PartyTable, householdId:
   return p;
 }
 
+/** How many records a select list shows before it is marked as truncated. */
+export const PICK_LIMIT = 100;
+export interface PickList<T> { items: T[]; truncated: boolean }
+
+/**
+ * Options for a member or provider select. The record that is currently selected is always included, even when it
+ * falls outside the first PICK_LIMIT matches, so saving a form can never silently switch it. `truncated` tells the page
+ * to offer a search. An invalid or foreign `currentId` is ignored.
+ */
+export async function pickParties(pool: Pool, actor: Actor, kind: 'members' | 'providers', o: { q?: string; archived?: boolean; currentId?: string | null }): Promise<PickList<repo.Party>> {
+  authorize(actor, 'expenses:read');
+  const table = kind === 'members' ? 'family_members' : 'providers';
+  const page = await repo.listParties(pool, table, actor.householdId, parse(filterSchemas.party, { q: o.q, archived: o.archived ? 'yes' : undefined, limit: PICK_LIMIT }));
+  const items = [...page.items];
+  const current = o.currentId && schemas.id.safeParse(o.currentId).success ? o.currentId : null;
+  if (current && !items.some((i) => i.id === current)) {
+    const found = await repo.getParty(pool, table, actor.householdId, current, false);
+    if (found) items.unshift(found);
+  }
+  return { items, truncated: page.nextCursor !== null };
+}
+
+/** Visit options for a bill's member, with the currently linked visit always included. */
+export async function pickVisits(pool: Pool, actor: Actor, o: { memberId?: string | null; q?: string; currentId?: string | null }): Promise<PickList<repo.Visit>> {
+  authorize(actor, 'expenses:read');
+  const page = await repo.listVisits(pool, actor.householdId, parse(filterSchemas.visit, { ...(o.memberId ? { memberId: o.memberId } : {}), ...(o.q ? { q: o.q } : {}), limit: PICK_LIMIT }));
+  const items = [...page.items];
+  const current = o.currentId && schemas.id.safeParse(o.currentId).success ? o.currentId : null;
+  if (current && !items.some((i) => i.id === current)) {
+    const found = await repo.getVisit(pool, actor.householdId, current, false);
+    if (found) items.unshift(found);
+  }
+  return { items, truncated: page.nextCursor !== null };
+}
+
 // ---------- visits ----------
 
 export async function listVisits(pool: Pool, actor: Actor, raw: unknown) {
@@ -271,9 +306,22 @@ export async function updateBill(pool: Pool, actor: Actor, input: unknown, reque
       providerId: d.providerId, providerName, providerReference: d.providerReference, statementDate: d.statementDate, dueDate: d.dueDate,
       originalCents: original, baseCents: base, source: d.amountSource ?? current!.amountSource, sourceNote: d.sourceNote, notes: d.notes,
     });
-    const detail: Detail = { providerChanged: providerName !== null };
-    if (original !== bill.originalCents) Object.assign(detail, { fromOriginalCents: bill.originalCents.toString(), toOriginalCents: original.toString() });
-    if (base !== bill.baseResponsibilityCents) Object.assign(detail, { fromResponsibilityCents: bill.baseResponsibilityCents.toString(), toResponsibilityCents: base.toString() });
+    // Every identifying or provenance field records old and new values, so a confirmed bill's history can always show what
+    // changed. Free-text notes record only a changed flag (they are not evidence); the source note is provenance, so its
+    // previous and new text are kept (bounded to 500 characters by the schema).
+    const detail: Detail = { providerChanged: d.providerId !== bill.providerId };
+    const track = (name: string, from: string | null, to: string | null) => {
+      if (from !== to) Object.assign(detail, { [`from${name}`]: from, [`to${name}`]: to });
+    };
+    track('ProviderId', bill.providerId, d.providerId);
+    track('ProviderReference', current!.providerReference, d.providerReference);
+    track('StatementDate', current!.statementDate, d.statementDate);
+    track('DueDate', current!.dueDate, d.dueDate);
+    track('AmountSource', current!.amountSource, d.amountSource ?? current!.amountSource);
+    track('SourceNote', current!.sourceNote, d.sourceNote);
+    track('OriginalCents', bill.originalCents.toString(), original.toString());
+    track('ResponsibilityCents', bill.baseResponsibilityCents.toString(), base.toString());
+    if (current!.notes !== d.notes) detail.notesChanged = true;
     await recordAudit(tx, { householdId: actor.householdId, actorUserId: actor.userId, action: 'bill.updated', entityType: 'bill', entityId: d.id, requestId, detail });
     return { id: d.id };
   });

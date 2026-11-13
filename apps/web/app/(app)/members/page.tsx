@@ -1,13 +1,13 @@
 import Link from 'next/link';
 import { listMembers } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, flat, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Csrf, flat, flatWithFlash, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Family members · TallyMed' };
 
 export default async function Page({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
-  const params = await flat(searchParams);
+  const params = await flatWithFlash(searchParams, '/members');
   const { data, invalid } = await load(() => listMembers(ctx.pool, actor, { q: params.q, archived: params.archived, cursor: params.cursor }), { items: [], nextCursor: null });
   return <main>
     <h1>Family members</h1>

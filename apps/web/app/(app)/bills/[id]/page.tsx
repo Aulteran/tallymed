@@ -1,8 +1,8 @@
 import Link from 'next/link';
-import { getBillDetail, listProviders, listVisits } from '../../../../server/services/expenses.ts';
+import { getBillDetail, pickParties, pickVisits } from '../../../../server/services/expenses.ts';
 import { centsToUsdInput } from '../../../../server/money.ts';
 import {
-  ADJUSTMENT_CATEGORIES, AMOUNT_SOURCES, Banner, Csrf, dateOf, flat, label, load, Money, newKey, Options, requireSession, type SearchParams,
+  ADJUSTMENT_CATEGORIES, AMOUNT_SOURCES, Banner, Csrf, dateOf, flat, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, q80, requireSession, Truncated, type SearchParams,
 } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -11,11 +11,12 @@ export const metadata = { title: 'Bill · TallyMed' };
 export default async function BillPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
   const { id } = await params;
-  const q = await flat(searchParams);
+  const q = await flatWithFlash(searchParams, `/bills/${id}`);
   const { data } = await load(() => getBillDetail(ctx.pool, actor, id), null);
   const { bill: b, adjustments, duplicates, history } = data!;
   const [providers, visits] = await Promise.all([
-    listProviders(ctx.pool, actor, { archived: 'yes', limit: 100 }), listVisits(ctx.pool, actor, { memberId: b.memberId, limit: 100 }),
+    pickParties(ctx.pool, actor, 'providers', { archived: true, q: q80(q.providerQ), currentId: b.providerId }),
+    pickVisits(ctx.pool, actor, { memberId: b.memberId, q: q80(q.visitQ), currentId: b.visitId }),
   ]);
   const estimate = b.amountStatus === 'estimate';
   const hidden = (<><Csrf token={csrf} /><input type="hidden" name="id" value={b.id} /><input type="hidden" name="version" value={b.version} /></>);
@@ -42,6 +43,10 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       {b.providerNameAtEntry !== b.providerName && <p className="muted">Provider name at entry: {b.providerNameAtEntry}. Member name at entry: {b.memberNameAtEntry}.</p>}
       {estimate && <form method="post" action="/api/expenses/bills/confirm">{hidden}<button type="submit">Confirm these amounts</button></form>}
     </div>
+    {(providers.truncated || visits.truncated || q.providerQ || q.visitQ) && <>
+      {providers.truncated && <Truncated what="providers" />}{visits.truncated && <Truncated what="visits" />}
+      <NarrowForm fields={[{ name: 'providerQ', label: 'Find a provider' }, { name: 'visitQ', label: 'Find a visit' }]} values={q} />
+    </>}
     <form className="card" method="post" action="/api/expenses/bills/update">
       <h2>Details</h2>{hidden}
       <label htmlFor="providerId">Billing provider</label>

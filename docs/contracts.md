@@ -24,7 +24,7 @@ An insurer adjustment or insurer payment changes responsibility and is not house
 
 ## Locking and idempotency for money services
 
-A service that moves money against bills must, inside one transaction: claim an idempotency record (`claimIdempotency`, unique per household, actor, operation and key); lock every affected bill with `lockBillsForMoney(db, householdId, ids)`, which locks in ascending ID order; read balances only after locking; then post rows and the audit event. Adjustments, payment allocations and refunds all use that lock, so a balance check and its write cannot interleave. Exact replays return the stored result ID; the same key with different input is a `conflict`.
+A service that moves money against bills must, inside one transaction: claim an idempotency record (`claimIdempotency`, unique per household, actor, operation and key); lock every affected bill with `lockBillsForMoney(db, householdId, ids)` (the exported name; it re-exports the repository's `lockBills`), which locks in ascending ID order; read balances only after locking; then post rows and the audit event. Adjustments, payment allocations and refunds all use that lock, so a balance check and its write cannot interleave. Exact replays return the stored result ID; the same key with different input is a `conflict`.
 
 ## Attachments
 
