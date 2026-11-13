@@ -36,4 +36,4 @@ A service that moves money against bills must, inside one transaction: claim an 
 
 ## Audit
 
-Every mutation writes an `audit_events` row in the same transaction. Bill history reads events for `entity_type = 'bill'` with the bill ID and `'bill_adjustment'` events whose `detail.billId` is the bill. Audit detail holds IDs, categories and cents, not free text.
+Every mutation writes an `audit_events` row in the same transaction. Bill history reads events for `entity_type = 'bill'` with the bill ID and `'bill_adjustment'` events whose `detail.billId` is the bill. Audit detail holds IDs, categories, dates and cents. The only free text it keeps is the previous and new source note of a bill (provenance, at most 500 characters each); notes, reasons and other free text record at most a changed flag.
