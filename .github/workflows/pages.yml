@@ -12,7 +12,7 @@ env:
   NEXT_TELEMETRY_DISABLED: "1"
 jobs:
   build:
-    if: github.ref == 'refs/heads/main' && vars.TALLYMED_PAGES_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
