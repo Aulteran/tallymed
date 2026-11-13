@@ -11,7 +11,7 @@ import { hsaFilterSchemas, parse, schemas } from './validation.ts';
 export const ENTITY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Entity types a document attachment can target. Later milestones add their own types here, one writer per change. */
-export const ATTACHMENT_TARGET_TYPES = ['bill', 'visit', 'bill_adjustment'] as const;
+export const ATTACHMENT_TARGET_TYPES = ['bill', 'visit', 'bill_adjustment', 'hsa_receipt', 'hsa_eligibility_decision'] as const;
 export type AttachmentTargetType = (typeof ATTACHMENT_TARGET_TYPES)[number];
 
 export interface AttachmentTarget {
@@ -40,6 +40,16 @@ export async function resolveAttachmentTarget(pool: Pool | Queryable, actor: Act
     const v = await repo.getVisit(pool, actor.householdId, entityId);
     if (!v) throw new AppError('not_found');
     return { type, id: v.id, label: `${v.memberName} visit on ${v.serviceDate}` };
+  }
+  if (type === 'hsa_receipt') {
+    const { rows } = await pool.query<{ received_on: string }>(`select received_on::text from hsa_receipts where household_id = $1 and id = $2`, [actor.householdId, entityId]);
+    if (!rows[0]) throw new AppError('not_found');
+    return { type, id: entityId, label: `HSA reimbursement received ${rows[0].received_on}` };
+  }
+  if (type === 'hsa_eligibility_decision') {
+    const { rows } = await pool.query<{ decided_on: string }>(`select decided_on::text from hsa_eligibility_decisions where household_id = $1 and id = $2`, [actor.householdId, entityId]);
+    if (!rows[0]) throw new AppError('not_found');
+    return { type, id: entityId, label: `HSA eligibility decision of ${rows[0].decided_on}` };
   }
   const { rows } = await pool.query<{ bill_id: string }>(
     `select bill_id from bill_adjustments where household_id = $1 and id = $2`, [actor.householdId, entityId]);

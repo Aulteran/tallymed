@@ -6,7 +6,10 @@ import AxeBuilder from '@axe-core/playwright';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { crc32, deflateSync } from 'node:zlib';
 import net from 'node:net';
 import pg from 'pg';
 import { chromium } from 'playwright';
@@ -46,8 +49,9 @@ try {
   dbUrl.pathname = `/${dbName}`;
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  const documentsDir = mkdtempSync(path.join(tmpdir(), 'tallymed-ui-docs-'));
   const env = {
-    ...process.env, DATABASE_URL: dbUrl.href, TALLYMED_CANONICAL_ORIGIN: origin, TALLYMED_SOURCE_URL: 'https://github.com/example/tallymed',
+    ...process.env, TALLYMED_DOCUMENTS_DIR: documentsDir, DATABASE_URL: dbUrl.href, TALLYMED_CANONICAL_ORIGIN: origin, TALLYMED_SOURCE_URL: 'https://github.com/example/tallymed',
     NEXT_TELEMETRY_DISABLED: '1', TALLYMED_BOOTSTRAP_EMAIL: 'admin@example.test', TALLYMED_BOOTSTRAP_NAME: 'Alex Example', TALLYMED_HOUSEHOLD_NAME: 'Example Family',
   };
   let r = spawnSync('node', ['apps/web/cli/migrate.ts'], { env, encoding: 'utf8' });
@@ -263,6 +267,55 @@ try {
   assert.match(await exported.text(), /TOTAL,.*\r?\n?$/);
   ok('a refund after a receipt freezes new claims, shows needs review on the overview, and the scoped export downloads');
 
+  // Documents: upload through the browser form, see it unmatched, attach it to the bill, download it, then detach and remove it.
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(2, 0); ihdr.writeUInt32BE(2, 4); ihdr[8] = 8;
+  const pngBytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(Buffer.from([0, 1, 1, 0, 1, 1]))), chunk('IEND', Buffer.alloc(0))]);
+  const pngPath = path.join(documentsDir, 'synthetic-statement.png');
+  writeFileSync(pngPath, pngBytes);
+  const badPath = path.join(documentsDir, 'not-really.png');
+  writeFileSync(badPath, '<html>not an image</html>');
+  await page.goto(`${origin}/documents`);
+  await a11y('documents list');
+  await page.setInputFiles('#u-file', badPath);
+  await page.click('button:has-text("Upload")');
+  await page.waitForURL(/\/documents\?error=unsupported_media_type/);
+  assert.match(await text(), /was not accepted/);
+  await page.setInputFiles('#u-file', pngPath);
+  await page.fill('#u-title', 'Synthetic statement');
+  await page.selectOption('#u-kind', 'statement');
+  await page.click('button:has-text("Upload")');
+  await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
+  const documentUrl = page.url();
+  assert.match(await text(), /Synthetic statement[\s\S]*Unmatched/);
+  await a11y('document detail');
+  await page.goto(`${origin}/`);
+  assert.match(await text(), /Unmatched documents\s*\n?\s*Synthetic statement/);
+  await page.goto(billUrl);
+  const option = await page.locator('select[name=documentId] option', { hasText: 'Synthetic statement' }).first().getAttribute('value');
+  await page.selectOption('select[name=documentId]', option);
+  await page.click('button:has-text("Attach document")');
+  await page.waitForURL(billUrl);
+  assert.match(await text(), /Documents for this bill[\s\S]*Synthetic statement · version 1/);
+  await a11y('bill with documents');
+  const download = await page.request.get(`${origin}/api/documents/download/${documentUrl.split('/').pop()}`);
+  assert.equal(download.status(), 200);
+  assert.equal(download.headers()['content-type'], 'image/png');
+  assert.equal(download.headers()['x-content-type-options'], 'nosniff');
+  assert.match(download.headers()['content-disposition'], /^attachment;/);
+  assert.deepEqual(await download.body(), pngBytes);
+  await page.goto(`${origin}/documents?unmatched=yes`);
+  assert.match(await text(), /No unmatched documents/);
+  await page.goto(documentUrl);
+  assert.match(await text(), /Bill/);
+  ok('document uploaded (bad content refused), matched to a bill, downloaded with safe headers; the unmatched queue follows');
+
   await page.goto(`${origin}/`);
   const overview = await text();
   assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
@@ -277,10 +330,10 @@ try {
       .map((e) => `${e.tagName}.${e.className}#${e.id}:${Math.round(e.getBoundingClientRect().left)}-${Math.round(e.getBoundingClientRect().right)}:${getComputedStyle(e).display}`).slice(0, 8),
   }));
   assert.ok(overflow.scrollWidth <= overflow.width, `no horizontal page scroll on a phone: ${JSON.stringify(overflow)}`);
-  for (const path of [paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`]) {
-    await page.goto(path);
+  for (const target of [documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`]) {
+    await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
-    assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${path}: ${JSON.stringify(o)}`);
+    assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);
   }
   ok('overview queues and filtered list work; phone layout does not overflow');
 } finally {

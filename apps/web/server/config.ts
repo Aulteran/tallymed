@@ -11,6 +11,13 @@ export interface AppConfig {
   sessionIdleSeconds: number;
   invitationSeconds: number;
   sourceUrl: string | null;
+  /** Absolute directory on a private volume for document bytes. Null disables document upload and download. */
+  documentsDir: string | null;
+  documentMaxBytes: number;
+  /** Total stored bytes allowed per household across all versions. */
+  documentQuotaBytes: number;
+  /** Days a removed document's bytes are kept before the cleanup command purges them. */
+  documentRetentionDays: number;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -53,6 +60,20 @@ export function sourceUrl(value: string | undefined | null): string | null {
   }
 }
 
+/**
+ * The document volume must be an absolute, normalized path that is not the filesystem root and not part of the application's
+ * served tree (a `public` or `.next` directory), so a stored object can never be reached as a static file.
+ */
+export function parseDocumentsDir(value: string | undefined): string | null {
+  if (!value) return null;
+  const parts = value.split('/');
+  if (!value.startsWith('/') || value === '/' || value.includes('\0') || parts.some((p) => p === '..' || p === '.' || p === 'public' || p === '.next')
+      || value.replace(/\/+$/, '') !== value.replace(/\/{2,}/g, '/').replace(/\/+$/, '')) {
+    throw new Error('TALLYMED_DOCUMENTS_DIR must be a normalized absolute path outside the web root (no .., public or .next segments)');
+  }
+  return value.replace(/\/+$/, '');
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
@@ -75,5 +96,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionIdleSeconds: intEnv(env, 'TALLYMED_SESSION_IDLE_SECONDS', 2 * 3600, 60, 7 * 86400),
     invitationSeconds: intEnv(env, 'TALLYMED_INVITATION_SECONDS', 72 * 3600, 60, 14 * 86400),
     sourceUrl: sourceUrl(env.TALLYMED_SOURCE_URL),
+    documentsDir: parseDocumentsDir(env.TALLYMED_DOCUMENTS_DIR),
+    documentMaxBytes: intEnv(env, 'TALLYMED_DOCUMENT_MAX_MB', 10, 1, 25) * 1024 * 1024,
+    documentQuotaBytes: intEnv(env, 'TALLYMED_DOCUMENT_QUOTA_MB', 2048, 10, 1_048_576) * 1024 * 1024,
+    documentRetentionDays: intEnv(env, 'TALLYMED_DOCUMENT_RETENTION_DAYS', 30, 0, 3650),
   };
 }

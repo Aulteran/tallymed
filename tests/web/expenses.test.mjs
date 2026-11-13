@@ -486,7 +486,7 @@ test('stable ID and attachment contracts', { skip: skipDb }, async () => {
     const b = await t.bill({ memberId: m, providerId: p, providerReference: 'ATT-1' });
     const a = await t.adjust(b.id, '-1.00');
     const visit = await svc.createVisit(t.db.pool, t.actor, { memberId: m, providerId: p, serviceDate: '2026-01-10' }, 'r');
-    assert.deepEqual([...ATTACHMENT_TARGET_TYPES], ['bill', 'visit', 'bill_adjustment']);
+    assert.deepEqual([...ATTACHMENT_TARGET_TYPES], ['bill', 'visit', 'bill_adjustment', 'hsa_receipt', 'hsa_eligibility_decision']);
     assert.equal((await resolveAttachmentTarget(t.db.pool, t.actor, 'bill', b.id)).id, b.id);
     assert.equal((await resolveAttachmentTarget(t.db.pool, t.actor, 'visit', visit.id)).id, visit.id);
     assert.equal((await resolveAttachmentTarget(t.db.pool, t.actor, 'bill_adjustment', a.id)).billId, b.id);

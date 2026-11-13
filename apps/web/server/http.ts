@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { AppConfig } from './config.ts';
 import type { Pool } from './db.ts';
+import type { ObjectStore } from './storage.ts';
 import type { Actor } from './authz.ts';
+import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
 import { flashSetCookie } from './flash.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
 import * as expenses from './services/expenses.ts';
+import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
@@ -15,7 +18,7 @@ import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } fr
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
 
-export interface AppContext { config: AppConfig; pool: Pool }
+export interface AppContext { config: AppConfig; pool: Pool; /** Private document volume. Null or absent disables document upload and download. */ store?: ObjectStore | null }
 
 export const MAX_BODY_BYTES = 8 * 1024;
 
@@ -130,6 +133,56 @@ export async function readBody(req: Request, maxBytes = MAX_BODY_BYTES): Promise
   return out;
 }
 
+/** Overhead allowed on top of the largest file for multipart boundaries and the small text fields. */
+export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+const MAX_FIELD_CHARS = 2000;
+
+/**
+ * Reads a bounded multipart/form-data upload. The whole body is capped (declared length first, then bytes actually received),
+ * every field name may appear once, text fields are short, and the only file part must be named `file`. The file name and type
+ * are returned as untrusted strings; nothing here trusts them.
+ */
+export async function readMultipart(req: Request, maxFileBytes: number): Promise<Record<string, unknown>> {
+  const maxBytes = maxFileBytes + MULTIPART_OVERHEAD_BYTES;
+  const declared = req.headers.get('content-length');
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) throw new AppError('payload_too_large');
+  const type = req.headers.get('content-type') ?? '';
+  if (!/^multipart\/form-data\s*;\s*boundary=/i.test(type)) throw new AppError('unsupported_media_type');
+  let size = 0;
+  const chunks: Uint8Array[] = [];
+  if (req.body) {
+    const reader = req.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new AppError('payload_too_large');
+      }
+      chunks.push(value);
+    }
+  }
+  let form: FormData;
+  try {
+    form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': type } }).formData();
+  } catch {
+    throw new AppError('invalid_input');
+  }
+  const out: Record<string, unknown> = Object.create(null);
+  for (const [key, value] of form) {
+    if (key in out) throw new AppError('invalid_input');
+    if (typeof value === 'string') {
+      if (value.length > MAX_FIELD_CHARS) throw new AppError('invalid_input');
+      out[key] = value;
+    } else {
+      if (key !== 'file') throw new AppError('invalid_input');
+      out[key] = { name: value.name.slice(0, 255), type: value.type.slice(0, 100), bytes: new Uint8Array(await value.arrayBuffer()) };
+    }
+  }
+  return out;
+}
+
 interface RouteInput {
   req: Request;
   ctx: AppContext;
@@ -151,12 +204,12 @@ export function redirect(config: AppConfig, pathAndQuery: string, headers: Recor
   });
 }
 
-function errorResponse(req: Request, ctx: AppContext | null, error: unknown, errorPath: string | null, flash: string | null = null): Response {
+function errorResponse(req: Request, ctx: AppContext | null, error: unknown, errorPath: string | null, flash: string | null = null, redirectAll = false): Response {
   const app = error instanceof AppError ? error : new AppError('internal');
   const code = app.code;
   const headers: Record<string, string> = { ...BASE_HEADERS };
   if (app.retryAfterSeconds) headers['Retry-After'] = String(app.retryAfterSeconds);
-  if (ctx && errorPath && wantsHtml(req) && app.status !== 413 && app.status !== 415) {
+  if (ctx && errorPath && wantsHtml(req) && (redirectAll || (app.status !== 413 && app.status !== 415))) {
     if (flash) headers['Set-Cookie'] = flash;
     return redirect(ctx.config, `${errorPath}${errorPath.includes('?') ? '&' : '?'}error=${code}`, headers);
   }
@@ -173,6 +226,14 @@ function route(opts: {
   errorPath: (body: Record<string, unknown>) => string;
   /** Fields to keep for re-filling the form at errorPath after a validation error (sent as a flash cookie, not in the URL). */
   keepFields?: string[];
+  /** Replaces the bounded form/JSON reader (uploads read multipart). */
+  readBody?: (req: Request, ctx: AppContext) => Promise<Record<string, unknown>>;
+  /** Authenticate before reading the body, so an unauthenticated caller cannot make the server buffer a large upload. */
+  authBeforeBody?: boolean;
+  /** Runs right after authentication and before the body is read (a per-user limit can refuse without buffering the upload). */
+  beforeBody?: (actor: Actor) => void;
+  /** Redirect browser form posts back with an error code even for size and type failures. */
+  redirectAllErrors?: boolean;
   run: (input: RouteInput) => Promise<RouteResult>;
 }) {
   return async (req: Request, ctx: AppContext): Promise<Response> => {
@@ -183,14 +244,21 @@ function route(opts: {
       const client = clientInfo(req.headers, ctx.config);
       assertTransport(req.headers, ctx.config, client);
       assertSameOrigin(req.headers, ctx.config);
-      body = await readBody(req);
       const sessionToken = readCookie(req.headers, sessionCookieName(ctx.config));
       let actor: Actor | null = null;
-      if (opts.session) {
+      const signIn = async () => {
         actor = await authenticate(ctx.pool, ctx.config, sessionToken);
         if (!actor || !sessionToken) throw new AppError('unauthenticated');
+      };
+      if (opts.session && opts.authBeforeBody) {
+        await signIn();
+        if (opts.beforeBody) opts.beforeBody(actor!);
+      }
+      body = opts.readBody ? await opts.readBody(req, ctx) : await readBody(req);
+      if (opts.session) {
+        if (!opts.authBeforeBody) await signIn();
         const presented = (req.headers.get('x-csrf-token') ?? (typeof body.csrf === 'string' ? body.csrf : '')) as string;
-        if (!presented || !safeEqual(presented, csrfFor(sessionToken))) throw new AppError('csrf_failed');
+        if (!presented || !safeEqual(presented, csrfFor(sessionToken!))) throw new AppError('csrf_failed');
       }
       const result = await opts.run({ req, ctx, body, actor, sessionToken, client, requestId });
       if ('response' in result) return result.response;
@@ -206,7 +274,7 @@ function route(opts: {
       } catch {
         errorPath = null;
       }
-      return errorResponse(req, ctx, error, errorPath, flash);
+      return errorResponse(req, ctx, error, errorPath, flash, opts.redirectAllErrors);
     }
   };
 }
@@ -407,6 +475,153 @@ export async function handleHsaExport(req: Request, ctx: AppContext): Promise<Re
     });
   } catch (error) {
     if (!(error instanceof AppError) || error.code === 'internal') logError('http.hsa.export', error, { requestId });
+    return errorResponse(req, null, error, null);
+  }
+}
+
+
+// ---------- documents ----------
+
+const RETURN_TO = /^\/(bills|visits|documents|hsa\/allocations|hsa\/receipts)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A form's `returnTo` is a fixed set of record pages only; anything else is ignored, so it can never become an open redirect. */
+const returnPath = (b: Record<string, unknown>): string | null => (typeof b.returnTo === 'string' && RETURN_TO.test(b.returnTo) ? b.returnTo : null);
+const withoutReturn = (b: Record<string, unknown>) => {
+  const { returnTo: _r, ...rest } = b;
+  return rest;
+};
+const documentPage = (b: Record<string, unknown>, id?: string) => {
+  const doc = str(b.documentId) ?? str(b.id) ?? id;
+  return returnPath(b) ?? (doc ? `/documents/${doc}` : '/documents');
+};
+
+/** The record page a form was posted from (its Referer path, when it is one of the allowed record pages), else the document list. */
+const busyReturnPath = (req: Request): string => {
+  try {
+    const p = new URL(req.headers.get('referer') ?? '').pathname;
+    return RETURN_TO.test(p) ? p : '/documents';
+  } catch {
+    return '/documents';
+  }
+};
+const TARGET_PAGES: Record<string, string> = { bill: '/bills', visit: '/visits', hsa_receipt: '/hsa/receipts' };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** After a failed attach, land back on the record the person was attaching to (also when the form carried no returnTo). */
+const attachErrorPage = (b: Record<string, unknown>): string => {
+  const base = typeof b.targetType === 'string' ? TARGET_PAGES[b.targetType] : undefined;
+  return returnPath(b) ?? (base && typeof b.targetId === 'string' && UUID_RE.test(b.targetId) ? `${base}/${b.targetId}` : documentPage(b));
+};
+
+interface DocumentAction {
+  run: (ctx: AppContext, actor: Actor, body: Record<string, unknown>, requestId: string) => Promise<{ id: string }>;
+  error: (b: Record<string, unknown>) => string;
+  ok: (b: Record<string, unknown>, id: string) => string;
+  keep?: string[];
+  upload?: boolean;
+  status?: number;
+}
+const deps = (ctx: AppContext): documents.DocumentDeps => ({ pool: ctx.pool, store: ctx.store ?? null, limits: ctx.config });
+const DOCUMENT_ACTIONS: Record<string, DocumentAction> = {
+  'upload': {
+    run: (ctx, actor, b, rid) => documents.uploadDocument(deps(ctx), actor, withoutReturn(b), rid), upload: true, status: 201,
+    error: (b) => returnPath(b) ?? '/documents', ok: (b, id) => returnPath(b) ?? `/documents/${id}`, keep: ['title', 'kind', 'note'],
+  },
+  'version': {
+    run: (ctx, actor, b, rid) => documents.addDocumentVersion(deps(ctx), actor, withoutReturn(b), rid), upload: true, status: 201,
+    error: (b) => documentPage(b), ok: (b, id) => documentPage(b, id),
+  },
+  'update': { run: (ctx, actor, b, rid) => documents.updateDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => documentPage(b), ok: (b, id) => documentPage(b, id), keep: ['title', 'kind', 'note'] },
+  'remove': { run: (ctx, actor, b, rid) => documents.removeDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => documentPage(b), ok: () => '/documents', keep: ['reason'] },
+  'attach': { run: (ctx, actor, b, rid) => documents.attachDocument(ctx.pool, actor, withoutReturn(b), rid), error: attachErrorPage, ok: (b, id) => documentPage(b, id), keep: ['note'] },
+  'detach': { run: (ctx, actor, b, rid) => documents.detachDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => returnPath(b) ?? '/documents', ok: (b, id) => returnPath(b) ?? `/documents/${id}`, keep: ['reason'] },
+};
+
+const documentRoutes = new Map(Object.entries(DOCUMENT_ACTIONS).map(([name, a]) => [name, route({
+  name: `documents.${name}`,
+  session: true,
+  errorPath: a.error,
+  keepFields: a.keep,
+  redirectAllErrors: true,
+  ...(a.upload ? {
+    authBeforeBody: true,
+    beforeBody: (actor: Actor) => checkUploadRate(actor.userId),
+    readBody: (req: Request, ctx: AppContext) => readMultipart(req, ctx.config.documentMaxBytes),
+  } : {}),
+  async run({ ctx, actor, body, requestId, req }) {
+    const result = await a.run(ctx, actor!, body, requestId);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id)) };
+    return { json: { ok: true, ...result }, status: a.status ?? 200 };
+  },
+})]));
+
+/** Document mutations. The action comes from a fixed allow-list; uploads are multipart, everything else is a small form or JSON body. */
+export async function handleDocumentAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
+  const handler = documentRoutes.get(action);
+  if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
+  if (!DOCUMENT_ACTIONS[action]!.upload) return handler(req, ctx);
+  // An upload is buffered in memory several times over; cap how many run at once in this process.
+  if (uploadsInFlight >= MAX_CONCURRENT_UPLOADS) {
+    // Browser form posts go back to the page they came from with a friendly message; API callers get the JSON error.
+    return errorResponse(req, ctx, new AppError('busy', 'busy', 2), busyReturnPath(req));
+  }
+  uploadsInFlight++;
+  try {
+    return await handler(req, ctx);
+  } finally {
+    uploadsInFlight--;
+  }
+}
+
+export const MAX_CONCURRENT_UPLOADS = 4;
+
+/** At most this many upload attempts (accepted or refused) per person per minute, so no one can keep the server busy scanning files. */
+export const MAX_UPLOADS_PER_MINUTE = 30;
+const uploadAttempts = new Map<string, number[]>();
+function checkUploadRate(userId: string, now = Date.now()): void {
+  const recent = (uploadAttempts.get(userId) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= MAX_UPLOADS_PER_MINUTE) {
+    uploadAttempts.set(userId, recent);
+    throw new AppError('busy', 'busy', 30);
+  }
+  recent.push(now);
+  uploadAttempts.set(userId, recent);
+  if (uploadAttempts.size > 5000) for (const [k, v] of uploadAttempts) if (v.every((t) => now - t >= 60_000)) uploadAttempts.delete(k);
+}
+let uploadsInFlight = 0;
+
+/** Types a browser may render inline. PDFs are always downloaded: an in-browser PDF viewer is active content. */
+const INLINE_TYPES = new Set(['image/png', 'image/jpeg']);
+
+/**
+ * Authenticated, household-scoped download (GET, read-only). The bytes are verified against the stored checksum, the type is the
+ * one recorded from the content, and every response forbids sniffing, framing, caching and scripting.
+ */
+export async function handleDocumentDownload(req: Request, ctx: AppContext, id: string): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
+    const client = clientInfo(req.headers, ctx.config);
+    assertTransport(req.headers, ctx.config, client);
+    const session = await pageActor(ctx, req.headers);
+    if (!session) throw new AppError('unauthenticated');
+    const query = new URL(req.url).searchParams;
+    const v = query.get('version');
+    if (v !== null && !/^[1-9]\d{0,5}$/.test(v)) throw new AppError('invalid_input');
+    const file = await documents.downloadDocument(ctx.pool, ctx.store ?? null, session.actor, id, v === null ? undefined : Number(v), requestId);
+    const inline = query.get('disposition') === 'inline' && INLINE_TYPES.has(file.mediaType);
+    return new Response(new Uint8Array(file.bytes), {
+      status: 200,
+      headers: {
+        ...BASE_HEADERS,
+        'Cache-Control': 'private, no-store',
+        'Content-Type': file.mediaType,
+        'Content-Length': String(file.bytes.length),
+        'Content-Disposition': contentDisposition(inline ? 'inline' : 'attachment', file.filename),
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+        'Cross-Origin-Resource-Policy': 'same-origin',
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code === 'internal') logError('http.documents.download', error, { requestId });
     return errorResponse(req, null, error, null);
   }
 }

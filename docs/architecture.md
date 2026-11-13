@@ -4,7 +4,7 @@
 
 The public Next.js marketing app produces static HTML, assets and route payloads. GitHub Pages receives only that export. Marketing has its own public content and fictional previews and consumes no private app services or project plans.
 
-The private Next.js app owns browser sessions, forms and APIs. Keep React views and route handlers thin. Use server-only services for authorization, use cases, transaction orchestration and audit recording, shared domain modules for invariant checks, and repositories for PostgreSQL access. A later private MCP process calls a narrow shared proposal interface, with its own authentication and database grants. Never route browser or MCP writes around the service invariants. Persist documents in a private volume with metadata in PostgreSQL.
+The private Next.js app owns browser sessions, forms and APIs. Keep React views and route handlers thin. Use server-only services for authorization, use cases, transaction orchestration and audit recording, shared domain modules for invariant checks, and repositories for PostgreSQL access. A later private MCP process calls a narrow shared proposal interface, with its own authentication and database grants. Never route browser or MCP writes around the service invariants. Persist documents in a private volume with metadata in PostgreSQL. The `ObjectStore` adapter (`server/storage.ts`) is the only code that touches the volume; `server/document-files.ts` validates content before anything is stored; `services/documents.ts` owns the upload, attach and download use cases.
 
 ```mermaid
 flowchart LR

@@ -21,6 +21,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
         <Link href="/payments">Payments</Link>
         <Link href="/plans">Payment Plans</Link>
         <Link href="/hsa">HSA</Link>
+        <Link href="/documents">Documents</Link>
         <Link href="/members">Family</Link>
         <Link href="/providers">Providers</Link>
         {can(actor, 'operators:manage') && <Link href="/operators">Operators</Link>}

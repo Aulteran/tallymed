@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { AttachmentsPanel } from '../../../components/documents.tsx';
 import { getBillDetail, pickParties, pickVisits } from '../../../../server/services/expenses.ts';
 import { billPaymentSummary } from '../../../../server/services/payments.ts';
 import { centsToUsdInput } from '../../../../server/money.ts';
@@ -115,6 +116,10 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       <label htmlFor="sourceNote">Source note (optional)</label><input id="sourceNote" name="sourceNote" maxLength={500} defaultValue={q.sourceNote} />
       <button type="submit">Post adjustment</button>
     </form>
+    <AttachmentsPanel ctx={ctx} actor={actor} csrf={csrf} type="bill" id={b.id} returnTo={`/bills/${b.id}`} q={q80(q.docq)} title="Documents for this bill" />
+    {adjustments.length > 0 && <details className="card"><summary>Evidence for individual adjustments</summary>
+      {adjustments.map((a) => <AttachmentsPanel key={a.id} ctx={ctx} actor={actor} csrf={csrf} type="bill_adjustment" id={a.id} returnTo={`/bills/${b.id}`} title={`${label(a.category)} of ${a.effectiveDate}`} />)}
+    </details>}
     <div className="card"><h2>History</h2>
       <ol>{history.map((e) => <li key={e.id}><strong>{label(e.action.replace('.', ' '))}</strong> by {e.actorName ?? 'unknown'} · {dateOf(e.occurredAt)}</li>)}</ol>
     </div>

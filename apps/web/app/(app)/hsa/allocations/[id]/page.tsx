@@ -1,7 +1,8 @@
 import Link from 'next/link';
+import { AttachmentsPanel } from '../../../../components/documents.tsx';
 import { getHsaAllocationDetail } from '../../../../../server/services/hsa.ts';
 import { AMOUNT_PATTERN, DecisionPill, EvidenceOptions, FigureCards, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
-import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
+import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, q80, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA payment · TallyMed' };
@@ -86,6 +87,8 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
           <td data-label="Reason">{e.reason}</td><td data-label="Entered by">{e.createdByName ?? ''} {dateOf(e.createdAt)}</td></tr>)}</tbody></table>}
       <p className="muted">Entries are immutable. Corrections appear as new linked entries.</p>
     </div>
+    {current ? <AttachmentsPanel ctx={ctx} actor={actor} csrf={csrf} type="hsa_eligibility_decision" id={current.id} returnTo={`/hsa/allocations/${a.allocationId}`} q={q80(q.docq)} title="Evidence for the current eligibility decision" />
+      : <p className="muted">Record an eligibility decision to attach evidence documents to it.</p>}
     <div className="card"><h2>History</h2>
       <ol>{history.map((e) => <li key={e.id}><strong>{label(e.action.replace(/[._]/g, ' ').replace(/^hsa /, ''))}</strong> by {e.actorName ?? 'unknown'} · {dateOf(e.occurredAt)}</li>)}</ol>
     </div>
