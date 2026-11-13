@@ -6,6 +6,7 @@ import test from 'node:test';
 import { contentDisposition, inspectUpload, sanitizeFilename, sniffMediaType } from '../../apps/web/server/document-files.ts';
 import { parseDocumentsDir } from '../../apps/web/server/config.ts';
 import { FileObjectStore, newStorageKey } from '../../apps/web/server/storage.ts';
+import { deflateSync } from 'node:zlib';
 import { jpeg, pdf, png, tempStore } from './document-helpers.mjs';
 
 test('valid PDF, PNG and JPEG are recognised from their bytes', () => {
@@ -126,4 +127,23 @@ test('the object store never writes through a planted link', async () => {
   } finally {
     t.cleanup();
   }
+});
+
+/** A PDF 1.5 file whose catalog sits inside an object stream with the given filter and contents. */
+const objStmPdf = (inner, { filter = '/FlateDecode', data = deflateSync(Buffer.from(inner, 'latin1')), extra = '' } = {}) => Buffer.concat([
+  Buffer.from(`%PDF-1.5\n4 0 obj\n<< /Type /ObjStm /N 1 /First 8 /Length ${data.length} ${filter ? `/Filter ${filter}` : ''} ${extra} >>\nstream\n`, 'latin1'),
+  data, Buffer.from('\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n', 'latin1'),
+]);
+
+test('active content hidden in compressed object streams is found, and uninspectable streams are refused', () => {
+  const evil = '1 0 << /Type /Catalog /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>';
+  assert.equal(sniffMediaType(objStmPdf(evil)), null, 'Flate object stream with a script');
+  assert.equal(sniffMediaType(objStmPdf('1 0 << /Type /Catalog /J#61vaScript 3 0 R >>')), null, 'escaped name inside the stream');
+  assert.equal(sniffMediaType(objStmPdf('1 0 << /Type /Catalog /Pages 2 0 R >>')), 'application/pdf', 'a clean object stream is accepted');
+  assert.equal(sniffMediaType(objStmPdf(evil, { filter: '[/ASCII85Decode /FlateDecode]' })), null, 'filter chain cannot be inspected');
+  assert.equal(sniffMediaType(objStmPdf(evil, { filter: '/LZWDecode' })), null, 'other filter');
+  assert.equal(sniffMediaType(objStmPdf(evil, { filter: '', data: Buffer.from(evil) })), null, 'unfiltered stream with a script');
+  assert.equal(sniffMediaType(objStmPdf('x', { extra: '/DecodeParms << /Predictor 12 >>' })), null, 'predictor changes the decoded bytes');
+  assert.equal(sniffMediaType(objStmPdf('x', { data: Buffer.from('not flate data') })), null, 'corrupt stream');
+  assert.equal(sniffMediaType(objStmPdf('', { data: deflateSync(Buffer.alloc(80 * 1024 * 1024)) })), null, 'expansion beyond the budget');
 });

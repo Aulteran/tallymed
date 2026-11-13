@@ -13,6 +13,7 @@ export type ErrorCode =
   | 'unsupported_media_type'
   | 'duplicate_document'
   | 'storage_unavailable'
+  | 'busy'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -30,6 +31,7 @@ const STATUS: Record<ErrorCode, number> = {
   unsupported_media_type: 415,
   duplicate_document: 409,
   storage_unavailable: 503,
+  busy: 429,
   internal: 500,
 };
 

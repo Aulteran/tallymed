@@ -534,8 +534,21 @@ const documentRoutes = new Map(Object.entries(DOCUMENT_ACTIONS).map(([name, a]) 
 export async function handleDocumentAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
   const handler = documentRoutes.get(action);
   if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
-  return handler(req, ctx);
+  if (!DOCUMENT_ACTIONS[action]!.upload) return handler(req, ctx);
+  // An upload is buffered in memory several times over; cap how many run at once in this process.
+  if (uploadsInFlight >= MAX_CONCURRENT_UPLOADS) {
+    return Response.json({ error: { code: 'busy', message: 'busy' } }, { status: 429, headers: { ...BASE_HEADERS, 'Retry-After': '2' } });
+  }
+  uploadsInFlight++;
+  try {
+    return await handler(req, ctx);
+  } finally {
+    uploadsInFlight--;
+  }
 }
+
+export const MAX_CONCURRENT_UPLOADS = 4;
+let uploadsInFlight = 0;
 
 /** Types a browser may render inline. PDFs are always downloaded: an in-browser PDF viewer is active content. */
 const INLINE_TYPES = new Set(['image/png', 'image/jpeg']);

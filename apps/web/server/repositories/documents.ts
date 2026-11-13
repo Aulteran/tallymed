@@ -269,6 +269,18 @@ export async function purgeCandidates(db: Queryable, olderThanDays: number, limi
   return rows;
 }
 
+export async function purgeCount(db: Queryable, olderThanDays: number): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `select count(*)::int as n from document_versions v join documents d on d.id = v.document_id
+     where v.state = 'available' and d.removed_at is not null and d.removed_at <= now() - make_interval(days => $1)`, [olderThanDays]);
+  return rows[0]!.n;
+}
+
+export async function availableVersionCount(db: Queryable): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(`select count(*)::int as n from document_versions where state = 'available'`);
+  return rows[0]!.n;
+}
+
 export async function markPurged(db: Queryable, id: string): Promise<void> {
   await db.query(`update document_versions set state = 'purged', purged_at = now() where id = $1 and state = 'available'`, [id]);
 }

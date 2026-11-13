@@ -270,7 +270,7 @@ test('failed storage writes leave no rows and no files', { skip: skipDb }, async
     await assert.rejects(t.up(first), code('duplicate_document'));
     delete faults.remove;
     assert.equal((await t.ts.store.list()).objects.length, 2);
-    const report = await docs.cleanupStorage(t.db.pool, t.ts.store, { graceMs: 0, retentionDays: 30 });
+    const report = await docs.cleanupStorage(t.db.pool, t.ts.store, { graceMs: 0, retentionDays: 30, apply: true });
     assert.equal(report.unreferencedRemoved, 1);
     assert.equal((await t.ts.store.list()).objects.length, 1);
     // Storage that is not configured is a clear, retryable error rather than a crash.
@@ -562,22 +562,28 @@ test('verify and cleanup: restored metadata matches stored checksums; orphans, q
     assert.deepEqual(bad.quarantined, ['f'.repeat(32)]);
     assert.equal(bad.ok, 1);
 
-    // Cleanup respects the grace period: nothing fresh is removed.
+    // Cleanup is a dry run by default and respects the grace period: nothing fresh is removed.
     await t.store.putQuarantine('1'.repeat(32), Buffer.from('half-written'));
     await t.store.putQuarantine('2'.repeat(32), Buffer.from('promoted but not yet committed'));
     await t.store.promote('2'.repeat(32));
-    const fresh = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30 });
-    assert.deepEqual(fresh, { quarantineRemoved: 0, unreferencedRemoved: 0, purged: 0 });
-    const later = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: Date.now() + 2 * 3600 * 1000 });
-    assert.deepEqual(later, { quarantineRemoved: 1, unreferencedRemoved: 1, purged: 0 });
+    assert.deepEqual(await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30 }), { dryRun: true, quarantineRemoved: 0, unreferencedRemoved: 0, purged: 0 });
+    assert.deepEqual(await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, apply: true }), { dryRun: false, quarantineRemoved: 0, unreferencedRemoved: 0, purged: 0 });
+    const day = 25 * 3600 * 1000;
+    const dry = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: Date.now() + day });
+    assert.deepEqual(dry, { dryRun: true, quarantineRemoved: 1, unreferencedRemoved: 1, purged: 0 });
+    assert.equal((await t.store.list()).objects.length, 4, 'a dry run removes nothing');
+    const later = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: Date.now() + day, apply: true });
+    assert.deepEqual(later, { dryRun: false, quarantineRemoved: 1, unreferencedRemoved: 1, purged: 0 });
     assert.equal((await docs.verifyStorage(t.db.pool, t.store)).ok, 3, 'referenced objects are never removed');
 
     // Removed documents keep their bytes through the retention window and are then purged, with metadata kept.
     const ver = String((await docs.getDocumentDetail(t.db.pool, t.actor, c.id)).document.version);
     await docs.removeDocument(t.db.pool, t.actor, { id: c.id, version: ver, reason: 'Duplicate' }, 'r');
-    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30 })).purged, 0);
-    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 0 })).purged, 1);
-    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 0 })).purged, 0, 'idempotent');
+    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, apply: true })).purged, 0);
+    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 0 })).purged, 1, 'dry run counts');
+    assert.equal((await t.store.list()).objects.length, 3);
+    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 0, apply: true })).purged, 1);
+    assert.equal((await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 0, apply: true })).purged, 0, 'idempotent');
     assert.equal((await rows(t, `select state from document_versions where document_id = $1`, [c.id]))[0].state, 'purged');
     assert.equal((await t.store.list()).objects.length, 2);
     assert.equal((await docs.verifyStorage(t.db.pool, t.store)).ok, 2);
@@ -623,6 +629,73 @@ test('the operator command verifies the volume, exits non-zero on damage and pri
     assert.equal(spawnSync('node', ['apps/web/cli/documents.ts', 'verify'], { env: { ...env, TALLYMED_DOCUMENTS_DIR: 'relative/dir' }, encoding: 'utf8' }).status, 2);
     r = run('cleanup');
     assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).dryRun, true, 'cleanup defaults to a dry run');
+    assert.equal(spawnSync('node', ['apps/web/cli/documents.ts', 'cleanup', '--bogus'], { env, encoding: 'utf8' }).status, 1);
+  } finally {
+    await t.drop();
+  }
+});
+
+test('cleanup refuses to delete when the database does not appear to match the volume unless forced', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    await t.up();
+    // Objects from a newer volume that this (older or wrong) database knows nothing about.
+    for (const k of ['a', 'b', 'c']) {
+      await t.store.putQuarantine(k.repeat(32), Buffer.from('newer than this database'));
+      await t.store.promote(k.repeat(32));
+    }
+    const later = Date.now() + 25 * 3600 * 1000;
+    const dry = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: later });
+    assert.equal(dry.unreferencedRemoved, 3, 'the dry run shows what would go');
+    await assert.rejects(docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: later, apply: true }), code('conflict'));
+    assert.equal((await t.store.list()).objects.length, 4, 'nothing was deleted');
+    const forced = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, now: later, apply: true, force: true });
+    assert.equal(forced.unreferencedRemoved, 3);
+    assert.equal((await docs.verifyStorage(t.db.pool, t.store)).ok, 1);
+  } finally {
+    await t.drop();
+  }
+});
+
+test('a database with no versions at all never deletes a populated volume without force', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    await t.store.putQuarantine('d'.repeat(32), Buffer.from('x'));
+    await t.store.promote('d'.repeat(32));
+    await assert.rejects(docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30, graceMs: 0, apply: true }), code('conflict'));
+    assert.equal((await t.store.list()).objects.length, 1);
+  } finally {
+    await t.drop();
+  }
+});
+
+test('cleanup counts the grace period from promotion, not from when the bytes were first written', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const { utimesSync } = await import('node:fs');
+    await t.store.putQuarantine('9'.repeat(32), Buffer.from('slow upload'));
+    const old = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    utimesSync(path.join(t.ts.dir, 'quarantine', '9'.repeat(32)), old, old);
+    await t.store.promote('9'.repeat(32));
+    const report = await docs.cleanupStorage(t.db.pool, t.store, { retentionDays: 30 });
+    assert.equal(report.unreferencedRemoved, 0, 'promotion refreshed the timestamp');
+  } finally {
+    await t.drop();
+  }
+});
+
+test('uploads in flight are capped per process', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const results = await Promise.all(Array.from({ length: 14 }, () => t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE())));
+    const statuses = results.map((r) => r.status);
+    assert.ok(statuses.every((s) => s === 201 || s === 429), statuses.join());
+    assert.ok(statuses.includes(201));
+    assert.equal(await count(t, 'documents'), statuses.filter((s) => s === 201).length);
+    assert.equal(results.find((r) => r.status === 429) ? (await results.find((r) => r.status === 429).json()).error.code : 'busy', 'busy');
+    // After the burst the slots are free again.
+    assert.equal((await t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE())).status, 201);
   } finally {
     await t.drop();
   }

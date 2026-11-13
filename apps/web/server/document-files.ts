@@ -2,7 +2,7 @@
 // the declared type and the extension must agree with what the content sniffer found, or the upload is refused.
 // Allowlist (conservative starter default, recorded in DECISIONS.md): PDF, PNG, JPEG.
 import { createHash } from 'node:crypto';
-import { crc32 } from 'node:zlib';
+import { crc32, inflateSync } from 'node:zlib';
 import { AppError } from './errors.ts';
 
 export const DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
@@ -95,15 +95,49 @@ const PDF_ACTIVE = /\/(JavaScript|JS|Launch|EmbeddedFiles?|RichMedia|OpenAction|
  * A PDF must start with its header at byte 0, end with an EOF marker, and show no archive trailer (so it is not also a ZIP) or
  * active content: scripts, launch actions, embedded files, rich media, form submission and encryption (which hides content
  * from this check). Name escapes (`/J#61vaScript`) are decoded before the scan. This is a conservative heuristic, not a full
- * parser: content inside compressed object streams is not visible to it, so downloads are also attachment-only and sandboxed.
+ * parser and not a guarantee: object streams are inflated and scanned, but other hiding places may exist, so downloads are also
+ * attachment-only and sandboxed and a person opening a saved PDF in a local reader should treat it as untrusted.
  */
 function validPdf(b: Buffer): boolean {
   if (!/^%PDF-(1\.[0-7]|2\.0)[\r\n]/.test(b.subarray(0, 12).toString('latin1'))) return false;
   const tail = b.subarray(Math.max(0, b.length - 1024)).toString('latin1');
   if (!/%%EOF\s*$/.test(tail)) return false;
   if (hasZipTrailer(b)) return false;
-  const text = b.toString('latin1').replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
-  return !PDF_ACTIVE.test(text);
+  const decode = (t: string) => t.replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+  const text = b.toString('latin1');
+  if (PDF_ACTIVE.test(decode(text))) return false;
+  return objectStreamsAreClean(b, text, decode);
+}
+
+const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
+
+/**
+ * Names can hide inside compressed object streams (PDF 1.5). Every object stream is inflated (bounded) and scanned like the
+ * file body. A stream that cannot be inflated, uses a filter chain or predictor other than plain Flate, or would expand beyond the
+ * budget makes the file refused, because its content cannot be checked.
+ */
+function objectStreamsAreClean(b: Buffer, text: string, decode: (t: string) => string): boolean {
+  let budget = MAX_INFLATED_TOTAL;
+  const stream = /stream(\r\n|\n)/g;
+  for (let m = stream.exec(text); m; m = stream.exec(text)) {
+    const start = m.index + m[0].length;
+    const dictFrom = Math.max(text.lastIndexOf('obj', m.index), m.index - 2000, 0);
+    const dict = decode(text.slice(dictFrom, m.index));
+    const end = text.indexOf('endstream', start);
+    if (end < 0) return false;
+    stream.lastIndex = end + 'endstream'.length;
+    if (!/\/ObjStm(?![A-Za-z0-9])/.test(dict)) continue;
+    if (!/\/Filter\s*(\/FlateDecode|\[\s*\/FlateDecode\s*\])(?![A-Za-z0-9])/.test(dict) || /\/Predictor\s+(?!1(?!\d))/.test(dict) || /\/Crypt(?![A-Za-z0-9])/.test(dict)) return false;
+    try {
+      // An end-of-line marker sits between the data and `endstream`; Flate input ends at its own checksum.
+      const out = inflateSync(b.subarray(start, end), { finishFlush: 2 /* Z_SYNC_FLUSH */, maxOutputLength: Math.min(budget, MAX_INFLATED_TOTAL) });
+      budget -= out.length;
+      if (PDF_ACTIVE.test(decode(out.toString('latin1')))) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** True when an end-of-central-directory record sits within the maximum distance from the end (a ZIP polyglot). */

@@ -382,32 +382,37 @@ export async function verifyStorage(pool: Pool, store: ObjectStore): Promise<Ver
   return report;
 }
 
-export interface CleanupReport { quarantineRemoved: number; unreferencedRemoved: number; purged: number }
+export interface CleanupReport { dryRun: boolean; quarantineRemoved: number; unreferencedRemoved: number; purged: number }
 
 /**
- * Removes abandoned files and purges expired ones. Quarantined files and objects with no row are removed only once older than
- * `graceMs`, so an upload that is still between promote and commit is never touched. Bytes of removed documents are deleted after
- * the retention window and their versions marked purged (metadata and checksum stay). Safe to run repeatedly and while serving.
+ * Removes abandoned files and purges expired ones. It is a dry run unless `apply` is true: the report then says what would be
+ * removed and nothing changes. Quarantined files and objects with no row are only candidates once older than `graceMs` (24 hours
+ * by default, counted from promotion), so an upload still between promote and commit is not touched. Because "no row" is only
+ * meaningful when this database matches this volume, applying is refused when unreferenced objects are the majority of the old
+ * objects or the database holds no versions at all (a fresh, older-restored or wrong database), unless `force` is set. Bytes of removed documents
+ * are deleted after the retention window and their versions marked purged (metadata and checksum stay). Safe to repeat.
  */
-export async function cleanupStorage(pool: Pool, store: ObjectStore, opts: { graceMs?: number; retentionDays: number; now?: number }): Promise<CleanupReport> {
+export async function cleanupStorage(pool: Pool, store: ObjectStore, opts: { graceMs?: number; retentionDays: number; now?: number; apply?: boolean; force?: boolean }): Promise<CleanupReport> {
   const now = opts.now ?? Date.now();
-  const grace = opts.graceMs ?? 60 * 60 * 1000;
-  const report: CleanupReport = { quarantineRemoved: 0, unreferencedRemoved: 0, purged: 0 };
+  const grace = opts.graceMs ?? 24 * 60 * 60 * 1000;
+  const apply = opts.apply === true;
+  const report: CleanupReport = { dryRun: !apply, quarantineRemoved: 0, unreferencedRemoved: 0, purged: 0 };
   const { objects, quarantine } = await store.list();
-  for (const q of quarantine) {
-    if (now - q.modifiedMs >= grace) {
-      await store.removeQuarantine(q.key);
-      report.quarantineRemoved++;
-    }
-  }
+  const stale = quarantine.filter((q) => now - q.modifiedMs >= grace);
   const old = objects.filter((o) => now - o.modifiedMs >= grace);
   const known = await repo.knownStorageKeys(pool, old.map((o) => o.key));
-  for (const o of old) {
-    if (!known.has(o.key)) {
-      await store.remove(o.key);
-      report.unreferencedRemoved++;
-    }
+  const orphans = old.filter((o) => !known.has(o.key));
+  if (apply && !opts.force && orphans.length > 0 && (orphans.length * 2 > old.length || (await repo.availableVersionCount(pool)) === 0)) {
+    throw new AppError('conflict', `Refusing to delete ${orphans.length} of ${old.length} old files that this database does not reference. The database may not match the volume (a fresh, older or wrong database). Run verify, check DATABASE_URL, or pass --force.`);
   }
+  report.quarantineRemoved = stale.length;
+  report.unreferencedRemoved = orphans.length;
+  if (!apply) {
+    report.purged = await repo.purgeCount(pool, opts.retentionDays);
+    return report;
+  }
+  for (const q of stale) await store.removeQuarantine(q.key);
+  for (const o of orphans) await store.remove(o.key);
   for (;;) {
     const batch = await repo.purgeCandidates(pool, opts.retentionDays, 100);
     if (batch.length === 0) break;

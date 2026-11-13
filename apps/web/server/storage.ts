@@ -3,7 +3,7 @@
 // Layout under the root:  quarantine/<key>   bytes received, not yet trusted, never served
 //                         objects/<aa>/<key>  bytes that passed validation, served only through the authorized download
 import { constants } from 'node:fs';
-import { mkdir, open, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, stat, unlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -99,6 +99,9 @@ export class FileObjectStore implements ObjectStore {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
     }
     await rename(from, to);
+    // The cleanup grace period counts from promotion, the last step before the rows are recorded.
+    const now = new Date();
+    await utimes(to, now, now);
   }
 
   async read(key: string): Promise<Buffer> {
