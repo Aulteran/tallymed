@@ -8,8 +8,8 @@
 | M03 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone recheck and financial re-audit approved head `a916938` with CI green; squash-merged as `6b9464e` (PR #5). Evidence in the M03 handoff. Next: M04, and M05 (after M03's migrations) only when started. |
 | M04 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone and financial rechecks approved head `5d106ab` with CI green; squash-merged as `f26beb8` (PR #6). Evidence in the M04 handoff. Next: M05 (migration 0007) only when started. |
 | M05 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone and security rechecks approved head `2f8d50f` with CI green; squash-merged as `a5a155d` (PR #7). Evidence in the M05 handoff. Next: M06 and M07 only when started. |
-| M06 | Merged, awaiting owner acceptance | Squash-merged as `5cac939` (PR #8) after the milestone, financial and security reviews approved head `844e9a5` with CI green (non-blocking findings fixed in that head). Owner acceptance is still to be confirmed. Next: M07 only when started. |
-| M07 | Planned | Wait for accepted M06. |
+| M06 | Accepted | Accepted 2026-11-13 by the owner ("Okay, accepted") after the milestone, financial and security reviews approved head `844e9a5` with CI green; squash-merged as `5cac939` (PR #8). Evidence in the M06 handoff. Next: M07 only when started. |
+| M07 | Planned | M06 is accepted; start only when the owner asks. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
 
