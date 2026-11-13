@@ -1,11 +1,11 @@
 import { AppError } from './errors.ts';
 
 export type Role = 'admin' | 'operator';
-export type Capability = 'household:read' | 'operators:manage' | 'audit:read';
+export type Capability = 'household:read' | 'operators:manage' | 'audit:read' | 'expenses:read' | 'expenses:write';
 
 const CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
-  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read']),
-  operator: new Set<Capability>(['household:read']),
+  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read', 'expenses:read', 'expenses:write']),
+  operator: new Set<Capability>(['household:read', 'expenses:read', 'expenses:write']),
 };
 
 /** The authenticated actor. Derived only from a validated server-side session. */

@@ -4,7 +4,8 @@
 | --- | --- | --- |
 | M00 | Accepted | Owner accepted on 2026-11-13. Next milestone starts only when requested. |
 | M01 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after both reviews approved and the merge. Evidence below. Next: M02, and M03/M05 may run in parallel after it. |
-| M02–M07 | Planned | Wait for accepted predecessors per the milestone index. |
+| M02 | In review | Implemented on `feature/m02-expense-management-members-providers-visits-bills`. PR and tested head SHA are on the PR. Needs independent milestone and financial reviews, green CI, merge and owner acceptance. M03 and M05 start only after acceptance. |
+| M03–M07 | Planned | Wait for accepted predecessors per the milestone index. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
 
@@ -41,6 +42,16 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Independent reviews on `872783f` (comments on the PR): milestone review approved after re-check; security review approved with no blocking findings. First-round findings on `51673aa` (concurrent login-throttle bypass, unbounded failed-login rows, no invitation revoke, duplicate JSON keys) were fixed in a separate thread and re-verified.
 - Acceptance was recorded under the owner's 2026-11-13 preauthorization for M01 to M05 (merge on green CI after required reviews). The owner can still revisit it. No public roadmap change: the private app is not publicly deployed, so public roadmap data is unchanged.
 - Not verified: manual browser sign-in, a real reverse-proxy product's header stripping, Docker Compose locally (CI covers it).
+
+## M02 handoff
+
+- Branch: `feature/m02-expense-management-members-providers-visits-bills`. The PR and tested head SHA are recorded on the PR.
+- Changed: migration `0003_expense_management.sql` (family members, providers, visits, bills, immutable bill adjustments, idempotency records); `server/money.ts`, `pagination.ts`, `contracts.ts`; `repositories/expenses.ts` and `services/expenses.ts`; `/api/expenses/<action>` mutations through the shared pipeline; Overview, Visits, Bills, Family and Providers screens; `scripts/check-app-browser.mjs` and a CI step for it; `docs/contracts.md` (stable ID, balance, locking and attachment contracts); decisions in DECISIONS.md under Medical Expense Management decisions.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable instance): `npm ci`, `npm run typecheck`, `npm test` (49 tests, 15 new in `tests/web/expenses.test.mjs`: multi-provider visits, bills awaiting a visit, archived relationships, adjustments and reversals, duplicate warnings, estimate/confirmed rules, audit trail, cross-household and anonymous access, concurrent adjustments, reversals, idempotent creates and archive races, fixture reconciliation without payments, upgrade over 0002), `npm run build`, `npm run test:export`, `npm run test:proxy` (11 checks), `npm run test:app-browser` (Chromium workflow with axe checks and phone-width overflow).
+- Not verified locally: Node 24, Docker Compose, the marketing browser and performance checks (unchanged by this milestone, CI runs them), a real reverse proxy and a real-device or screen-reader pass.
+- Owner-visible starter choices (see DECISIONS.md): bill responsibility is base plus signed adjustments and cannot go below zero; estimates versus confirmed amounts; adjustment categories; duplicate hint rule; idempotent create, adjust and reverse; member and visit fixed on a bill; select lists limited to 100 records.
+- Observed, not changed: the private app's database pool has no `error` listener, so an idle connection lost during a database restart would raise an unhandled event. Worth a small hardening change with the deployment follow-ups.
+- Remaining for acceptance: independent milestone and financial reviews, CI green on the final head, merge and owner acceptance. Next: M03 and M05 only after acceptance.
 
 ### Required before the first real deployment
 

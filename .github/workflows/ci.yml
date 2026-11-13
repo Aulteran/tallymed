@@ -40,6 +40,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: npm run test:performance
+      - name: Verify expense screens in a browser (disposable PostgreSQL)
+        run: npm run test:app-browser
       - name: Verify repository-path export
         run: npm run build:marketing && npm run test:export && npm run test:browser && npm run test:performance
         env:

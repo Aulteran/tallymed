@@ -128,7 +128,7 @@ try {
 
   res = await request('GET', '/', { headers: { cookie } });
   assert.equal(res.status, 200);
-  assert.match(res.body, /Dashboard/);
+  assert.match(res.body, /Overview/);
   assert.match(res.body, /Operators/);
   assert.equal((await request('GET', '/operators', { headers: { cookie } })).status, 200);
   res = await request('GET', '/', { headers: { 'x-forwarded-host': 'evil.example' } });
