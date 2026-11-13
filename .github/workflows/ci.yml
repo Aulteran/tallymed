@@ -24,8 +24,11 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run test:export
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:performance
       - name: Verify repository-path export
-        run: npm run build:marketing && npm run test:export
+        run: npm run build:marketing && npm run test:export && npm run test:browser && npm run test:performance
         env:
           NEXT_PUBLIC_BASE_PATH: /tallymed-example
           SITE_ORIGIN: https://example.github.io

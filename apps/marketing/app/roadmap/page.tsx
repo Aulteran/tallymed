@@ -1,9 +1,12 @@
 import type { Metadata } from 'next';
 import roadmap from '../../lib/roadmap.json';
+import { absoluteUrl, ogImages } from '../../lib/site';
 
 export const metadata: Metadata = {
   title: 'Development Roadmap',
   description: 'Follow the planned development of TallyMed.',
+  alternates: { canonical: absoluteUrl('/roadmap/') },
+  openGraph: { url: absoluteUrl('/roadmap/'), images: ogImages },
 };
 
 export default function Roadmap() {

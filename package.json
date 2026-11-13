@@ -12,6 +12,13 @@
     "build:marketing": "npm run build -w @tallymed/marketing",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node --test",
-    "test:export": "node scripts/check-export.mjs"
+    "test:export": "node scripts/check-export.mjs",
+    "test:browser": "node scripts/check-browser.mjs",
+    "test:performance": "node scripts/check-performance.mjs",
+    "generate:og": "node scripts/generate-og.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "playwright": "1.63.0"
   }
 }
