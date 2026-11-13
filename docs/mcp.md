@@ -28,7 +28,7 @@ Everything an assistant client reads is returned to that client. If the client i
    printf '%s' "$MCP_DB_PASSWORD" | DATABASE_URL=... npm run mcp -w @tallymed/web -- setup-role
    ```
 
-   This creates (or updates) the role `tallymed_mcp` (set `TALLYMED_MCP_ROLE` for another name) and applies the grants. Run it again after every upgrade that adds tables (it is safe to repeat). The web image does not contain the listener code, so in a Compose stack run it from the assistant image with the owner database URL: `docker compose --profile mcp run --rm -T -e DATABASE_URL=postgres://tallymed:<owner password>@db:5432/tallymed mcp node apps/web/cli/mcp.ts setup-role`. For the published-image stack see [operations](operations.md).
+   This creates (or updates) the role `tallymed_mcp` (set `TALLYMED_MCP_ROLE` for another name) and applies the grants. Run it again after every upgrade that adds tables (it is safe to repeat). The web image does not contain the listener code, so in a Compose stack run it from the assistant image with the owner database URL: `docker compose --profile mcp run --rm -T -e DATABASE_URL mcp node apps/web/cli/mcp.ts setup-role` after exporting `DATABASE_URL` (owner URL, `postgres://tallymed:<owner password>@db:5432/tallymed`) in your shell, so the password is passed by name and is not on the command line. For the published-image stack see [operations](operations.md).
 
 2. **Configure the listener.** Set these on the MCP process only (never on the web service). A database password with characters such as `@`, `/` or `:` must be percent-encoded in a URL (the Compose file does not do it for you; prefer a password of letters and digits):
 

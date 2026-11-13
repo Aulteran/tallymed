@@ -94,7 +94,7 @@ Keep the secret out of any file that is world-readable (an `include` file with m
    dc run --rm web node apps/web/cli/documents.ts verify
    ```
 
-   If you use the assistant, run `setup-role` after migrating. It lives in the assistant image, so run it there, with the owner database URL, and then restart the listener: `printf '%s' "$MCP_DB_PASSWORD" | dc --profile mcp run --rm -T -e DATABASE_URL="postgres://tallymed:$POSTGRES_PASSWORD@db:5432/tallymed" mcp node apps/web/cli/mcp.ts setup-role` (the password is 24 to 200 characters; use `openssl rand -hex 32`). CI runs this command in the built image.
+   If you use the assistant, run `setup-role` after migrating. It lives in the assistant image, so run it there, with the owner database URL, and then restart the listener: `export DATABASE_URL="postgres://tallymed:<owner password from deploy/.env>@db:5432/tallymed"` in your shell (not in shell history or a script), then `printf '%s' "$MCP_DB_PASSWORD" | dc --profile mcp run --rm -T -e DATABASE_URL mcp node apps/web/cli/mcp.ts setup-role`, which passes the variable by name so the password never appears on a command line (the password is 24 to 200 characters; use `openssl rand -hex 32`). CI runs this command in the built image.
 4. Sign in, open the Overview and compare its totals with the figures you recorded before the upgrade.
 
 **Rollback limits.** Migrations only go forward; there are no down migrations. Pointing `TALLYMED_WEB_IMAGE` back at an older reference is safe only if the release notes say the schema is compatible, otherwise restore the pre-upgrade backup into a fresh database. Anything entered after the backup is lost by a restore, so upgrade when you can pause entry.
