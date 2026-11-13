@@ -208,6 +208,61 @@ try {
   await a11y('overview with payments and plans');
   ok('plan created, installment partly matched, bill balance unchanged, overdue queue on the overview');
 
+  // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
+  await page.goto(`${origin}/hsa`);
+  await a11y('HSA list');
+  assert.match(await text(), /Not decided yet\s*\n?\s*1/);
+  await page.locator('a[href^="/hsa/allocations/"]').first().click();
+  await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
+  const hsaUrl = page.url();
+  await a11y('HSA payment page');
+  await page.selectOption('#status', 'eligible');
+  await page.fill('#eligibleAmount', '60.00');
+  await page.fill('#rationale', 'Qualified medical expense');
+  await page.selectOption('#evidenceType', 'receipt');
+  await page.fill('#evidenceNote', 'Clinic receipt on file');
+  await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
+  await page.waitForURL(hsaUrl);
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$60\.00/);
+  await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '50.00');
+  await page.fill('#administrator', 'Example HSA Bank');
+  await page.fill('#reference', 'CLM-0001');
+  await page.click('form[action="/api/expenses/hsa/claim"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/claims\/[0-9a-f-]{36}$/);
+  await a11y('HSA claim page');
+  assert.match(await text(), /Pending\s*\n?\s*\$50\.00/);
+  await page.fill('form[action="/api/expenses/hsa/receipt"] input[name=amount]', '20.00');
+  await page.click('form[action="/api/expenses/hsa/receipt"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/receipts\/[0-9a-f-]{36}$/);
+  const receiptUrl = page.url();
+  assert.match(await text(), /Reimbursement of\s*\$20\.00/);
+  await a11y('HSA reimbursement page');
+  await page.goto(hsaUrl);
+  const figures = await text();
+  assert.match(figures, /Pending\s*\n?\s*\$30\.00/);
+  assert.match(figures, /Received\s*\n?\s*\$20\.00/);
+  assert.match(figures, /Available\s*\n?\s*\$10\.00/);
+  await page.goto(billUrl);
+  assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
+  ok('HSA decision, claim and partial receipt reconcile ($30 pending, $20 received, $10 available) and the bill balance is unchanged');
+  await page.goto(paymentUrl);
+  await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '40.00');
+  await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Second provider refund');
+  await page.click('form[action="/api/expenses/payments/refund"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  await page.goto(hsaUrl);
+  assert.match(await text(), /Needs review\s*\n?\s*\$5\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 0, 'new claims are frozen while a payment needs review');
+  await a11y('HSA payment page needing review');
+  await page.goto(`${origin}/`);
+  assert.match(await text(), /HSA needs review\s*\n?\s*\$5\.00/);
+  await a11y('overview with HSA');
+  const exported = await page.request.get(`${origin}/api/hsa/export?kind=allocations`);
+  assert.equal(exported.status(), 200);
+  assert.match(exported.headers()['content-type'], /text\/csv/);
+  assert.match(await exported.text(), /TOTAL,.*\r?\n?$/);
+  ok('a refund after a receipt freezes new claims, shows needs review on the overview, and the scoped export downloads');
+
   await page.goto(`${origin}/`);
   const overview = await text();
   assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
@@ -222,7 +277,7 @@ try {
       .map((e) => `${e.tagName}.${e.className}#${e.id}:${Math.round(e.getBoundingClientRect().left)}-${Math.round(e.getBoundingClientRect().right)}:${getComputedStyle(e).display}`).slice(0, 8),
   }));
   assert.ok(overflow.scrollWidth <= overflow.width, `no horizontal page scroll on a phone: ${JSON.stringify(overflow)}`);
-  for (const path of [paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`]) {
+  for (const path of [paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`]) {
     await page.goto(path);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${path}: ${JSON.stringify(o)}`);

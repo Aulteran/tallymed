@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { listMembers, listProviders, expenseOverview } from '../../server/services/expenses.ts';
 import { cashSummary } from '../../server/services/payments.ts';
+import { hsaQueues, hsaSummary } from '../../server/services/hsa.ts';
 import { installmentSummary, listInstallmentQueue } from '../../server/services/plans.ts';
+import { AllocationLink } from '../components/hsa.tsx';
 import { Banner, flat, load, Money, Options, requireSession, StatePill, todayUtc, type SearchParams } from '../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -19,6 +21,9 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
   const [cash, due, overdue] = await Promise.all([
     cashSummary(ctx.pool, actor), installmentSummary(ctx.pool, actor, asOf), listInstallmentQueue(ctx.pool, actor, { state: 'overdue', asOf, limit: 5, ...(isId(params.memberId) ? { memberId: params.memberId } : {}), ...(isId(params.providerId) ? { providerId: params.providerId } : {}) }),
   ]);
+  const hsaScope = { ...(isId(params.memberId) ? { memberId: params.memberId } : {}), ...(isId(params.providerId) ? { providerId: params.providerId } : {}) };
+  const [hsaTotals, hsaQueue] = await Promise.all([hsaSummary(ctx.pool, actor, hsaScope), hsaQueues(ctx.pool, actor, hsaScope, 5)]);
+  const hsaLink = (state: string) => `/hsa?${new URLSearchParams({ ...hsaScope, state })}`;
   const t = data?.totals;
   return <main className="wide">
     <h1>Overview</h1>
@@ -43,6 +48,20 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <Link href="/plans?state=upcoming"><div className="card"><span>Upcoming installments</span><strong><Money cents={due.upcomingCents} /></strong><span className="muted">{due.upcomingCount} installments not yet due (all family)</span></div></Link>
         <Link href={filter({ awaitingVisit: 'yes' })}><div className="card"><span>Bills awaiting a visit</span><strong>{t.awaitingVisitCount}</strong></div></Link>
       </section>
+      <section className="metrics" aria-label="HSA reimbursements">
+        <Link href={hsaLink('available')}><div className="card"><span>HSA available</span><strong><Money cents={hsaTotals.availableCents} /></strong><span className="muted">Eligible and not yet claimed (statement dates do not filter this)</span></div></Link>
+        <Link href={hsaLink('pending')}><div className="card"><span>HSA pending</span><strong><Money cents={hsaTotals.pendingCents} /></strong><span className="muted">Reserved by open claims</span></div></Link>
+        <Link href={hsaLink('received')}><div className="card"><span>HSA received</span><strong><Money cents={hsaTotals.receivedCents} /></strong><span className="muted">Not household cash; provider balances unchanged</span></div></Link>
+        <Link href={hsaLink('needs_review')}><div className="card"><span>HSA needs review</span><strong><Money cents={hsaTotals.needsReviewCents} /></strong><span className="muted">{hsaTotals.needsReviewCount} payments above their ceiling</span></div></Link>
+      </section>
+      <div className="card">
+        <h2>Available HSA reimbursements</h2>
+        {hsaQueue.available.length === 0 ? <p>Nothing is available to claim in this view. <Link href={hsaLink('undecided')}>{hsaTotals.undecidedCount} payments have no eligibility decision.</Link></p> : <ul>{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>}
+      </div>
+      <div className="card">
+        <h2>HSA payments that need review</h2>
+        {hsaQueue.needsReview.length === 0 ? <p>None. Pending and received amounts fit within every eligible ceiling.</p> : <ul>{hsaQueue.needsReview.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.needsReviewCents} /></li>)}</ul>}
+      </div>
       <div className="card">
         <h2>Overdue installments</h2>
         {overdue.items.length === 0 ? <p>No installments are overdue in this view.</p> : <ul>{overdue.items.map((i) => <li key={i.installmentId}><Link href={`/plans/${i.planId}`}>{i.planName} #{i.seq} · due {i.dueDate}</Link> <Money cents={i.unpaidCents} /> <StatePill state={i.state} overdue /></li>)}</ul>}
@@ -61,7 +80,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <p className="muted">Hints only. TallyMed never merges bills automatically.</p>
       </div>
     </>}
-    <p className="muted">Amounts are in USD. HSA reimbursements and document management are planned and not available yet.</p>
+    <p className="muted">Amounts are in USD. Document management is planned and not available yet. HSA figures use payment dates; the statement-date filters above do not apply to them.</p>
   </main>;
 }
 

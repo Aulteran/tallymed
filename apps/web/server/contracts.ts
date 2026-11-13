@@ -3,8 +3,9 @@ import { authorize, type Actor } from './authz.ts';
 import type { Pool, Queryable } from './db.ts';
 import { AppError } from './errors.ts';
 import * as repo from './repositories/expenses.ts';
+import * as hsaRepo from './repositories/hsa.ts';
 import * as paymentRepo from './repositories/payments.ts';
-import { parse, schemas } from './validation.ts';
+import { hsaFilterSchemas, parse, schemas } from './validation.ts';
 
 /** Every entity ID is a server-generated, canonical lower-case UUID that never changes and is never reused. */
 export const ENTITY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -120,3 +121,31 @@ export async function listNetAllocations(pool: Pool | Queryable, actor: Actor, f
  * its write cannot interleave with a refund. Global lock order: payments (ascending id), then bills (ascending id), then plans (ascending id); never take an earlier kind while holding a later one.
  */
 export const lockPaymentsForMoney = paymentRepo.lockPayments;
+
+// ---------- HSA reimbursements (M04): stable figures for reports, exports and the MCP (M06) ----------
+
+/**
+ * HSA reconciliation figures per payment allocation, all decimal strings of integer cents. `ceilingCents` is the lesser of the
+ * decided eligible amount and `netCents` (zero while undecided, pending or ineligible). `pendingCents` is open reserved cents,
+ * `receivedCents` is receipts less their reversals, `availableCents = max(0, ceiling - pending - received)` and
+ * `needsReviewCents = max(0, pending + received - ceiling)`. HSA rows never alter bill or payment figures.
+ */
+export interface HsaAllocationContract {
+  allocationId: string; paymentId: string; billId: string; memberId: string; providerId: string; paidOn: string; netCents: string;
+  decisionStatus: 'eligible' | 'ineligible' | 'pending' | null; ceilingCents: string; pendingCents: string; receivedCents: string;
+  availableCents: string; needsReviewCents: string;
+}
+
+/** One page of HSA figures, newest payment first; follow `nextCursor` until null for every row. Filters match the HSA screens. */
+export async function listHsaFigures(pool: Pool | Queryable, actor: Actor, filter: { memberId?: string; providerId?: string; from?: string; to?: string; state?: string; limit?: number; cursor?: string } = {}): Promise<{ items: HsaAllocationContract[]; nextCursor: string | null }> {
+  authorize(actor, 'expenses:read');
+  const page = await hsaRepo.listAllocations(pool, actor.householdId, parse(hsaFilterSchemas.allocations, { ...filter, limit: String(Math.max(1, Math.min(filter.limit ?? 100, 100))) }));
+  return {
+    items: page.items.map((a) => ({
+      allocationId: a.allocationId, paymentId: a.paymentId, billId: a.billId, memberId: a.memberId, providerId: a.providerId, paidOn: a.paidOn, netCents: a.netCents,
+      decisionStatus: a.decisionStatus, ceilingCents: a.ceilingCents, pendingCents: a.pendingCents, receivedCents: a.receivedCents,
+      availableCents: a.availableCents, needsReviewCents: a.needsReviewCents,
+    })),
+    nextCursor: page.nextCursor,
+  };
+}

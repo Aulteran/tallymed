@@ -65,6 +65,8 @@ export function mapDatabaseError(error: unknown): unknown {
   const e = error as { code?: string; constraint?: string };
   if (e?.code === '23514' && !(error instanceof AppError)) return new AppError('conflict', 'That change would break a payment or balance limit. Reload and check the current figures.');
   if (e?.code === '23505' && e.constraint === 'payment_entries_one_refund_reversal') return new AppError('conflict', 'That refund was already reversed');
+  if (e?.code === '23505' && e.constraint === 'hsa_entries_one_reversal') return new AppError('conflict', 'That receipt was already reversed');
+  if (e?.code === '23505' && e.constraint === 'hsa_claims_reference_unique') return new AppError('conflict', 'A claim with that reference was already recorded');
   return error;
 }
 

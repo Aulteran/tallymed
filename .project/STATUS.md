@@ -6,7 +6,8 @@
 | M01 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after both reviews approved and the merge. Evidence below. Next: M02, and M03/M05 may run in parallel after it. |
 | M02 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone recheck and financial re-audit approved head `adce34d` with CI green; squash-merged as `15ea2bc` (PR #4). Evidence in the M02 handoff. Next: M03, and M05 after M03's migrations, only when started. |
 | M03 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone recheck and financial re-audit approved head `a916938` with CI green; squash-merged as `6b9464e` (PR #5). Evidence in the M03 handoff. Next: M04, and M05 (after M03's migrations) only when started. |
-| M04–M07 | Planned | Wait for accepted predecessors per the milestone index. |
+| M04 | In review | Implemented on `feature/m04-hsa-eligibility-claims-receipts-reconciliation`; the PR and tested head SHA are recorded on the PR. Independent milestone and financial reviews are pending. Next: reviews, then owner merge and acceptance. |
+| M05–M07 | Planned | Wait for accepted predecessors per the milestone index (M05 needs only M02; migration numbering follows 0006). |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
 
@@ -70,6 +71,16 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Still required before a real deployment: password change and reset, shared-address lockout documentation (see below).
 - Not verified by anyone: Node 24 locally, Docker Compose locally (CI covers it), a real reverse proxy and a screen-reader pass.
 - Not verified locally: Node 24, Docker Compose, a real reverse proxy and a screen-reader pass (CI covers Node 24, PostgreSQL 17, Compose, and the browser workflow with axe checks).
+
+## M04 handoff
+
+- Branch: `feature/m04-hsa-eligibility-claims-receipts-reconciliation`. The PR and tested head SHA are recorded on the PR.
+- Changed: migration `0006_hsa_reimbursements.sql` (immutable eligibility decisions, claims, receipts and one entry ledger, commit-time guards, `hsa_allocation_status` view); `repositories/hsa.ts` and `services/hsa.ts`; `/api/expenses/hsa/*` actions and `GET /api/hsa/export`; HSA, payment-allocation, claim and reimbursement screens; HSA totals and queues on the Overview; a link from each payment allocation; `listHsaFigures` and the HSA contract in `contracts.ts` and `docs/contracts.md`; `withSnapshot` for consistent exports; decisions in DECISIONS.md under HSA Reimbursements decisions.
+- Carried forward from M03 and done: the documented lock order (HSA writers lock payments with `lockPaymentsForMoney`, take no bill or plan lock), `listNetAllocations` semantics through the `allocation_net` view, parent-row-first commit-time guards, raw-writer lock-order note, and `retryStats.lockConflicts` asserted zero under opposing multi-payment claims racing refunds. Lessons applied: concurrency-safe check-then-act with direct-SQL race tests, DB guards for every money invariant, before and after audit values with no free text, no values in redirect URLs, capped selects keep the current record, no test depends on transaction-start clocks.
+- Owner-visible starter choices (see DECISIONS.md): eligibility is a decision with rationale and evidence and no decision means zero; the ceiling is the lesser of the decided amount and net cash; needs review freezes new claims and external receipts but never rewrites history; claim references are unique; receipts are fully allocated and reversed whole, and a reversal makes the amount available again; external reimbursements must fit the available amount; plan context is a free-text note per decision; CSV export with a 20,000 row cap.
+- Review round 1 (milestone and financial both APPROVE on `cac93fa`): follow-ups fixed on the same branch: line status follows net received (new status Receipt reversed), a commit-time guard on receipt headers, mixed-up claim or payment form ids refused, `listHsaFigures` caps its page, an HSA received filter, and known limitations recorded. See the PR for the new head SHA. Reviewers recheck on it.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable instance): see the PR description for exact commands and results.
+- Not verified locally: Node 24, Docker Compose, the marketing browser and performance checks (unchanged, CI covers them), a real reverse proxy and a screen-reader pass.
 
 ### Required before the first real deployment
 

@@ -220,3 +220,87 @@ export const paymentFilterSchemas = {
 export type PaymentFilter = z.infer<typeof paymentFilterSchemas.payment>;
 export type PlanFilter = z.infer<typeof paymentFilterSchemas.plan>;
 export type InstallmentFilter = z.infer<typeof paymentFilterSchemas.installments>;
+
+// ---------- HSA reimbursements ----------
+
+const evidenceType = z.enum(['receipt', 'eob', 'statement', 'provider_letter', 'plan_document', 'other']);
+const decisionStatus = z.enum(['eligible', 'ineligible', 'pending']);
+const receiptSource = z.enum(['administrator_transfer', 'hsa_debit_card', 'portal_reimbursement', 'other']);
+const releaseKind = z.enum(['reject', 'cancel']);
+const decisionVersion = z.coerce.number().int().min(0).max(1_000_000);
+const claimLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
+const receiptLine = z.strictObject({ lineId: uuid, amount: positiveUsd });
+
+export const hsaSchemas = {
+  /** An eligibility decision. `version` is the number of decisions the person saw, so a stale form is refused. */
+  decide: z.strictObject({
+    idempotencyKey, allocationId: uuid, version: decisionVersion, status: decisionStatus, eligibleAmount: optional(positiveUsd),
+    rationale: text(500).min(1), evidenceType: optional(evidenceType), evidenceNote: optional(text(300).min(1)), contextNote: optionalText(300),
+    decidedOn: isoDate, ...csrf,
+  }).refine((d) => (d.status === 'eligible') === (d.eligibleAmount !== null))
+    .refine((d) => d.status === 'pending' || (d.evidenceType !== null && d.evidenceNote !== null)),
+  /** A claim submission. JSON sends `lines`; a form sends one allocation and an amount. */
+  submitClaim: z.strictObject({
+    idempotencyKey, submittedOn: isoDate, administrator: text(80).min(1), reference: optional(text(80).min(1)), note: optionalText(500),
+    lines: z.array(claimLine).max(25).optional(), allocationId: optional(uuid), amount: optional(positiveUsd), ...csrf,
+  }).transform((d, ctx) => {
+    const lines = d.lines && d.lines.length > 0 ? d.lines : d.allocationId && d.amount ? [{ allocationId: d.allocationId, amount: d.amount }] : [];
+    if ((d.lines?.length && (d.allocationId || d.amount)) || lines.length === 0 || new Set(lines.map((l) => l.allocationId)).size !== lines.length) {
+      ctx.addIssue({ code: 'custom', message: 'a claim needs one line per allocation' });
+      return z.NEVER;
+    }
+    const { lines: _l, allocationId: _a, amount: _m, ...rest } = d;
+    return { ...rest, lines };
+  }),
+  /** Rejects or cancels the open reservation of a claim line (all of it when no amount is given). */
+  releaseLine: z.strictObject({
+    idempotencyKey, claimId: uuid.optional(), allocationId: uuid.optional(), lineId: uuid, kind: releaseKind, amount: optional(positiveUsd),
+    effectiveDate: isoDate, reason: text(500).min(1), ...csrf,
+  }),
+  /** A receipt that pays claim lines. JSON sends `lines`; a form sends one line and an amount. */
+  recordReceipt: z.strictObject({
+    idempotencyKey, claimId: uuid.optional(), receivedOn: isoDate, source: receiptSource, reference: optional(text(80).min(1)), note: optionalText(500),
+    evidenceType: optional(evidenceType), evidenceNote: optional(text(300).min(1)),
+    lines: z.array(receiptLine).max(25).optional(), lineId: optional(uuid), amount: optional(positiveUsd), ...csrf,
+  }).transform((d, ctx) => {
+    const lines = d.lines && d.lines.length > 0 ? d.lines : d.lineId && d.amount ? [{ lineId: d.lineId, amount: d.amount }] : [];
+    if ((d.lines?.length && (d.lineId || d.amount)) || lines.length === 0 || new Set(lines.map((l) => l.lineId)).size !== lines.length) {
+      ctx.addIssue({ code: 'custom', message: 'a receipt needs one amount per claim line' });
+      return z.NEVER;
+    }
+    const { lines: _l, lineId: _i, amount: _m, ...rest } = d;
+    return { ...rest, lines };
+  }),
+  /** A reimbursement that was not initiated from a claim here. Source and evidence are required. */
+  recordExternalReceipt: z.strictObject({
+    idempotencyKey, receivedOn: isoDate, source: receiptSource, reference: optional(text(80).min(1)), note: optionalText(500),
+    evidenceType, evidenceNote: text(300).min(1), lines: z.array(claimLine).max(25).optional(), allocationId: optional(uuid), amount: optional(positiveUsd), ...csrf,
+  }).transform((d, ctx) => {
+    const lines = d.lines && d.lines.length > 0 ? d.lines : d.allocationId && d.amount ? [{ allocationId: d.allocationId, amount: d.amount }] : [];
+    if ((d.lines?.length && (d.allocationId || d.amount)) || lines.length === 0 || new Set(lines.map((l) => l.allocationId)).size !== lines.length) {
+      ctx.addIssue({ code: 'custom', message: 'a receipt needs one amount per allocation' });
+      return z.NEVER;
+    }
+    const { lines: _l, allocationId: _a, amount: _m, ...rest } = d;
+    return { ...rest, lines };
+  }),
+  reverseReceipt: z.strictObject({ idempotencyKey, receiptId: uuid, allocationId: uuid.optional(), effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
+};
+
+const hsaState = z.enum(['undecided', 'eligible', 'available', 'pending', 'received', 'needs_review', 'ineligible']);
+export const hsaFilterSchemas = {
+  scope: z.object({ memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), from: optionalFilter(isoDate), to: optionalFilter(isoDate) }),
+  allocations: z.object({
+    memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), from: optionalFilter(isoDate), to: optionalFilter(isoDate),
+    state: optionalFilter(hsaState), cursor, limit: pageSize,
+  }),
+  claims: z.object({ status: optionalFilter(z.enum(['open', 'closed'])), cursor, limit: pageSize }),
+  exportScope: z.object({
+    kind: z.preprocess(blank, z.enum(['allocations', 'events', 'decisions']).default('allocations')),
+    memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), from: optionalFilter(isoDate), to: optionalFilter(isoDate),
+  }),
+};
+export type HsaScope = z.infer<typeof hsaFilterSchemas.scope>;
+export type HsaAllocationFilter = z.infer<typeof hsaFilterSchemas.allocations>;
+export type HsaClaimFilter = z.infer<typeof hsaFilterSchemas.claims>;
+export type HsaExportScope = z.infer<typeof hsaFilterSchemas.exportScope>;

@@ -35,12 +35,13 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     </section>
     <div className="card"><h2>Applied to bills</h2>
       {allocations.length === 0 ? <p>Nothing has been applied to a bill yet.</p> : <table className="stack">
-        <thead><tr><th>Bill</th><th className="num">Allocated</th><th className="num">Moved back</th><th className="num">Refunded</th><th className="num">Net applied</th><th className="num">Matched to a plan</th></tr></thead>
+        <thead><tr><th>Bill</th><th className="num">Allocated</th><th className="num">Moved back</th><th className="num">Refunded</th><th className="num">Net applied</th><th className="num">Matched to a plan</th><th>HSA</th></tr></thead>
         <tbody>{allocations.map((a) => <tr key={a.allocationId}>
           <td data-label="Bill"><Link href={`/bills/${a.billId}`}>{a.memberName} · {a.billLabel}</Link></td>
           <td data-label="Allocated" className="num"><Money cents={a.allocatedCents} /></td><td data-label="Moved back" className="num"><Money cents={a.reversedCents} /></td>
           <td data-label="Refunded" className="num"><Money cents={a.refundedCents} /></td><td data-label="Net applied" className="num"><Money cents={a.netCents} /></td>
           <td data-label="Matched to a plan" className="num"><Money cents={a.matchedCents} /></td>
+          <td data-label="HSA"><Link href={`/hsa/allocations/${a.allocationId}`}>Reimbursement</Link></td>
         </tr>)}</tbody>
       </table>}
     </div>
