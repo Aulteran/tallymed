@@ -25,6 +25,27 @@ export async function findOpenInvitation(db: Queryable, tokenHash: Buffer): Prom
   return r.rows[0] ?? null;
 }
 
+export interface OpenInvitation { id: string; email: string; role: Role; expiresAt: Date; createdAt: Date }
+
+export async function listOpenInvitations(db: Queryable, householdId: string): Promise<OpenInvitation[]> {
+  const r = await db.query<OpenInvitation>(
+    `select id, email, role, expires_at as "expiresAt", created_at as "createdAt" from invitations
+      where household_id = $1 and accepted_at is null and revoked_at is null and expires_at > now() order by created_at`,
+    [householdId],
+  );
+  return r.rows;
+}
+
+/** Revokes one open invitation in the household. Returns false when it is absent, used, revoked or foreign. */
+export async function revokeOpenInvitation(db: Queryable, householdId: string, id: string): Promise<boolean> {
+  const r = await db.query(
+    `update invitations set revoked_at = now()
+      where id = $1 and household_id = $2 and accepted_at is null and revoked_at is null`,
+    [id, householdId],
+  );
+  return r.rowCount === 1;
+}
+
 export async function markInvitationAccepted(db: Queryable, id: string): Promise<void> {
   await db.query('update invitations set accepted_at = now() where id = $1', [id]);
 }

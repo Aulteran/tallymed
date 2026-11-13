@@ -6,7 +6,7 @@ import { AppError } from './errors.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
-import { acceptInvitation, inviteOperator, updateOperator } from './services/operators.ts';
+import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
 
@@ -50,6 +50,41 @@ export function assertSameOrigin(headers: Headers, config: AppConfig): void {
   if (seen !== config.canonicalOrigin) throw new AppError('csrf_failed');
 }
 
+/**
+ * True when any JSON object repeats a key (compared after unescaping). JSON.parse keeps the last value silently,
+ * so this scans text that has already parsed successfully and therefore has valid syntax.
+ */
+export function hasDuplicateKeys(text: string): boolean {
+  const stack: Array<Set<string> | null> = [];
+  let expectKey = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      if (expectKey) {
+        const key = JSON.parse(text.slice(i, j + 1)) as string;
+        const seen = stack[stack.length - 1]!;
+        if (seen!.has(key)) return true;
+        seen!.add(key);
+        expectKey = false;
+      }
+      i = j;
+    } else if (c === '{') {
+      stack.push(new Set());
+      expectKey = true;
+    } else if (c === '[') {
+      stack.push(null);
+    } else if (c === '}' || c === ']') {
+      stack.pop();
+      expectKey = false;
+    } else if (c === ',') {
+      expectKey = stack[stack.length - 1] instanceof Set;
+    }
+  }
+  return false;
+}
+
 /** Reads a bounded urlencoded or JSON body into a flat object of strings. */
 export async function readBody(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const declared = req.headers.get('content-length');
@@ -75,6 +110,7 @@ export async function readBody(req: Request, maxBytes = MAX_BODY_BYTES): Promise
   if (type === 'application/json') {
     try {
       const parsed: unknown = JSON.parse(text);
+      if (hasDuplicateKeys(text)) throw new Error();
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
       return parsed as Record<string, unknown>;
     } catch {
@@ -218,6 +254,17 @@ export const handleUpdateOperator = route({
   errorPath: () => '/operators',
   async run({ ctx, actor, body, requestId, req }) {
     await updateOperator(ctx.pool, actor!, body, requestId);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/operators') };
+    return { json: { ok: true } };
+  },
+});
+
+export const handleRevokeInvitation = route({
+  name: 'revoke-invitation',
+  session: true,
+  errorPath: () => '/operators',
+  async run({ ctx, actor, body, requestId, req }) {
+    await revokeInvitation(ctx.pool, actor!, body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, '/operators') };
     return { json: { ok: true } };
   },

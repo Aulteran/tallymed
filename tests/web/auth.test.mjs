@@ -90,7 +90,9 @@ test('failed logins are generic, throttled per account and not bypassed by spoof
     assert.equal((await loginJson(handlers, ctx, 'nobody@example.test')).res.status, 401);
     // Failed logins left audit rows without credentials or emails.
     const audit = (await db.pool.query(`select detail::text d from audit_events where action = 'auth.login_failed'`)).rows;
-    assert.ok(audit.length >= 5 && audit.every((r) => r.d === '{}'));
+    // Audit rows are bounded per window (first failure and lockout), so five failures leave two rows.
+    assert.ok(audit.length === 1 && audit.every((r) => r.d === '{}'));
+    assert.equal((await db.pool.query(`select count(*)::int n from audit_events where action = 'auth.login_locked'`)).rows[0].n, 1);
   } finally {
     await db.drop();
   }
@@ -350,4 +352,79 @@ test('internal errors never leak details', { skip: skipDb }, async () => {
     setLogSink((l) => process.stderr.write(l + '\n'));
     await db.drop();
   }
+});
+
+test('login throttle holds under a concurrent burst (per account and per trusted address)', { skip: skipDb }, async () => {
+  const { db, ctx } = await setup();
+  try {
+    const burst = await Promise.all(Array.from({ length: 40 }, (_, i) => loginJson(handlers, ctx, 'admin@example.test', `wrong password ${i}!!`)));
+    const statuses = burst.map((b) => b.res.status);
+    assert.equal(statuses.filter((s) => s === 401).length, 5, 'at most five attempts are evaluated');
+    assert.equal(statuses.filter((s) => s === 429).length, 35);
+    assert.equal((await db.pool.query('select count(*)::int n from login_attempts')).rows[0].n, 5);
+    assert.equal((await loginJson(handlers, ctx, 'admin@example.test')).res.status, 429);
+    // Per address: 60 distinct unknown accounts from one trusted client.
+    const trusted = { 'x-tallymed-proxy-secret': PROXY_SECRET, 'x-forwarded-for': '192.0.2.77', 'x-forwarded-proto': 'https' };
+    const ipBurst = await Promise.all(Array.from({ length: 60 }, (_, i) => loginJson(handlers, ctx, `burst${i}@example.test`, 'wrong password!!', { headers: trusted })));
+    assert.equal(ipBurst.filter((b) => b.res.status === 401).length, 20);
+    assert.equal(ipBurst.filter((b) => b.res.status === 429).length, 40);
+  } finally {
+    await db.drop();
+  }
+});
+
+test('failed-login bookkeeping is bounded: expired rows are pruned and audit rows are capped', { skip: skipDb }, async () => {
+  const { db, ctx } = await setup();
+  try {
+    for (let i = 0; i < 30; i++) await loginJson(handlers, ctx, `unknown${i}@example.test`, 'wrong password!!');
+    for (let i = 0; i < 5; i++) await loginJson(handlers, ctx, 'admin@example.test', 'wrong password!!');
+    const audit = (await db.pool.query(`select action, count(*)::int n from audit_events where action like 'auth.login_%' group by action`)).rows;
+    assert.deepEqual(Object.fromEntries(audit.map((r) => [r.action, r.n])), { 'auth.login_failed': 1, 'auth.login_locked': 1 });
+    await db.pool.query(`update login_attempts set attempted_at = now() - interval '20 minutes'`);
+    await loginJson(handlers, ctx, 'admin@example.test', 'wrong password!!');
+    assert.equal((await db.pool.query(`select count(*)::int n from login_attempts where email_hash = (select email_hash from login_attempts order by id desc limit 1)`)).rows[0].n, 1);
+  } finally {
+    await db.drop();
+  }
+});
+
+test('admins can revoke an open invitation and re-issue it; non-admins and other households cannot', { skip: skipDb }, async () => {
+  const { db, ctx } = await setup();
+  try {
+    const admin = await loginJson(handlers, ctx, 'admin@example.test');
+    const h = { 'x-csrf-token': admin.csrf };
+    const inv = (email) => handlers.handleInvite(post('/api/operators/invite', { email, role: 'operator' }, { type: 'json', cookie: admin.cookie, headers: h }), ctx);
+    const first = await inv('wrong-address@example.test');
+    const oldToken = (await first.json()).link.split('/').pop();
+    const id = (await db.pool.query('select id from invitations')).rows[0].id;
+    const revoke = (cookie, headers, invitationId = id) => handlers.handleRevokeInvitation(post('/api/operators/invitations/revoke', { invitationId }, { type: 'json', cookie, headers }), ctx);
+    assert.equal((await revoke(admin.cookie, h)).status, 200);
+    assert.equal((await revoke(admin.cookie, h)).status, 404, 'already revoked');
+    const accept = (token) => handlers.handleAcceptInvitation(post('/api/invitations/accept', { token, displayName: 'Sam', password: PASSWORD }, { type: 'json' }), ctx);
+    assert.equal((await accept(oldToken)).status, 404);
+    const second = await inv('wrong-address@example.test');
+    assert.equal(second.status, 201);
+    assert.equal((await accept((await second.json()).link.split('/').pop())).status, 201);
+    const audit = (await db.pool.query(`select count(*)::int n from audit_events where action = 'operator.invitation_revoked'`)).rows[0].n;
+    assert.equal(audit, 1);
+    // An operator cannot revoke.
+    const third = await inv('other@example.test');
+    const thirdId = (await db.pool.query(`select id from invitations where email = 'other@example.test'`)).rows[0].id;
+    const op = await loginJson(handlers, ctx, 'wrong-address@example.test');
+    assert.equal((await revoke(op.cookie, { 'x-csrf-token': op.csrf }, thirdId)).status, 403);
+    assert.equal(third.status, 201);
+  } finally {
+    await db.drop();
+  }
+});
+
+test('JSON bodies with duplicate keys are rejected, including escaped and nested duplicates', () => {
+  const dup = (t) => handlers.hasDuplicateKeys(t);
+  assert.equal(dup('{"a":1,"a":2}'), true);
+  assert.equal(dup('{"a":1,"\\u0061":2}'), true);
+  assert.equal(dup('{"x":{"a":1,"a":2}}'), true);
+  assert.equal(dup('{"x":[{"a":1},{"a":2}],"a":"a","b":"a"}'), false);
+  assert.equal(dup('{"a":"b\\"c","b":[1,2,{"c":1}]}'), false);
+  const body = (text) => handlers.readBody(new Request('http://x.test/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: text }));
+  return assert.rejects(body('{"email":"a@example.test","email":"b@example.test"}'), { code: 'invalid_input' });
 });

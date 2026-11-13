@@ -13,6 +13,7 @@ export const schemas = {
   login: z.strictObject({ email, password: z.string().min(1).max(MAX_PASSWORD_LENGTH) }),
   logout: z.strictObject({ csrf: z.string().optional() }),
   invite: z.strictObject({ email, role, csrf: z.string().optional() }),
+  revokeInvitation: z.strictObject({ invitationId: uuid, csrf: z.string().optional() }),
   accept: z.strictObject({ token, displayName, password }),
   updateOperator: z.strictObject({
     userId: uuid,

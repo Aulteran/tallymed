@@ -3,9 +3,10 @@ import { AppError } from '../errors.ts';
 import { withTransaction, type Pool } from '../db.ts';
 import type { Actor } from '../authz.ts';
 import { verifyPassword } from '../passwords.ts';
+import { log } from '../log.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import { findActiveSession, insertSession, revokeSession, touchSession } from '../repositories/sessions.ts';
-import { clearAccountFailures, countRecentFailures, recordAttempt } from '../repositories/throttle.ts';
+import { clearAccountFailures, countRecentFailures, lockThrottleKeys, pruneAttempts, pruneKeys, recordAttempt } from '../repositories/throttle.ts';
 import { findUserByEmail } from '../repositories/users.ts';
 import { digest, emailKey, newToken } from '../tokens.ts';
 
@@ -27,18 +28,36 @@ export async function login(
 ): Promise<LoginResult> {
   const key = emailKey(input.email);
   const ipKey = input.ip ?? 'untrusted';
-  const failures = await countRecentFailures(pool, key, input.ip, THROTTLE_WINDOW_SECONDS);
-  if (failures.account >= MAX_ACCOUNT_FAILURES || failures.ip >= MAX_IP_FAILURES) {
-    throw new AppError('rate_limited', 'Too many sign-in attempts', THROTTLE_WINDOW_SECONDS);
-  }
+  // Check and reserve atomically: the attempt is recorded as a failure before the password is verified, under
+  // per-account and per-address locks, so a concurrent burst cannot all read a count below the limit.
+  // A successful login deletes the account's failure rows, including this reservation.
+  const accountFailuresBefore = await withTransaction(pool, async (tx) => {
+    await lockThrottleKeys(tx, key, input.ip);
+    await pruneKeys(tx, key, input.ip, THROTTLE_WINDOW_SECONDS);
+    const failures = await countRecentFailures(tx, key, input.ip, THROTTLE_WINDOW_SECONDS);
+    if (failures.account >= MAX_ACCOUNT_FAILURES || failures.ip >= MAX_IP_FAILURES) {
+      throw new AppError('rate_limited', 'Too many sign-in attempts', THROTTLE_WINDOW_SECONDS);
+    }
+    await recordAttempt(tx, key, ipKey, false);
+    return failures.account;
+  });
+  if (Math.random() < 0.01) await pruneAttempts(pool, THROTTLE_WINDOW_SECONDS * 4).catch(() => undefined);
   const user = await findUserByEmail(pool, input.email);
   const ok = await verifyPassword(user?.passwordHash ?? null, input.password);
   if (!user || !ok || user.status !== 'active') {
-    await recordAttempt(pool, key, ipKey, false);
-    await recordAudit(pool, {
-      householdId: user?.householdId ?? null, actorUserId: null, action: 'auth.login_failed', entityType: 'session',
-      requestId: input.requestId,
-    });
+    // Audit is append-only, so failed-login rows are bounded: only for existing accounts, and only the first
+    // failure and the lockout in a window. Unknown addresses are logged without the address instead.
+    if (user && accountFailuresBefore === 0) {
+      await recordAudit(pool, {
+        householdId: user.householdId, actorUserId: null, action: 'auth.login_failed', entityType: 'session', requestId: input.requestId,
+      });
+    } else if (user && accountFailuresBefore + 1 === MAX_ACCOUNT_FAILURES) {
+      await recordAudit(pool, {
+        householdId: user.householdId, actorUserId: null, action: 'auth.login_locked', entityType: 'session', requestId: input.requestId,
+      });
+    } else if (!user) {
+      log('info', 'auth.login_failed.unknown_account', { requestId: input.requestId });
+    }
     throw new AppError('unauthenticated', 'Invalid email or password');
   }
   const token = newToken();

@@ -1,3 +1,5 @@
+import { log } from './log.ts';
+
 export interface AppConfig {
   databaseUrl: string;
   /** Canonical browser origin, for example https://tallymed.example. Never derived from request headers. */
@@ -58,6 +60,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const proxySecret = env.TALLYMED_PROXY_SECRET ? env.TALLYMED_PROXY_SECRET : null;
   if (proxySecret !== null && proxySecret.length < 32) {
     throw new Error('TALLYMED_PROXY_SECRET must be at least 32 characters');
+  }
+  if (secure && proxySecret === null) {
+    log('warn', 'config.proxy_secret_missing', {
+      note: 'Per-address login throttling is disabled until TALLYMED_PROXY_SECRET is set and the proxy sends it.',
+    });
   }
   return {
     databaseUrl,

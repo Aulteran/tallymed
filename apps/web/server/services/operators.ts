@@ -5,7 +5,8 @@ import { authorize, type Actor, type Role } from '../authz.ts';
 import { hashPassword } from '../passwords.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import {
-  expireOpenInvitationsFor, findOpenInvitation, insertInvitation, markInvitationAccepted,
+  expireOpenInvitationsFor, findOpenInvitation, insertInvitation, listOpenInvitations, markInvitationAccepted,
+  revokeOpenInvitation,
 } from '../repositories/invitations.ts';
 import { revokeUserSessions } from '../repositories/sessions.ts';
 import {
@@ -19,6 +20,24 @@ const ADMIN_LOCK = 7_203_403;
 export async function listOperators(pool: Pool, actor: Actor) {
   authorize(actor, 'operators:manage');
   return listUsers(pool, actor.householdId);
+}
+
+export async function listInvitations(pool: Pool, actor: Actor) {
+  authorize(actor, 'operators:manage');
+  return listOpenInvitations(pool, actor.householdId);
+}
+
+/** Admin-only. Revoking frees the address, so re-issuing is revoke followed by a new invitation. */
+export async function revokeInvitation(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<void> {
+  authorize(actor, 'operators:manage');
+  const data = parse(schemas.revokeInvitation, input);
+  await withTransaction(pool, async (tx) => {
+    if (!(await revokeOpenInvitation(tx, actor.householdId, data.invitationId))) throw new AppError('not_found');
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'operator.invitation_revoked', entityType: 'invitation',
+      entityId: data.invitationId, requestId,
+    });
+  });
 }
 
 /** Admin-only. The raw token is returned once; only its SHA-256 digest is stored. */
