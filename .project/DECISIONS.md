@@ -150,6 +150,7 @@ Owner-visible starter choices, picked conservatively and flagged in the PR descr
 
 Known limitations (owner-visible):
 
+- **Accepted at M06 acceptance (2026-11-13).** The owner accepted M06 after review. The limitations below stand, together with the password change and reset flow and shared-NAT lockout documentation from M01, which remain required before a real deployment. The restricted database role must be created with `setup-role` before the listener is enabled.
 - The listener has not been run behind a real firewall, through a real TLS client certificate chain or in Docker here (no Docker daemon in the development environment); CI's Compose smoke test does not start the `mcp` profile. TLS startup is exercised only by configuration tests; the HTTP path is exercised on loopback.
 - Rate limits are in memory and per process; a restart clears them, and a household that runs several listener processes gets that many times the limit. Failed-credential limiting is per peer address, so a hostile machine on the allowlist can block a legitimate client on the same address for a minute.
 - A credential token is a bearer secret: anyone who holds it and can reach the port can use its scopes until it is revoked or expires. Transport security and the allowlist are the controls; there is no mutual TLS or token binding.
