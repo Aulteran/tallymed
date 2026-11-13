@@ -11,6 +11,8 @@ export type ErrorCode =
   | 'rate_limited'
   | 'payload_too_large'
   | 'unsupported_media_type'
+  | 'duplicate_document'
+  | 'storage_unavailable'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -26,6 +28,8 @@ const STATUS: Record<ErrorCode, number> = {
   rate_limited: 429,
   payload_too_large: 413,
   unsupported_media_type: 415,
+  duplicate_document: 409,
+  storage_unavailable: 503,
   internal: 500,
 };
 

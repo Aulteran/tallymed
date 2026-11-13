@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { listMembers, listProviders, expenseOverview } from '../../server/services/expenses.ts';
 import { cashSummary } from '../../server/services/payments.ts';
+import { unmatchedSummary } from '../../server/services/documents.ts';
 import { hsaQueues, hsaSummary } from '../../server/services/hsa.ts';
 import { installmentSummary, listInstallmentQueue } from '../../server/services/plans.ts';
 import { AllocationLink } from '../components/hsa.tsx';
@@ -23,6 +24,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
   ]);
   const hsaScope = { ...(isId(params.memberId) ? { memberId: params.memberId } : {}), ...(isId(params.providerId) ? { providerId: params.providerId } : {}) };
   const [hsaTotals, hsaQueue] = await Promise.all([hsaSummary(ctx.pool, actor, hsaScope), hsaQueues(ctx.pool, actor, hsaScope, 5)]);
+  const unmatched = await unmatchedSummary(ctx.pool, actor, 5);
   const hsaLink = (state: string) => `/hsa?${new URLSearchParams({ ...hsaScope, state })}`;
   const t = data?.totals;
   return <main className="wide">
@@ -61,6 +63,10 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <div className="card">
         <h2>HSA payments that need review</h2>
         {hsaQueue.needsReview.length === 0 ? <p>None. Pending and received amounts fit within every eligible ceiling.</p> : <ul>{hsaQueue.needsReview.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.needsReviewCents} /></li>)}</ul>}
+      </div>
+      <div className="card">
+        <h2>Unmatched documents</h2>
+        {unmatched.count === 0 ? <p>None. Every document is attached to a record.</p> : <><ul>{unmatched.items.map((d) => <li key={d.id}><Link href={`/documents/${d.id}`}>{d.title}</Link></li>)}</ul><p><Link href="/documents?unmatched=yes">{unmatched.count} unmatched {unmatched.count === 1 ? 'document' : 'documents'}</Link></p></>}
       </div>
       <div className="card">
         <h2>Overdue installments</h2>

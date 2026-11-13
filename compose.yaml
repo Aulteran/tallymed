@@ -25,7 +25,12 @@ services:
       TALLYMED_CANONICAL_ORIGIN: ${TALLYMED_CANONICAL_ORIGIN:-http://127.0.0.1:3001}
       TALLYMED_PROXY_SECRET: ${TALLYMED_PROXY_SECRET:-}
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
+      # Private document volume (outside the web root). Backed up together with PostgreSQL.
+      TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
+    volumes:
+      - documents_data:/var/lib/tallymed/documents
     ports:
       - "127.0.0.1:${TALLYMED_WEB_PORT:-3001}:3000"
 volumes:
   postgres_data:
+  documents_data:

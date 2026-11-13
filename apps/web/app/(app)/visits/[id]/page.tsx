@@ -1,6 +1,7 @@
 import Link from 'next/link';
+import { AttachmentsPanel } from '../../../components/documents.tsx';
 import { getVisit, listProviders } from '../../../../server/services/expenses.ts';
-import { Banner, Csrf, flat, load, Money, Options, requireSession, type SearchParams } from '../../../components/ui.tsx';
+import { Banner, Csrf, flat, load, Money, Options, q80, requireSession, type SearchParams } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Visit · TallyMed' };
@@ -37,5 +38,6 @@ export default async function VisitPage({ params, searchParams }: { params: Prom
       </table>}
       <p><Link href={`/bills/new?memberId=${v.memberId}&visitId=${v.id}`}>Add a bill to this visit</Link></p>
     </div>
+    <AttachmentsPanel ctx={ctx} actor={actor} csrf={csrf} type="visit" id={v.id} returnTo={`/visits/${v.id}`} q={q80(q.docq)} title="Documents for this visit" />
   </main>;
 }

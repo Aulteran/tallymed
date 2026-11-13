@@ -63,6 +63,8 @@ export const retryStats = { lockConflicts: 0, replanned: 0 };
  */
 export function mapDatabaseError(error: unknown): unknown {
   const e = error as { code?: string; constraint?: string };
+  if (e?.code === '23514' && !(error instanceof AppError) && /document|attachment/i.test((error as Error).message)) return new AppError('conflict', 'The document changed or was removed while you were working. Reload and try again.');
+  if (e?.code === '23505' && e.constraint === 'document_attachments_one_active') return new AppError('conflict', 'That document is already attached to that record');
   if (e?.code === '23514' && !(error instanceof AppError)) return new AppError('conflict', 'That change would break a payment or balance limit. Reload and check the current figures.');
   if (e?.code === '23505' && e.constraint === 'payment_entries_one_refund_reversal') return new AppError('conflict', 'That refund was already reversed');
   if (e?.code === '23505' && e.constraint === 'hsa_entries_one_reversal') return new AppError('conflict', 'That receipt was already reversed');

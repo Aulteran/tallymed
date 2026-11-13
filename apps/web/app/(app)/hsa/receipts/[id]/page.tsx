@@ -1,6 +1,7 @@
 import Link from 'next/link';
+import { AttachmentsPanel } from '../../../../components/documents.tsx';
 import { getHsaReceiptDetail } from '../../../../../server/services/hsa.ts';
-import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
+import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, q80, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA reimbursement · TallyMed' };
@@ -30,6 +31,7 @@ export default async function HsaReceiptPage({ params, searchParams }: { params:
       <label htmlFor="reason">Reason</label><input id="reason" name="reason" required maxLength={500} defaultValue={q.reason} />
       <button type="submit" className="secondary">Reverse reimbursement</button>
     </form>}
+    <AttachmentsPanel ctx={ctx} actor={actor} csrf={csrf} type="hsa_receipt" id={r.id} returnTo={`/hsa/receipts/${r.id}`} q={q80(q.docq)} title="Evidence for this reimbursement" />
     <div className="card"><h2>History</h2>
       <ol>{history.map((e) => <li key={e.id}><strong>{label(e.action.replace(/[._]/g, ' ').replace(/^hsa /, ''))}</strong> by {e.actorName ?? 'unknown'} · {dateOf(e.occurredAt)}</li>)}</ol>
     </div>

@@ -304,3 +304,37 @@ export type HsaScope = z.infer<typeof hsaFilterSchemas.scope>;
 export type HsaAllocationFilter = z.infer<typeof hsaFilterSchemas.allocations>;
 export type HsaClaimFilter = z.infer<typeof hsaFilterSchemas.claims>;
 export type HsaExportScope = z.infer<typeof hsaFilterSchemas.exportScope>;
+
+// ---------- documents ----------
+
+export const DOCUMENT_KINDS = ['bill', 'eob', 'receipt', 'statement', 'provider_letter', 'plan_document', 'other'] as const;
+const documentKind = z.enum(DOCUMENT_KINDS);
+const attachmentTargetType = z.enum(['bill', 'visit', 'bill_adjustment', 'hsa_receipt', 'hsa_eligibility_decision']);
+/** The uploaded part of a multipart request: bytes plus the client's declared name and type (both untrusted). */
+const uploadedFile = z.custom<{ name: string; type: string; bytes: Uint8Array }>(
+  (v) => typeof v === 'object' && v !== null && (v as { bytes?: unknown }).bytes instanceof Uint8Array && typeof (v as { name?: unknown }).name === 'string' && typeof (v as { type?: unknown }).type === 'string');
+
+export const documentSchemas = {
+  /** New document: one file, optional title, kind and note, optionally attached to one record at once. */
+  upload: z.strictObject({
+    idempotencyKey, file: uploadedFile, title: optional(text(120).min(1)), kind: documentKind.default('other'), note: optionalText(500),
+    targetType: optional(attachmentTargetType), targetId: optional(uuid), confirmDuplicate: checkbox.optional(), ...csrf,
+  }).refine((d) => (d.targetType === null) === (d.targetId === null)),
+  /** A new version of an existing document. `version` is the number of versions the person saw. */
+  addVersion: z.strictObject({ idempotencyKey, documentId: uuid, version: version, file: uploadedFile, confirmDuplicate: checkbox.optional(), ...csrf }),
+  update: z.strictObject({ id: uuid, version, title: text(120).min(1), kind: documentKind, note: optionalText(500), ...csrf }),
+  remove: z.strictObject({ id: uuid, version, reason: text(300).min(1), ...csrf }),
+  attach: z.strictObject({
+    idempotencyKey, documentId: uuid, targetType: attachmentTargetType, targetId: uuid, note: optionalText(300), ...csrf,
+  }),
+  detach: z.strictObject({ attachmentId: uuid, reason: text(300).min(1), ...csrf }),
+};
+
+export const documentFilterSchemas = {
+  list: z.object({
+    q: optionalFilter(text(80)), kind: optionalFilter(documentKind), unmatched: checkbox, cursor, limit: pageSize,
+  }),
+  /** Documents offered for attaching to a record: a bounded search, newest first. */
+  picker: z.object({ q: optionalFilter(text(80)) }),
+};
+export type DocumentFilter = z.infer<typeof documentFilterSchemas.list>;

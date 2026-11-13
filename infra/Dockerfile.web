@@ -20,6 +20,8 @@ COPY --from=build --chown=node:node /repo/apps/web/.next/static ./apps/web/.next
 COPY --from=build --chown=node:node /repo/apps/web/cli ./apps/web/cli
 COPY --from=build --chown=node:node /repo/apps/web/server ./apps/web/server
 COPY --from=build --chown=node:node /repo/apps/web/db ./apps/web/db
+# The document volume mount point is created owned by the runtime user, mode 0700, so a new named volume is writable and private.
+RUN mkdir -p /var/lib/tallymed/documents && chown node:node /var/lib/tallymed/documents && chmod 700 /var/lib/tallymed/documents
 USER node
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]
