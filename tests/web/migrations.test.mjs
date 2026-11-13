@@ -21,7 +21,7 @@ test('fresh migration creates the schema and is idempotent', { skip: skipDb }, a
   try {
     const applied = await migrate(db.pool);
     assert.deepEqual(applied, listMigrations().map((m) => m.version));
-    for (const t of ['households', 'users', 'sessions', 'audit_events', 'bootstrap_state', 'invitations', 'login_attempts', 'schema_migrations', 'family_members', 'providers', 'visits', 'bills', 'bill_adjustments', 'idempotency_records', 'payments', 'payment_entries', 'payment_voids', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches', 'hsa_eligibility_decisions', 'hsa_claims', 'hsa_receipts', 'hsa_entries']) {
+    for (const t of ['households', 'users', 'sessions', 'audit_events', 'bootstrap_state', 'invitations', 'login_attempts', 'schema_migrations', 'family_members', 'providers', 'visits', 'bills', 'bill_adjustments', 'idempotency_records', 'payments', 'payment_entries', 'payment_voids', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches', 'hsa_eligibility_decisions', 'hsa_claims', 'hsa_receipts', 'hsa_entries', 'mcp_clients', 'document_match_proposals']) {
       assert.ok((await tables(db.pool)).includes(t), t);
     }
     assert.deepEqual(await migrate(db.pool), []);
@@ -94,5 +94,34 @@ test('audit events are append-only and bootstrap state is a singleton', { skip: 
     await assert.rejects(db.pool.query(`insert into bootstrap_state (household_id, admin_user_id) values ($1, $2)`, [householdId, adminUserId]), /duplicate key/);
   } finally {
     await db.drop();
+  }
+});
+
+test('upgrading over documents keeps them, and the MCP role grants apply when the role already exists', { skip: skipDb }, async () => {
+  const db = await freshDatabase({ migrateAll: false });
+  const role = `tallymed_mcp_m_${Math.random().toString(16).slice(2, 8)}`;
+  try {
+    await migrate(db.pool, { upTo: '0007' });
+    const { seedHousehold } = await import('./helpers.mjs');
+    const { householdId, adminUserId } = await seedHousehold(db.pool);
+    const doc = (await db.pool.query(`insert into documents (id, household_id, title, kind, created_by) values (gen_random_uuid(), $1, 'Example', 'receipt', $2) returning id`, [householdId, adminUserId])).rows[0].id;
+    assert.ok(!(await tables(db.pool)).includes('mcp_clients'));
+    assert.deepEqual(await migrate(db.pool), ['0008']);
+    assert.equal((await db.pool.query(`select count(*)::int n from documents where id = $1`, [doc])).rows[0].n, 1);
+    // The function is the only way grants are applied; it can be run again and leaves the role narrow.
+    await db.pool.query(`create role ${role} login password 'x-test-password'`);
+    await db.pool.query(`select tallymed_apply_mcp_grants($1)`, [role]);
+    await db.pool.query(`select tallymed_apply_mcp_grants($1)`, [role]);
+    const priv = (await db.pool.query(
+      `select has_column_privilege($1, 'documents', 'title', 'SELECT') as title, has_column_privilege($1, 'documents', 'created_by', 'SELECT') as creator,
+              has_table_privilege($1, 'users', 'SELECT') as users, has_table_privilege($1, 'bills', 'UPDATE') as bills`, [role])).rows[0];
+    assert.deepEqual(priv, { title: true, creator: false, users: false, bills: false });
+  } finally {
+    await db.drop();
+    const pg = (await import('pg')).default;
+    const admin = new pg.Client({ connectionString: process.env.TALLYMED_TEST_DATABASE_URL });
+    await admin.connect();
+    await admin.query(`drop role if exists ${role}`);
+    await admin.end();
   }
 });

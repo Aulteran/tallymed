@@ -12,3 +12,4 @@ CLAUDE.local.md
 *.log
 .DS_Store
 Thumbs.db
+.mcp-tls/
