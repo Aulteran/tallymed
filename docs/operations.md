@@ -8,7 +8,7 @@ This guide is for the person who runs TallyMed for one household. It covers publ
 
 These gaps are known and are not fixed in this release line. Decide whether you accept them.
 
-- **No password change or reset.** There is no change-password action and no reset command. Bootstrap closes after the first administrator exists, and re-inviting an existing address is refused. A forgotten administrator password has no supported recovery short of editing the database. Keep the administrator password in a password manager, keep encrypted backups, and do not deploy for real use if that is not acceptable.
+- **No password change or reset.** There is no change-password action and no reset command. Setup closes after the first administrator exists, and re-inviting an existing address is refused. A forgotten administrator password has no supported recovery short of editing the database. Keep the administrator password in a password manager, keep encrypted backups, and do not deploy for real use if that is not acceptable.
 - **Shared-address lockout.** Twenty failed sign-ins from one trusted client address block sign-in for everyone behind that address for 15 minutes. A household behind one NAT shares an address, so one person's repeated typos can lock out the others. Anyone who knows an account's email address can lock that account for 15 minutes with failed attempts. Plan for this: the lockout expires on its own and nothing is lost.
 - **MCP role setup is a separate step.** The optional assistant listener needs a restricted database role created with `setup-role` before it starts, and again after any upgrade that adds tables, and again after a restore (roles are not part of a database dump). See [MCP](mcp.md).
 - **PDF scanning is best-effort.** Uploads are checked by content, but the PDF scan is not a malware scanner. Downloads are attachment-only with `nosniff`, which are the real controls.
@@ -21,7 +21,7 @@ Pushing to `main` publishes two images to GitHub Container Registry, built from 
 
 | Image | Purpose |
 | --- | --- |
-| `ghcr.io/aulteran/tallymed-web` | Web application and operator commands (`migrate`, `bootstrap`, `documents`) |
+| `ghcr.io/aulteran/tallymed-web` | Web application and operator commands (`migrate`, `documents`) |
 | `ghcr.io/aulteran/tallymed-mcp` | Optional assistant listener (off unless enabled) and its `setup-role` command; the web image does not contain the listener code |
 
 Each push gets the tag `sha-<first 12 characters of the commit>` and moves `latest`. A sha tag is a convenience, not an immutable pin: a manual re-run of the workflow on the same commit pushes the tag again with a different digest. The immutable reference is the digest, which the publish job prints in its run summary (`ghcr.io/<owner>/tallymed-web@sha256:…`); record it in your notes and use it for `TALLYMED_WEB_IMAGE`. Never run `latest`, so you know which build you run and can roll back. Each image carries OCI labels for the source repository and exact revision. `main` is the release branch: it only receives changes that were verified on `dev`. Release notes name the supported commit for each release. The published packages are created private by the registry; the repository owner must make them public in the package settings before anyone else can pull them.
@@ -31,21 +31,18 @@ Each push gets the tag `sha-<first 12 characters of the commit>` and moves `late
 You need a Linux host with Docker Engine and Docker Compose v2, a dedicated DNS name, and a TLS-terminating reverse proxy.
 
 1. Copy `deploy/compose.release.yaml` and `deploy/release.env.example` to the host. Rename the second to `deploy/.env` and set the values: a random `POSTGRES_PASSWORD` (`openssl rand -hex 32`; it goes into a database URL, so use hex, not base64), `TALLYMED_WEB_IMAGE` (a `…:sha-<commit>` tag or a `…@sha256:…` digest reference; also `TALLYMED_MCP_IMAGE` if you enable the assistant), the public `https://` `TALLYMED_CANONICAL_ORIGIN`, a random `TALLYMED_PROXY_SECRET` of 32 or more characters, and `TALLYMED_SOURCE_URL` for the commit you run (the AGPL requires offering corresponding source to users of the network service). Keep the file readable by you only (`chmod 600`).
-2. Start the database, then migrate and bootstrap. Define a shorthand for the commands used below:
+2. Start the database, then migrate, then start everything. Define a shorthand for the commands used below:
 
    ```sh
    dc() { docker compose --env-file deploy/.env -f deploy/compose.release.yaml "$@"; }
    dc up -d --wait db
    dc run --rm web node apps/web/cli/migrate.ts
-   printf '%s' "$ADMIN_PASSPHRASE" | dc run --rm -T \
-     -e TALLYMED_BOOTSTRAP_EMAIL=you@example.org -e TALLYMED_BOOTSTRAP_NAME='Your Name' \
-     -e TALLYMED_HOUSEHOLD_NAME='Your Household' web node apps/web/cli/bootstrap.ts
    dc up -d --wait
    curl --fail http://127.0.0.1:3001/healthz
    ```
 
-   The passphrase (12 to 128 characters) is read from stdin; never put it on a command line. Bootstrap runs once and then closes.
-3. Configure the reverse proxy (next section), then sign in at your origin over HTTPS and invite other people from the Operators screen.
+   Choose how the first administrator is set up. Either put a token of your own in `deploy/.env` as `TALLYMED_SETUP_TOKEN` (24 to 128 printable characters; `openssl rand -base64 32`), or leave it empty and read the token the server generated from its console: `dc logs web` shows a banner with the token and the `/setup` address. The banner for a token you defined names the variable and never prints the value. A generated token is held in memory only, is printed once, and changes if the container restarts before setup is finished.
+3. Configure the reverse proxy (next section), then open `https://<your origin>/setup`, enter the setup token and create the first administrator (household name, your name, email, a passphrase of 12 to 128 characters). Until then the sign-in page links to `/setup`. Do not open the proxy to the internet before you have completed this step, or complete it over an SSH tunnel to the private port: whoever holds the token first owns the installation. After setup `/setup` returns 404, the token no longer does anything, and you should remove `TALLYMED_SETUP_TOKEN` from `deploy/.env`. Wrong tokens are limited (ten in 15 minutes, five per trusted client address, and a restart resets the count); the limit is held in memory, so run one web container. Then invite other people from the Operators screen.
 
 ## Reverse proxy and supported topology
 

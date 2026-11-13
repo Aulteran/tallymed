@@ -12,6 +12,8 @@ const MESSAGES: Record<string, string> = {
   duplicate_document: 'A document with identical contents already exists. Tick the box to upload it anyway, or attach the existing document.',
   storage_unavailable: 'Document storage is not available right now. Nothing was saved. Try again, or ask the operator to check the document volume.',
   busy: 'Several uploads are in progress. Wait a moment and try again.',
+  invalid_setup_token: 'The setup token was not accepted. Use the value of TALLYMED_SETUP_TOKEN, or the token the server printed to its console when it started.',
+  bootstrap_closed: 'Setup was already completed.',
   rate_limited: 'Too many attempts. Wait fifteen minutes and try again.',
   internal: 'Something went wrong. Try again.',
 };

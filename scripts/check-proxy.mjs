@@ -54,15 +54,9 @@ try {
     ...process.env, DATABASE_URL: dbUrl.href, TALLYMED_CANONICAL_ORIGIN: origin, TALLYMED_PROXY_SECRET: secret,
     TALLYMED_SOURCE_URL: 'https://github.com/example/tallymed', NEXT_TELEMETRY_DISABLED: '1',
   };
-  const run = (args, input) => spawnSync('node', args, { env: { ...env, TALLYMED_BOOTSTRAP_EMAIL: 'admin@example.test', TALLYMED_BOOTSTRAP_NAME: 'Alex Example', TALLYMED_HOUSEHOLD_NAME: 'Example Family' }, input, encoding: 'utf8' });
-  let r = run(['apps/web/cli/migrate.ts']);
+  const r = spawnSync('node', ['apps/web/cli/migrate.ts'], { env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  r = run(['apps/web/cli/bootstrap.ts'], password + '\n');
-  assert.equal(r.status, 0, r.stderr);
-  r = run(['apps/web/cli/bootstrap.ts'], password + '\n');
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /bootstrap_closed/);
-  ok('CLI migration and one-time bootstrap work; second bootstrap is refused');
+  ok('CLI migration works');
 
   const key = path.join(tmp, 'key.pem'); const crt = path.join(tmp, 'crt.pem');
   const ssl = spawnSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', key, '-out', crt,
@@ -98,9 +92,37 @@ try {
     rq.on('error', reject); rq.end(body);
   });
   const form = { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' };
+
+  // First administrator through the web setup page. TALLYMED_SETUP_TOKEN is unset here, so the server generated a token
+  // at startup and printed it to its console; the built server's startup hook must have done so.
+  for (let i = 0; i < 50 && !/ {4}[A-Za-z0-9_-]{43}\n/.test(appLog); i++) await new Promise((res) => setTimeout(res, 100));
+  const setupToken = / {4}([A-Za-z0-9_-]{43})\n/.exec(appLog)?.[1];
+  assert.ok(setupToken, 'the server printed a generated setup token at startup');
+  assert.ok(appLog.includes(`${origin}/setup`));
+  assert.equal([...appLog.matchAll(new RegExp(setupToken, 'g'))].length, 1, 'the token is printed exactly once');
+  let res = await request('GET', '/setup');
+  assert.equal(res.status, 200);
+  assert.match(res.body, /Create the first administrator/);
+  assert.ok(!res.body.includes(setupToken));
+  res = await request('GET', '/login');
+  assert.match(res.body, /href="\/setup"/);
+  const setupForm = (t, email = 'admin@example.test') => new URLSearchParams({ setupToken: t, householdName: 'Example Family', displayName: 'Alex Example', email, password }).toString();
+  res = await request('POST', '/api/setup', { headers: { ...form, origin }, body: setupForm('not-the-token') });
+  assert.equal(res.status, 303);
+  assert.match(res.headers.location, /\/setup\?error=invalid_setup_token$/);
+  res = await request('POST', '/api/setup', { headers: { ...form, origin: 'https://evil.example' }, body: setupForm(setupToken) });
+  assert.match(res.headers.location, /\/setup\?error=csrf_failed$/);
+  res = await request('POST', '/api/setup', { headers: { ...form, origin }, body: setupForm(setupToken) });
+  assert.equal(res.status, 303);
+  assert.equal(res.headers.location, `${origin}/login?notice=setup_complete`);
+  assert.equal((await request('GET', '/setup')).status, 404);
+  res = await request('POST', '/api/setup', { headers: { ...form, origin }, body: setupForm(setupToken, 'second@example.test') });
+  assert.match(res.headers.location, /\/setup\?error=not_found$/);
+  assert.ok(!appLog.includes(password), 'the password never reaches the server log');
+  ok('web setup: generated token printed once at startup, wrong token and cross-origin refused, one administrator created, /setup is 404 afterwards');
   const creds = (email, pw) => new URLSearchParams({ email, password: pw }).toString();
 
-  let res = await request('GET', '/healthz');
+  res = await request('GET', '/healthz');
   assert.equal(res.status, 200);
   res = await request('GET', '/login');
   assert.equal(res.status, 200);

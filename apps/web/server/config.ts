@@ -18,6 +18,29 @@ export interface AppConfig {
   documentQuotaBytes: number;
   /** Days a removed document's bytes are kept before the cleanup command purges them. */
   documentRetentionDays: number;
+  /** Operator-defined one-time setup token (TALLYMED_SETUP_TOKEN). Null means the server generates one at startup while setup is needed. */
+  setupToken: string | null;
+}
+
+export const MIN_SETUP_TOKEN_LENGTH = 24;
+export const MAX_SETUP_TOKEN_LENGTH = 128;
+const PLACEHOLDER_TOKEN = /^(change[-_ ]?me|replace[-_ ]?me|your[-_ ]?token|setup[-_ ]?token|tallymed|password|passphrase|secret|example|test)/i;
+
+/**
+ * An operator-defined setup token is a bearer credential for creating the first administrator, so it must be long and
+ * not obviously guessable: 24 to 128 printable ASCII characters without whitespace, at least 10 different characters and
+ * not a placeholder such as `changeme...`. Error messages never contain the value.
+ */
+export function parseSetupToken(value: string | undefined): string | null {
+  if (value === undefined || value === '') return null;
+  if (value.length < MIN_SETUP_TOKEN_LENGTH || value.length > MAX_SETUP_TOKEN_LENGTH) {
+    throw new Error(`TALLYMED_SETUP_TOKEN must be ${MIN_SETUP_TOKEN_LENGTH} to ${MAX_SETUP_TOKEN_LENGTH} characters (leave it empty to have the server generate one)`);
+  }
+  if (!/^[\x21-\x7e]+$/.test(value)) throw new Error('TALLYMED_SETUP_TOKEN must use printable ASCII characters without spaces');
+  if (new Set(value).size < 10 || PLACEHOLDER_TOKEN.test(value)) {
+    throw new Error('TALLYMED_SETUP_TOKEN is too guessable: use a random value such as `openssl rand -base64 32` (or leave it empty)');
+  }
+  return value;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -100,5 +123,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     documentMaxBytes: intEnv(env, 'TALLYMED_DOCUMENT_MAX_MB', 10, 1, 25) * 1024 * 1024,
     documentQuotaBytes: intEnv(env, 'TALLYMED_DOCUMENT_QUOTA_MB', 2048, 10, 1_048_576) * 1024 * 1024,
     documentRetentionDays: intEnv(env, 'TALLYMED_DOCUMENT_RETENTION_DAYS', 30, 0, 3650),
+    setupToken: parseSetupToken(env.TALLYMED_SETUP_TOKEN),
   };
 }

@@ -85,6 +85,7 @@ export const schemas = {
     status: z.enum(['active', 'disabled']),
     csrf: z.string().optional(),
   }),
+  setup: z.strictObject({ setupToken: z.string().trim().min(1).max(200), householdName: z.string().trim().min(1).max(120), email, displayName, password }),
   bootstrap: z.strictObject({ householdName: z.string().trim().min(1).max(120), email, displayName, password }),
 };
 

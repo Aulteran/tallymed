@@ -27,6 +27,7 @@ const freePort = () => new Promise((resolve) => {
 });
 const dbName = `tallymed_ui_${randomBytes(5).toString('hex')}`;
 const password = 'synthetic passphrase for tests';
+const setupToken = randomBytes(24).toString('base64url');
 let app;
 let browser;
 const ok = (name) => console.log(`ok - ${name}`);
@@ -52,11 +53,9 @@ try {
   const documentsDir = mkdtempSync(path.join(tmpdir(), 'tallymed-ui-docs-'));
   const env = {
     ...process.env, TALLYMED_DOCUMENTS_DIR: documentsDir, DATABASE_URL: dbUrl.href, TALLYMED_CANONICAL_ORIGIN: origin, TALLYMED_SOURCE_URL: 'https://github.com/example/tallymed',
-    NEXT_TELEMETRY_DISABLED: '1', TALLYMED_BOOTSTRAP_EMAIL: 'admin@example.test', TALLYMED_BOOTSTRAP_NAME: 'Alex Example', TALLYMED_HOUSEHOLD_NAME: 'Example Family',
+    NEXT_TELEMETRY_DISABLED: '1', TALLYMED_SETUP_TOKEN: setupToken,
   };
   let r = spawnSync('node', ['apps/web/cli/migrate.ts'], { env, encoding: 'utf8' });
-  assert.equal(r.status, 0, r.stderr);
-  r = spawnSync('node', ['apps/web/cli/bootstrap.ts'], { env, input: `${password}\n`, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   app = spawn('node', [server], { env: { ...env, PORT: String(port), HOSTNAME: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'ignore' });
   for (let i = 0; i < 100; i++) {
@@ -71,6 +70,31 @@ try {
     assert.deepEqual(violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.html + " " + n.any.map((a) => a.message).join(";")).join(" | ")}`), [], `accessibility on ${name}`);
   };
   const text = () => page.locator('main').innerText();
+
+  // First administrator through the web setup page, using the operator-defined token.
+  await page.goto(`${origin}/login`);
+  assert.match(await text(), /Setup required/);
+  await page.click('a[href="/setup"]');
+  await page.waitForURL(`${origin}/setup`);
+  await a11y('setup');
+  await page.fill('#setupToken', 'wrong-token');
+  await page.fill('#householdName', 'Example Family');
+  await page.fill('#displayName', 'Alex Example');
+  await page.fill('#email', 'admin@example.test');
+  await page.fill('#password', password);
+  await page.click('button[type=submit]');
+  await page.waitForURL(`${origin}/setup?error=invalid_setup_token`);
+  assert.match(await text(), /setup token was not accepted/);
+  assert.equal(await page.inputValue('#email'), 'admin@example.test', 'typed details are kept, the token and password are not');
+  assert.equal(await page.inputValue('#setupToken'), '');
+  assert.equal(await page.inputValue('#password'), '');
+  await page.fill('#setupToken', setupToken);
+  await page.fill('#password', password);
+  await page.click('button[type=submit]');
+  await page.waitForURL(`${origin}/login?notice=setup_complete`);
+  assert.match(await text(), /Administrator created/);
+  assert.equal((await page.goto(`${origin}/setup`)).status(), 404);
+  ok('setup page creates the first administrator with the setup token and disappears afterwards');
 
   await page.goto(`${origin}/login`);
   await page.fill('#email', 'admin@example.test');

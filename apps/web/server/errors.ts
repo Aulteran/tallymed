@@ -8,6 +8,7 @@ export type ErrorCode =
   | 'conflict'
   | 'duplicate_warning'
   | 'bootstrap_closed'
+  | 'invalid_setup_token'
   | 'rate_limited'
   | 'payload_too_large'
   | 'unsupported_media_type'
@@ -26,6 +27,7 @@ const STATUS: Record<ErrorCode, number> = {
   conflict: 409,
   duplicate_warning: 409,
   bootstrap_closed: 409,
+  invalid_setup_token: 403,
   rate_limited: 429,
   payload_too_large: 413,
   unsupported_media_type: 415,
