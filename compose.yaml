@@ -17,7 +17,13 @@ services:
     build:
       context: .
       dockerfile: infra/Dockerfile.web
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
+      DATABASE_URL: postgres://tallymed:${POSTGRES_PASSWORD}@db:5432/tallymed
+      TALLYMED_CANONICAL_ORIGIN: ${TALLYMED_CANONICAL_ORIGIN:-http://127.0.0.1:3001}
+      TALLYMED_PROXY_SECRET: ${TALLYMED_PROXY_SECRET:-}
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
     ports:
       - "127.0.0.1:${TALLYMED_WEB_PORT:-3001}:3000"

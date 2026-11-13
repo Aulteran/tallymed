@@ -13,6 +13,17 @@ env:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci-disposable-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      TALLYMED_TEST_DATABASE_URL: postgres://postgres:ci-disposable-only@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -24,6 +35,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run test:export
+      - name: Verify HTTPS proxy and network boundary (disposable PostgreSQL)
+        run: npm run test:proxy
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: npm run test:performance
@@ -42,6 +55,15 @@ jobs:
       - name: Check web and database independently
         run: |
           curl --fail --retry 10 --retry-connrefused --retry-delay 2 http://127.0.0.1:3001/healthz
+          docker compose --env-file .env.example run --rm web node apps/web/cli/migrate.ts
+          printf 'synthetic ci passphrase' | docker compose --env-file .env.example run --rm -T \
+            -e TALLYMED_BOOTSTRAP_EMAIL=admin@example.test -e TALLYMED_BOOTSTRAP_NAME='Alex Example' \
+            -e TALLYMED_HOUSEHOLD_NAME='Example Family' web node apps/web/cli/bootstrap.ts
+          curl --fail http://127.0.0.1:3001/login | grep -q 'Sign in'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://127.0.0.1:3001' \
+            -H 'Content-Type: application/json' -d '{"email":"admin@example.test","password":"synthetic ci passphrase"}' \
+            http://127.0.0.1:3001/api/auth/login)
+          test "$code" = 200
           docker compose --env-file .env.example exec -T db psql -v ON_ERROR_STOP=1 -U tallymed -d tallymed -c "SELECT 1;"
       - name: Show logs on failure
         if: failure()

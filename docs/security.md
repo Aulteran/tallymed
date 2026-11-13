@@ -1,6 +1,35 @@
 # Security and operations specification
 
-This is the target for the private app. The current shell is a local development surface with no account or data access.
+This is the target for the private app. The foundation release implements the web and household access, session, CSRF/origin, trusted-proxy and request-validation controls below, with the checks listed in [development](development.md). Document handling, MCP, backups and release items remain planned.
+
+## Implemented foundation controls
+
+- **Bootstrap.** `npm run bootstrap -w @tallymed/web` (password on stdin) creates the household and first administrator once. It is a local command with no web page; a second run fails with `bootstrap_closed`, enforced by an advisory lock and a primary key on `bootstrap_state`.
+- **Accounts.** Administrators create one-time invitation links (SHA-256 digest stored, 72 hours, single use) for operators or administrators. Roles map to capabilities in `server/authz.ts`; every service call authorizes and scopes by household. The last active administrator cannot be demoted or disabled.
+- **Passwords.** Argon2id (`@node-rs/argon2` defaults), 12 to 128 characters. Unknown accounts take comparable time and return the same generic error.
+- **Sessions.** 256-bit random tokens in a `__Host-` `Secure` `HttpOnly` `SameSite=Lax` cookie (plain name without `Secure` only for a loopback `http` origin). Only a SHA-256 digest is stored. Sessions expire after 12 hours absolute or 2 hours idle, are revoked at logout, at role or status changes and when login rotates a presented session. A client can never choose a session identifier.
+- **Throttling.** Five failures in 15 minutes lock an account; 20 failures lock a trusted client address. Addresses count only when the trusted proxy supplied them.
+- **CSRF.** Every POST requires the canonical `Origin` (or `Referer`) and no cross-site `Sec-Fetch-Site`; authenticated POSTs also need a per-session HMAC token (`x-csrf-token` header or `csrf` form field).
+- **Validation.** Bodies are at most 8 KiB, JSON or urlencoded only, parsed with strict schemas that reject unknown or duplicate fields. Errors use stable codes (`invalid_input`, `unauthenticated`, `forbidden`, `csrf_failed`, `not_found`, `stale_version`, `conflict`, `rate_limited`, ...). Logs pass through a redactor and never include bodies, cookies or driver messages.
+- **Audit.** Bootstrap, sign-in and sign-out, failed sign-in, invitations and account changes are written in the same transaction as the change. `audit_events` rejects update, delete and truncate.
+
+## Reverse proxy contract
+
+Set `TALLYMED_CANONICAL_ORIGIN` to the public `https://` origin. The app never derives its origin, redirects or cookie attributes from `Host` or `X-Forwarded-Host`. Set `TALLYMED_PROXY_SECRET` (32 or more random characters) and configure the proxy to (1) delete any client-supplied `X-Forwarded-*`, `Forwarded`, `X-Real-IP` and `X-Tallymed-Proxy-Secret` headers, then (2) send `X-Tallymed-Proxy-Secret: <secret>`, `X-Forwarded-For: <client address>` (append only the address the proxy observed) and `X-Forwarded-Proto: https`. The app uses forwarded values only when the secret matches, uses the right-most address and refuses a trusted request that reports `http` for an `https` origin. Publish the upstream only on a private interface or Compose network. Never route an MCP path through this proxy.
+
+Example nginx location (adapt and test; `$remote_addr` is the only address the proxy vouches for):
+
+```nginx
+location / {
+  proxy_pass http://tallymed-web:3000;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Real-IP "";
+  proxy_set_header Forwarded "";
+  proxy_set_header X-Tallymed-Proxy-Secret "<secret from your secret store>";
+}
+```
 
 ## Web and household access
 

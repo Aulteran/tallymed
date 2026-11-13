@@ -18,3 +18,13 @@ The handoff recovered the marketing and handoff approvals and the brand directio
 - USD bigint cents, explicit allocation and reservation semantics, transaction locking and the details of the proposed logical schema.
 - Administrator bootstrap and provisioned operators, dedicated proxy origin, proposed local transport/auth requirements, private file-volume storage and backup strategy.
 - Document formats, ORM/migration library and client-compatible MCP authentication are selected during their milestones. Record decisions and migrations before implementing dependent work.
+
+## Application Foundation decisions (recorded during the milestone)
+
+- **Database access.** `pg` (node-postgres) with parameterized SQL in repositories and plain, numbered SQL migrations run by `apps/web/server/migrate.ts`. No ORM. Migrations are checksummed, applied in transactions under an advisory lock, and tested fresh and as an upgrade from the previous version. Revisit only if a later milestone needs an ORM.
+- **Password hashing.** Argon2id via `@node-rs/argon2` defaults.
+- **Administrator bootstrap.** A local CLI that reads the password from stdin, closed permanently by `bootstrap_state`. There is no web setup page, so an exposed install cannot be claimed remotely.
+- **Provisioning.** Administrators issue single-use invitation links; no email is sent. Roles are `admin` and `operator`.
+- **Canonical origin and trusted proxy.** One `TALLYMED_CANONICAL_ORIGIN`, https except loopback. Forwarded headers are trusted only when the request carries `TALLYMED_PROXY_SECRET`, because Next.js route handlers cannot see the TCP peer address. The operator proxy must strip client copies and set the secret. Owner can later replace this with a peer-address allowlist if the server runtime exposes it.
+- **Sessions.** Opaque random cookie tokens hashed in PostgreSQL, 12 hour absolute and 2 hour idle lifetimes, `SameSite=Lax`. CSRF uses canonical Origin validation plus a session-bound token. Defaults are configurable by environment variable.
+- **Server code in TypeScript run by Node.** Service code uses explicit `.ts` import extensions so the CLI and tests execute it with Node type stripping (`erasableSyntaxOnly`).

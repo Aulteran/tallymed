@@ -3,7 +3,8 @@
 | Milestone | State | Next action |
 | --- | --- | --- |
 | M00 | Accepted | Owner accepted on 2026-11-13. Next milestone starts only when requested. |
-| M01–M07 | Planned | Wait for accepted predecessors per the milestone index. |
+| M01 | In review | Independent milestone and security reviews on the PR head, then owner merge and acceptance. |
+| M02–M07 | Planned | Wait for accepted predecessors per the milestone index. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
 
@@ -24,3 +25,11 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Deployed URL https://aulteran.github.io/tallymed/ verified 2026-11-13 in a browser: all nine home sections present, canonical and Open Graph image URLs under `/tallymed`, `/roadmap/`, `/sitemap.xml`, `/robots.txt`, `/og.png` and `/ledger.svg` return 200, GitHub links point at Aulteran/tallymed, and no internal milestone IDs appear in the page.
 - Owner acceptance: Aadil, 2026-11-13, in the project thread.
 - Not done: screen-reader and real-device pass.
+
+## M01 handoff
+
+- Branch: `feature/m01-app-foundation-auth-sessions-migrations`. The PR and tested/reviewed head SHA are recorded on the PR.
+- Changed: PostgreSQL migrations (`apps/web/db/migrations`) and runner; server-only repositories, services, authorization and HTTP pipeline under `apps/web/server`; local bootstrap and migrate CLIs; login, logout, invitation and operator-management routes; authenticated navigation shell and login/invite pages; canonical origin and shared-secret trusted-proxy configuration; source/license notice; Compose, Dockerfile, CI and docs updates. Decisions are in DECISIONS.md.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable instance, openssl): `npm ci`, `npm run typecheck`, `npm test` (30 tests including fresh and upgrade migrations, bootstrap and blocked re-bootstrap, logout/revocation/expiry, CSRF, authorization, malicious forwarded headers), `npm run build`, `npm run test:export`, `npm run test:proxy` (11 checks through a test TLS proxy). CI additionally runs Node 24, PostgreSQL 17, browser and performance checks and the Compose smoke test with migrate, bootstrap and login.
+- Not verified locally: Node 24 (unavailable), Docker Compose stack (no Docker daemon), browser checks, a real reverse proxy product (nginx/Caddy/Traefik), a real-browser sign-in pass.
+- Remaining for acceptance: independent milestone and security review, CI green on the final head, owner merge and acceptance. Next milestone: M02 only after acceptance.
