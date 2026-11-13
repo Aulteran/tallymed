@@ -491,7 +491,8 @@ test('the database refuses changes that break document, version and link invaria
     await assert.rejects(sql(`delete from document_versions`), /immutable/);
     await assert.rejects(sql(`delete from documents`), /cannot be deleted/);
     await assert.rejects(sql(`delete from document_attachments`), /append-only/);
-    await assert.rejects(sql(`truncate document_attachments`), /cannot be truncated/);
+    // Proposals reference attachments, so PostgreSQL itself refuses the truncate before the trigger runs; either way it is refused.
+    await assert.rejects(sql(`truncate document_attachments`), /cannot be truncated|cannot truncate a table referenced/);
     await assert.rejects(sql(`truncate documents cascade`), /cannot be truncated/);
     await assert.rejects(sql(`update document_attachments set note = 'rewrite'`), /can only be detached/);
     await assert.rejects(sql(`update document_attachments set document_version_id = gen_random_uuid()`), /can only be detached|foreign key/);

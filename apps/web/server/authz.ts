@@ -1,10 +1,10 @@
 import { AppError } from './errors.ts';
 
 export type Role = 'admin' | 'operator';
-export type Capability = 'household:read' | 'operators:manage' | 'audit:read' | 'expenses:read' | 'expenses:write';
+export type Capability = 'household:read' | 'operators:manage' | 'audit:read' | 'expenses:read' | 'expenses:write' | 'assistant:manage';
 
 const CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
-  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read', 'expenses:read', 'expenses:write']),
+  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read', 'expenses:read', 'expenses:write', 'assistant:manage']),
   operator: new Set<Capability>(['household:read', 'expenses:read', 'expenses:write']),
 };
 

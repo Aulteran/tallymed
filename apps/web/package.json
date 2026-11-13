@@ -10,9 +10,11 @@
     "typecheck": "next typegen && tsc --noEmit",
     "migrate": "node cli/migrate.ts",
     "bootstrap": "node cli/bootstrap.ts",
-    "documents": "node cli/documents.ts"
+    "documents": "node cli/documents.ts",
+    "mcp": "node cli/mcp.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@node-rs/argon2": "2.2.2",
     "next": "16.4.6",
     "pg": "8.23.1",

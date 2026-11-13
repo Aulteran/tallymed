@@ -10,6 +10,7 @@ import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
 import * as expenses from './services/expenses.ts';
+import * as assistant from './services/assistant.ts';
 import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
 import * as payments from './services/payments.ts';
@@ -624,4 +625,71 @@ export async function handleDocumentDownload(req: Request, ctx: AppContext, id: 
     if (!(error instanceof AppError) || error.code === 'internal') logError('http.documents.download', error, { requestId });
     return errorResponse(req, null, error, null);
   }
+}
+
+
+// ---------- optional assistant: client credentials and proposal review ----------
+
+const proposalPage = (b: Record<string, unknown>) => (str(b.proposalId) ? `/proposals/${str(b.proposalId)}` : '/proposals');
+
+const createAssistantClient = route({
+  name: 'assistant.clients.create',
+  session: true,
+  errorPath: () => '/assistant',
+  keepFields: ['name', 'expiryDays'],
+  async run({ ctx, actor, body, requestId, req }) {
+    const c = await assistant.createClient(ctx.pool, actor!, body, requestId);
+    if (wantsHtml(req)) {
+      // Shown once and never stored in recoverable form; the page must not be cached.
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Assistant credential created</title>`
+        + `<body style="font-family:system-ui;max-width:44rem;margin:3rem auto;padding:0 1rem"><h1>Assistant credential created</h1>`
+        + `<p>Copy this token into your assistant client now. It is shown once, only its checksum is stored, and it expires ${escapeHtml(c.expiresAt.toISOString())}.</p>`
+        + `<p><code style="word-break:break-all">${escapeHtml(c.token)}</code></p><p>Permissions: ${escapeHtml(c.scopes.join(', '))}</p>`
+        + `<p>If it is ever exposed, revoke it on the assistant page.</p><p><a href="/assistant">Back to assistant settings</a></p></body></html>`;
+      return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, 'Content-Type': 'text/html; charset=utf-8' } }) };
+    }
+    return { json: { ok: true, id: c.id, token: c.token, scopes: c.scopes, expiresAt: c.expiresAt.toISOString() }, status: 201 };
+  },
+});
+
+const ASSISTANT_ROUTES = new Map<string, ReturnType<typeof route>>([
+  ['clients/create', createAssistantClient],
+  ['clients/revoke', route({
+    name: 'assistant.clients.revoke',
+    session: true,
+    errorPath: () => '/assistant',
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.revokeClient(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, '/assistant') };
+      return { json: { ok: true, ...r } };
+    },
+  })],
+  ['proposals/approve', route({
+    name: 'assistant.proposals.approve',
+    session: true,
+    errorPath: proposalPage,
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.approveProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, proposalPage(body)) };
+      return { json: { ok: true, ...r } };
+    },
+  })],
+  ['proposals/reject', route({
+    name: 'assistant.proposals.reject',
+    session: true,
+    errorPath: proposalPage,
+    keepFields: ['reason'],
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.rejectProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, proposalPage(body)) };
+      return { json: { ok: true, ...r } };
+    },
+  })],
+]);
+
+/** Assistant mutations from a fixed allow-list. The MCP listener has no route into any of them. */
+export async function handleAssistantAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
+  const handler = ASSISTANT_ROUTES.get(action);
+  if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
+  return handler(req, ctx);
 }

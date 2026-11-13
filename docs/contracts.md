@@ -72,7 +72,7 @@ Implemented in `apps/web/server/repositories/payments.ts`, `repositories/plans.t
 
 ## HSA reimbursements (M04)
 
-Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` (and the SQL view `hsa_allocation_status`) is the stable read interface for reports, exports and the MCP.
+Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` (and the SQL view `hsa_allocation_status`) is the stable read interface for reports and exports. The MCP deliberately reads no HSA data.
 
 ### Figures
 
@@ -100,3 +100,12 @@ HSA rows never alter bill, payment or plan figures. A receipt is not household c
 ### Export
 
 `GET /api/hsa/export?kind=allocations|events|decisions&memberId&providerId&from&to` returns a CSV read from one repeatable-read snapshot. `allocations` ends with a `TOTAL` row equal to the sum of its rows; `events` carries `pending_effect_cents` and `received_effect_cents` so the figures rebuild from the history. Text cells that could be read as formulas are prefixed with a quote. Exports above 20,000 rows fail closed.
+
+## Assistant proposals (M06)
+
+Implemented in `apps/web/server/repositories/mcp.ts` (MCP side), `repositories/assistant.ts` and `services/assistant.ts` (web side) and migration `0008_mcp_proposals.sql`; tested in `tests/web/mcp.test.mjs` and `tests/web/proposals.test.mjs`.
+
+- A proposal targets a **bill** or a **visit** only, and pins `document_version_id` and `document_version_no` plus `target_version` (the bill's or visit's `version`) from one statement. Approval applies only when the document's newest version is still the pinned one and the record's version is unchanged; otherwise the proposal is out of date and can only be rejected.
+- One proposal ever exists per (document, document version, record). A decided proposal is immutable and never deleted. An approved proposal's `attachment_id` is an ordinary M05 attachment, pinned to the pinned version, created in the same transaction; detaching it later is the usual M05 detach.
+- Lock order for an approval: the target record (a bill before anything else, as for attachments), then the document, then the proposal row. Approval takes no payment, plan or HSA lock.
+- MCP credentials are scoped (`documents:read`, `records:read`, `documents:content`, `proposals:create`). Audit actions are `assistant.client_created`, `assistant.client_revoked`, `proposal.created`, `proposal.approved`, `proposal.rejected`, `mcp.tool_called`, `mcp.tool_refused` and `mcp.document_content_read`, with ids and codes in `detail` and never titles, notes, rationales or tokens.

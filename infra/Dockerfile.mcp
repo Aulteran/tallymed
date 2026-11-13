@@ -1,0 +1,23 @@
+# Optional MCP listener image. Separate from the web image on purpose: it carries only the MCP SDK and the narrow server code, runs
+# as its own process with its own restricted database role, and is started only through the `mcp` Compose profile.
+FROM node:24-bookworm-slim AS deps
+WORKDIR /repo
+COPY package*.json ./
+COPY tsconfig.base.json ./
+COPY apps/marketing/package.json apps/marketing/
+COPY apps/web/package.json apps/web/
+COPY packages/brand/package.json packages/brand/
+RUN npm ci --omit=dev --workspace @tallymed/web
+
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps --chown=node:node /repo/node_modules ./node_modules
+COPY --chown=node:node apps/web/package.json apps/web/
+COPY --chown=node:node apps/web/server apps/web/server
+COPY --chown=node:node apps/web/mcp apps/web/mcp
+COPY --chown=node:node apps/web/cli apps/web/cli
+COPY --chown=node:node apps/web/db apps/web/db
+USER node
+EXPOSE 8765
+CMD ["node", "apps/web/cli/mcp.ts"]

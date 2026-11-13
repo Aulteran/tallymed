@@ -678,7 +678,7 @@ test('upgrade over payment data from the prior schema: existing allocations star
     const pm = await pay.recordPayment(db.pool, actor, { idempotencyKey: randomUUID(), paidOn: '2026-04-01', amount: '75.00', method: 'card', billId: b.id }, 'r');
     const refundable = (await pay.getPaymentDetail(db.pool, actor, pm.id)).allocations[0];
     await pay.recordRefund(db.pool, actor, { idempotencyKey: randomUUID(), paymentId: pm.id, allocationId: refundable.allocationId, amount: '15.00', effectiveDate: '2026-05-01', reason: 'Provider refund' }, 'r');
-    assert.deepEqual(await migrate(db.pool), ['0006', '0007']);
+    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008']);
     const a = await hsaRepo.getAllocation(db.pool, actor.householdId, refundable.allocationId);
     assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '0', '0', '0', '0', '0']);
     await hsa.recordDecision(db.pool, actor, { idempotencyKey: randomUUID(), allocationId: a.allocationId, version: '0', status: 'eligible', eligibleAmount: '60.00', rationale: 'Qualified', evidenceType: 'eob', evidenceNote: 'EOB', decidedOn: '2026-05-02' }, 'r');

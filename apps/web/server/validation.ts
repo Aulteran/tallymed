@@ -346,3 +346,24 @@ export const documentFilterSchemas = {
   picker: z.object({ q: optionalFilter(text(80)) }),
 };
 export type DocumentFilter = z.infer<typeof documentFilterSchemas.list>;
+
+// ---------- optional assistant (MCP clients and proposal review) ----------
+
+export const assistantSchemas = {
+  /** Scopes arrive as separate checkboxes because a form field cannot repeat. */
+  createClient: z.strictObject({
+    name: text(80).min(1),
+    expiryDays: z.preprocess(blank, z.coerce.number().int().min(1).max(365).default(90)),
+    documentsRead: checkbox.optional(), recordsRead: checkbox.optional(), documentsContent: checkbox.optional(), proposalsCreate: checkbox.optional(),
+    ...csrf,
+  }),
+  revokeClient: z.strictObject({ clientId: uuid, reason: text(300).min(1), ...csrf }),
+  /** `documentVersion` and `targetVersion` are the versions the person was shown; either having moved on refuses the approval. */
+  approve: z.strictObject({ idempotencyKey, proposalId: uuid, documentVersion: version, targetVersion: version, documentRevision: version, ...csrf }),
+  reject: z.strictObject({ proposalId: uuid, reason: text(300).min(1), ...csrf }),
+};
+
+export const assistantFilterSchemas = {
+  proposals: z.object({ status: optionalFilter(z.enum(['pending', 'approved', 'rejected'])), cursor, limit: pageSize }),
+};
+export type ProposalFilter = z.infer<typeof assistantFilterSchemas.proposals>;

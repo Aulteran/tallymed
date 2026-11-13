@@ -31,6 +31,32 @@ services:
       - documents_data:/var/lib/tallymed/documents
     ports:
       - "127.0.0.1:${TALLYMED_WEB_PORT:-3001}:3000"
+  # Optional assistant (MCP) listener. Off unless you start the `mcp` profile AND set TALLYMED_MCP_ENABLED=true. See docs/mcp.md: create the
+  # restricted database role first (setup-role), keep the published port on a private interface, and never route it through the web proxy.
+  mcp:
+    profiles: ["mcp"]
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.mcp
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TALLYMED_MCP_ENABLED: ${TALLYMED_MCP_ENABLED:-false}
+      TALLYMED_MCP_CONTAINER: "true"
+      TALLYMED_MCP_BIND: 0.0.0.0
+      TALLYMED_MCP_DATABASE_URL: postgres://tallymed_mcp:${TALLYMED_MCP_DB_PASSWORD:-unset}@db:5432/tallymed
+      TALLYMED_MCP_TLS_CERT_FILE: /run/tallymed-mcp/tls.crt
+      TALLYMED_MCP_TLS_KEY_FILE: /run/tallymed-mcp/tls.key
+      TALLYMED_MCP_ALLOWED_CIDRS: ${TALLYMED_MCP_ALLOWED_CIDRS:-}
+      TALLYMED_MCP_ALLOWED_HOSTS: ${TALLYMED_MCP_ALLOWED_HOSTS:-}
+      TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
+    volumes:
+      - ${TALLYMED_MCP_TLS_DIR:-./.mcp-tls}:/run/tallymed-mcp:ro
+      # Needed only for the document-file scope; read-only.
+      - documents_data:/var/lib/tallymed/documents:ro
+    ports:
+      - "${TALLYMED_MCP_PUBLISH:-127.0.0.1}:${TALLYMED_MCP_PORT:-8765}:8765"
 volumes:
   postgres_data:
   documents_data:
