@@ -127,7 +127,7 @@ export async function listAllocationsOfPayment(db: Queryable, householdId: strin
   return rows;
 }
 
-export interface AllocationNetFilter { billIds?: string[]; paymentIds?: string[]; memberId?: string; from?: string; to?: string; limit: number }
+export interface AllocationNetFilter { billIds?: string[]; paymentIds?: string[]; memberId?: string; from?: string; to?: string; limit: number; after?: { paidOn: string; allocationId: string } }
 
 /** Net cash per allocation, used by balances, plans and HSA reconciliation. Newest payments first, bounded. */
 export async function listAllocationsNet(db: Queryable, householdId: string, f: AllocationNetFilter): Promise<AllocationNet[]> {
@@ -138,6 +138,7 @@ export async function listAllocationsNet(db: Queryable, householdId: string, f: 
   if (f.memberId) where.push(`b.member_id = $${params.push(f.memberId)}`);
   if (f.from) where.push(`n.paid_on >= $${params.push(f.from)}`);
   if (f.to) where.push(`n.paid_on <= $${params.push(f.to)}`);
+  if (f.after) where.push(`(n.paid_on, n.allocation_id) < ($${params.push(f.after.paidOn)}::date, $${params.push(f.after.allocationId)}::uuid)`);
   const { rows } = await db.query<AllocationNet>(
     `${ALLOCATION_SELECT} where ${where.join(' and ')} order by n.paid_on desc, n.allocation_id desc limit $${params.push(f.limit)}`, params);
   return rows;
@@ -226,17 +227,18 @@ export interface PayableBill { id: string; label: string; statementDate: string;
  */
 export async function listPayableBills(db: Queryable, householdId: string, o: { q?: string; currentId?: string | null; limit: number }): Promise<PayableBill[]> {
   const params: unknown[] = [householdId, o.currentId ?? null];
-  let search = '';
-  if (o.q) search = `and (b.provider_reference ilike $${params.push(`%${o.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or pr.name ilike $${params.length} or m.name ilike $${params.length})`;
+  // The search narrows the candidates only; the current bill is always kept, whatever the search says.
+  let search = 'true';
+  if (o.q) search = `(x.provider_reference ilike $${params.push(`%${o.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or x.provider_name ilike $${params.length} or x.member_name ilike $${params.length})`;
   const { rows } = await db.query<PayableBill>(
     `select * from (select b.id, m.name || ' · ' || pr.name || coalesce(' ' || b.provider_reference, '') as label, b.statement_date::text as "statementDate",
        (b.base_responsibility_cents + coalesce((select sum(a.amount_cents) from bill_adjustments a where a.household_id = b.household_id and a.bill_id = b.id), 0)
          - coalesce((select sum(e.amount_cents) from payment_entries e where e.household_id = b.household_id and e.bill_id = b.id), 0))::text as "openBalanceCents",
-       b.id = $2::uuid as is_current
+       b.id = $2::uuid as is_current, b.provider_reference, pr.name as provider_name, m.name as member_name
      from bills b join family_members m on m.household_id = b.household_id and m.id = b.member_id
      join providers pr on pr.household_id = b.household_id and pr.id = b.provider_id
-     where b.household_id = $1 and b.amount_status = 'confirmed' ${search}) x
-     where x."openBalanceCents"::bigint > 0 or x.is_current
+     where b.household_id = $1 and (b.amount_status = 'confirmed' or b.id = $2::uuid)) x
+     where x.is_current or (x."openBalanceCents"::bigint > 0 and ${search})
      order by x.is_current desc, x."statementDate" desc, x.id desc limit $${params.push(o.limit)}`, params);
   return rows.map(({ id, label, statementDate, openBalanceCents }) => ({ id, label, statementDate, openBalanceCents }));
 }

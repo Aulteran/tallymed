@@ -47,7 +47,7 @@ test('payments apply across many bills and many payments, with exact cent arithm
     const bc = billContract(await t.detail(a.id));
     assert.equal(bc.appliedCents, '10010');
     assert.equal(bc.creditCents, '0');
-    const nets = await listNetAllocations(t.db.pool, t.actor, { billIds: [a.id, b.id, c.id] });
+    const nets = await (await listNetAllocations(t.db.pool, t.actor, { billIds: [a.id, b.id, c.id] })).items;
     assert.equal(nets.length, 4);
     assert.equal(nets.reduce((s, x) => s + BigInt(x.netCents), 0n), 19030n - 1000n, 'net allocated equals net cash minus unapplied');
     assert.equal(p1.replayed, false);
@@ -391,7 +391,7 @@ test('access boundaries, forms and redirects for payments', { skip: skipDb }, as
     await assert.rejects(pay.reverseAllocation(t.db.pool, outsider, { idempotencyKey: t.key(), allocationId: alloc, effectiveDate: '2026-05-01', reason: 'x' }, 'r'), code('not_found'));
     await assert.rejects(pay.recordRefund(t.db.pool, outsider, { idempotencyKey: t.key(), paymentId: pm.id, effectiveDate: '2026-05-01', reason: 'x', allocationId: alloc, amount: '1' }, 'r'), code('not_found'));
     await assert.rejects(listNetAllocations(t.db.pool, { ...outsider, role: 'nobody' }), code('forbidden'));
-    assert.deepEqual(await listNetAllocations(t.db.pool, outsider), []);
+    assert.deepEqual((await listNetAllocations(t.db.pool, outsider)).items, []);
     // The database refuses to link a payment entry of one household to another household's bill.
     await assert.rejects(t.db.pool.query(
       `insert into payment_entries (id, household_id, payment_id, event_id, kind, bill_id, allocation_id, amount_cents, effective_date, created_by)
@@ -439,7 +439,7 @@ test('contracts: net allocations and locking for HSA reconciliation', { skip: sk
     const alloc = (await t.payment(pm.id)).allocations[0];
     await t.refund(pm.id, { allocationId: alloc.allocationId, amount: '25.00' });
     await pay.reverseAllocation(t.db.pool, t.actor, { idempotencyKey: t.key(), allocationId: alloc.allocationId, amount: '15.00', effectiveDate: '2026-05-02', reason: 'x' }, 'r');
-    const [net] = await listNetAllocations(t.db.pool, t.actor, { billIds: [a.id] });
+    const [net] = (await listNetAllocations(t.db.pool, t.actor, { billIds: [a.id] })).items;
     assert.deepEqual({ ...net }, {
       allocationId: alloc.allocationId, paymentId: pm.id, billId: a.id, memberId: m, providerId: p, paidOn: '2026-04-01',
       allocatedCents: '10000', reversedCents: '1500', refundedCents: '2500', netCents: '6000', matchedCents: '0',

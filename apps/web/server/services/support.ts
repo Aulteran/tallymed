@@ -34,11 +34,28 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<
       return await fn();
     } catch (error) {
       const code = (error as { code?: string })?.code;
-      if ((code === '40P01' || code === '40001') && i < attempts) continue;
-      throw mapDatabaseError(error);
+      if ((code === '40P01' || code === '40001') && i < attempts) {
+        retryStats.lockConflicts++;
+        continue;
+      }
+      if (error instanceof RetryTransaction && i < attempts + 2) {
+        retryStats.replanned++;
+        continue;
+      }
+      throw mapDatabaseError(error instanceof RetryTransaction ? new AppError('conflict', 'The records are changing. Try again.') : error);
     }
   }
 }
+
+/**
+ * Thrown inside a transaction that discovered it needs a lock it can no longer take in the global order (payments, bills,
+ * plans). The transaction rolls back, releasing everything, and runs again knowing the full set. This is the planned path,
+ * not a deadlock: `lockConflicts` counts real PostgreSQL deadlocks and serialization failures, and tests assert it stays zero.
+ */
+export class RetryTransaction extends Error {}
+
+/** Counters for tests and diagnostics. `lockConflicts` should stay zero when every writer follows the lock order. */
+export const retryStats = { lockConflicts: 0, replanned: 0 };
 
 /**
  * Commit-time guards raise check violations when a write would break a money invariant. They are the last line of defense

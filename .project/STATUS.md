@@ -5,7 +5,7 @@
 | M00 | Accepted | Owner accepted on 2026-11-13. Next milestone starts only when requested. |
 | M01 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after both reviews approved and the merge. Evidence below. Next: M02, and M03/M05 may run in parallel after it. |
 | M02 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone recheck and financial re-audit approved head `adce34d` with CI green; squash-merged as `15ea2bc` (PR #4). Evidence in the M02 handoff. Next: M03, and M05 after M03's migrations, only when started. |
-| M03 | In review | Implemented on branch `feature/m03-payments-allocations-refunds-payment-plans`; PR and tested head SHA are recorded on the PR. Independent milestone and financial reviews next. |
+| M03 | In review | Implemented on branch `feature/m03-payments-allocations-refunds-payment-plans`; PR and tested head SHA are recorded on the PR. Review round 1 changes needed; round 2 fixes are on the PR (refund reversal, bill and installment commit-time guards, lock order, contract paging) and await recheck. |
 | M04–M07 | Planned | Wait for accepted predecessors per the milestone index. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.

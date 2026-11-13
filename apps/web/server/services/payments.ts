@@ -111,9 +111,8 @@ async function applyAllocations(tx: Queryable, actor: Actor, paymentId: string, 
  * payment lock; the plans lock after it (payments, then bills, then plans).
  */
 async function releaseMatchesToFit(tx: Queryable, actor: Actor, allocationId: string, remaining: bigint, requestId: string): Promise<void> {
-  const planIds = await plans.plansMatchingAllocation(tx, actor.householdId, allocationId);
-  if (planIds.length === 0) return;
-  await plans.lockPlans(tx, actor.householdId, planIds);
+  // The caller already locked every plan that matches this allocation (lockPlansForAllocations), in ascending order. No
+  // match can appear since: matching needs the payment lock the caller holds.
   const matches = await plans.currentMatchesOfAllocation(tx, actor.householdId, allocationId);
   const total = sum(matches.map((m) => m.cents));
   let excess = total - remaining;
@@ -127,10 +126,20 @@ async function releaseMatchesToFit(tx: Queryable, actor: Actor, allocationId: st
     });
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.match_released', entityType: 'payment_plan', entityId: m.planId, requestId,
-      detail: { planId: m.planId, installmentId: m.installmentId, allocationId, amountCents: cents(take), matchedBeforeCents: cents(m.cents), matchedAfterCents: cents(m.cents - take) },
+      detail: { planId: m.planId, installmentId: m.installmentId, paymentId: m.paymentId, allocationId, amountCents: cents(take), matchedBeforeCents: cents(m.cents), matchedAfterCents: cents(m.cents - take) },
     });
     excess -= take;
   }
+}
+
+/**
+ * Locks, once and in ascending id order, every plan holding matches of the given allocations. Callers invoke this after
+ * locking the payment and the bills and before writing, so a request with several lines never takes plan locks in
+ * line order (the cause of opposite-order deadlocks between two refunds). Lock order everywhere: payments, bills, plans.
+ */
+async function lockPlansForAllocations(tx: Queryable, actor: Actor, allocationIds: string[]): Promise<void> {
+  const planIds = await plans.plansMatchingAllocations(tx, actor.householdId, allocationIds);
+  if (planIds.length > 0) await plans.lockPlans(tx, actor.householdId, planIds);
 }
 
 async function lockedPayment(tx: Queryable, actor: Actor, paymentId: string): Promise<repo.Payment> {
@@ -204,6 +213,7 @@ export async function reverseAllocation(pool: Pool, actor: Actor, input: unknown
     const amount = d.amount ?? remaining;
     if (amount <= 0n || amount > remaining) throw new AppError('conflict', 'That is more than the allocation still holds');
     const bill = await expenseRepo.getBill(tx, actor.householdId, alloc.billId);
+    await lockPlansForAllocations(tx, actor, [alloc.allocationId]);
     await repo.insertEntry(tx, {
       id, householdId: actor.householdId, userId: actor.userId, paymentId: payment.id, eventId: randomUUID(), kind: 'allocation_reversal', billId: alloc.billId,
       allocationId: alloc.allocationId, amountCents: -amount, effectiveDate: d.effectiveDate, reason: d.reason,
@@ -245,6 +255,7 @@ export async function recordRefund(pool: Pool, actor: Actor, input: unknown, req
     const balance = new Map(locks.map((l) => [l.id, l.baseResponsibilityCents + l.adjustmentsCents - l.appliedCents]));
     // Re-read allocation figures now that the payment and bills are locked.
     const fresh = new Map((await repo.listAllocationsOfPayment(tx, actor.householdId, d.paymentId)).map((a) => [a.allocationId, a]));
+    await lockPlansForAllocations(tx, actor, d.lines.map((l) => l.allocationId));
     const unappliedBefore = BigInt(payment.unappliedCents);
     const unappliedPart = d.unappliedCents ?? 0n;
     if (unappliedPart > unappliedBefore) throw new AppError('conflict', 'That is more than the unapplied cash left on this payment');
@@ -306,11 +317,16 @@ export async function reverseRefund(pool: Pool, actor: Actor, input: unknown, re
     const locks = billIds.length ? await expenseRepo.lockBills(tx, actor.householdId, billIds) : [];
     const balance = new Map(locks.map((l) => [l.id, l.baseResponsibilityCents + l.adjustmentsCents - l.appliedCents]));
     const unappliedBefore = BigInt(payment.unappliedCents);
-    const unappliedEntries = sum(entries.filter((e) => e.kind === 'unapplied_refund').map((e) => -e.amountCents));
-    if (unappliedEntries > unappliedBefore) throw new AppError('conflict', 'That refund cannot be reversed because the cash it returned was applied since. Reverse that allocation first.');
+    // Reversing a refund puts cash back where it came from. An unapplied refund returns to unapplied cash and needs no limit.
+    // A refund of applied cash raises the bill's net applied cash again, which must still fit the bill's open balance (it may
+    // have been paid again since); checked with running balances because several lines can share a bill.
+    const unappliedReturned = sum(entries.filter((e) => e.kind === 'unapplied_refund').map((e) => -e.amountCents));
     let total = 0n;
     for (const e of entries) {
       const amount = -e.amountCents;
+      if (e.billId && amount > balance.get(e.billId)!) {
+        throw new AppError('conflict', 'That refund cannot be reversed because the bill was paid again since. Move the newer payment back to unapplied first.');
+      }
       await repo.insertEntry(tx, {
         id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId: payment.id, eventId: newEventId, kind: 'refund_reversal', billId: e.billId,
         allocationId: e.allocationId, reversesEntryId: e.id, amountCents: amount, effectiveDate: d.effectiveDate, reason: d.reason,
@@ -327,7 +343,10 @@ export async function reverseRefund(pool: Pool, actor: Actor, input: unknown, re
     }
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.refund_reversed', entityType: 'payment', entityId: payment.id, requestId,
-      detail: { paymentId: payment.id, eventId: d.eventId, amountCents: cents(total), netCashBeforeCents: payment.netCashCents, netCashAfterCents: cents(BigInt(payment.netCashCents) + total) },
+      detail: {
+        paymentId: payment.id, eventId: d.eventId, amountCents: cents(total), netCashBeforeCents: payment.netCashCents, netCashAfterCents: cents(BigInt(payment.netCashCents) + total),
+        unappliedBeforeCents: payment.unappliedCents, unappliedAfterCents: cents(unappliedBefore + unappliedReturned),
+      },
     });
     return { id: newEventId, replayed: false };
   }));
@@ -348,7 +367,7 @@ export async function voidPayment(pool: Pool, actor: Actor, input: unknown, requ
     await repo.insertVoid(tx, { householdId: actor.householdId, userId: actor.userId, paymentId: d.paymentId, reason: d.reason, voidedOn: d.voidedOn });
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.voided', entityType: 'payment', entityId: d.paymentId, requestId,
-      detail: { paymentId: d.paymentId, amountCents: payment.amountCents, voidedOn: d.voidedOn },
+      detail: { paymentId: d.paymentId, amountCents: payment.amountCents, voidedOn: d.voidedOn, netCashBeforeCents: payment.netCashCents, netCashAfterCents: '0', unappliedBeforeCents: payment.unappliedCents, unappliedAfterCents: '0' },
     });
     return { id: d.paymentId, replayed: false };
   }));

@@ -84,19 +84,39 @@ export interface NetAllocationContract {
   allocatedCents: string; reversedCents: string; refundedCents: string; netCents: string; matchedCents: string;
 }
 
-export async function listNetAllocations(pool: Pool | Queryable, actor: Actor, filter: { billIds?: string[]; paymentIds?: string[]; memberId?: string; from?: string; to?: string; limit?: number } = {}): Promise<NetAllocationContract[]> {
+export interface NetAllocationPage { items: NetAllocationContract[]; nextCursor: string | null }
+
+/**
+ * One page of net allocations, newest first. `nextCursor` is non-null when more rows exist; pass it back as `cursor`. A caller
+ * that needs every allocation (a reconciliation or ceiling check) must follow cursors until it is null: a result is never
+ * silently truncated.
+ */
+export async function listNetAllocations(pool: Pool | Queryable, actor: Actor, filter: { billIds?: string[]; paymentIds?: string[]; memberId?: string; from?: string; to?: string; limit?: number; cursor?: string } = {}): Promise<NetAllocationPage> {
   authorize(actor, 'expenses:read');
-  const rows = await paymentRepo.listAllocationsNet(pool, actor.householdId, { ...filter, limit: Math.min(filter.limit ?? 500, 1000) });
-  return rows.map((r) => ({
-    allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, memberId: r.memberId, providerId: r.providerId, paidOn: r.paidOn,
-    allocatedCents: r.allocatedCents, reversedCents: r.reversedCents, refundedCents: r.refundedCents, netCents: r.netCents, matchedCents: r.matchedCents,
-  }));
+  const { cursor, ...rest } = filter;
+  let after: { paidOn: string; allocationId: string } | undefined;
+  if (cursor) {
+    const m = /^(\d{4}-\d{2}-\d{2})_([0-9a-f-]{36})$/.exec(cursor);
+    if (!m) throw new AppError('invalid_input', 'That page cursor is not valid');
+    after = { paidOn: m[1]!, allocationId: m[2]! };
+  }
+  const limit = Math.max(1, Math.min(filter.limit ?? 500, 1000));
+  const rows = await paymentRepo.listAllocationsNet(pool, actor.householdId, { ...rest, limit: limit + 1, after });
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    items: page.map((r) => ({
+      allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, memberId: r.memberId, providerId: r.providerId, paidOn: r.paidOn,
+      allocatedCents: r.allocatedCents, reversedCents: r.reversedCents, refundedCents: r.refundedCents, netCents: r.netCents, matchedCents: r.matchedCents,
+    })),
+    nextCursor: rows.length > limit && last ? `${last.paidOn}_${last.allocationId}` : null,
+  };
 }
 
 /**
  * Locking contract for services that depend on net cash (HSA reservations and receipts): inside one transaction, lock the
  * payments behind the allocations (`lockPaymentsForMoney`, ascending id), then the bills if needed (`lockBillsForMoney`), then
  * read `listNetAllocations`. Refunds, reversals and plan releases take the same payment lock first, so a ceiling check and
- * its write cannot interleave with a refund. Payments never lock after bills or plans.
+ * its write cannot interleave with a refund. Global lock order: payments (ascending id), then bills (ascending id), then plans (ascending id); never take an earlier kind while holding a later one.
  */
 export const lockPaymentsForMoney = paymentRepo.lockPayments;

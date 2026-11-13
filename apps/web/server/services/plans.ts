@@ -73,7 +73,12 @@ export function buildSchedule(d: {
 
 // ---------- reads ----------
 
-const asOfDate = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : todayUtc());
+const asOfDate = (v?: string) => {
+  if (v === undefined || v === '') return todayUtc();
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(v) ? Date.parse(`${v}T00:00:00Z`) : Number.NaN;
+  if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== v) throw new AppError('invalid_input', 'Enter the as-of date as YYYY-MM-DD');
+  return v;
+};
 
 export async function listPlans(pool: Pool, actor: Actor, raw: unknown, asOf?: string) {
   authorize(actor, 'expenses:read');

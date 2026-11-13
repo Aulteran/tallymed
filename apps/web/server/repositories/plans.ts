@@ -140,6 +140,14 @@ export async function currentMatchesOfAllocation(db: Queryable, householdId: str
   return rows.map((r) => ({ planId: r.plan_id, revisionId: r.revision_id, installmentId: r.installment_id, paymentId: r.payment_id, billId: r.bill_id, cents: BigInt(r.cents) }));
 }
 
+/** Plans that hold matches of any of the allocations, ascending, so a request can lock them all once in order. */
+export async function plansMatchingAllocations(db: Queryable, householdId: string, allocationIds: string[]): Promise<string[]> {
+  if (allocationIds.length === 0) return [];
+  const { rows } = await db.query<{ plan_id: string }>(
+    `select distinct plan_id from installment_matches where household_id = $1 and allocation_id = any($2::uuid[]) order by plan_id`, [householdId, allocationIds]);
+  return rows.map((r) => r.plan_id);
+}
+
 /** Plans that currently hold matches of the allocation, for locking before a refund or reversal releases them. */
 export async function plansMatchingAllocation(db: Queryable, householdId: string, allocationId: string): Promise<string[]> {
   const { rows } = await db.query<{ plan_id: string }>(`select distinct plan_id from installment_matches where household_id = $1 and allocation_id = $2 order by plan_id`, [householdId, allocationId]);

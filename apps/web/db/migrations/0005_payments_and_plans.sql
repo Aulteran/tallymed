@@ -141,6 +141,15 @@ create table payment_plan_bills (
   unique (household_id, plan_id, bill_id)
 );
 create index payment_plan_bills_bill_idx on payment_plan_bills (household_id, bill_id);
+create function payment_plan_bills_validate() returns trigger language plpgsql as $$
+begin
+  if not exists (select 1 from payment_plans p join bills b on b.household_id = p.household_id and b.provider_id = p.provider_id
+                 where p.id = new.plan_id and b.id = new.bill_id and b.amount_status = 'confirmed') then
+    raise exception 'a plan covers only confirmed bills of the plan''s provider' using errcode = 'check_violation';
+  end if;
+  return new;
+end $$;
+create trigger payment_plan_bills_validate before insert on payment_plan_bills for each row execute function payment_plan_bills_validate();
 
 create table plan_revisions (
   id uuid primary key,
@@ -247,6 +256,30 @@ create constraint trigger payment_entries_guard after insert on payment_entries
 create constraint trigger payment_voids_guard after insert on payment_voids
   deferrable initially deferred for each row execute function payment_ledger_guard();
 
+-- Cash applied to a bill never exceeds its open balance: responsibility (base + adjustments) minus net applied payments stays
+-- at or above zero after any allocation or refund reversal. Only these two kinds can raise a bill's applied cash, so an
+-- adjustment that later lowers responsibility (a provider credit) stays possible. The guard takes the bill row lock after the
+-- payment lock (trigger names sort after payment_entries_guard), the same order the services use, and serializes concurrent
+-- writers of one bill.
+create function payment_entry_bill_guard() returns trigger language plpgsql as $$
+declare
+  balance bigint;
+begin
+  if new.bill_id is null or new.kind not in ('allocation', 'refund_reversal') then return null; end if;
+  perform 1 from bills where id = new.bill_id for no key update;
+  select b.base_responsibility_cents
+         + coalesce((select sum(a.amount_cents) from bill_adjustments a where a.bill_id = b.id), 0)
+         - coalesce((select sum(e.amount_cents) from payment_entries e where e.bill_id = b.id), 0)
+    into balance from bills b where b.id = new.bill_id;
+  if balance < 0 then
+    raise exception 'applied payments would exceed the bill''s open balance (bill %, balance would be % cents)', new.bill_id, balance
+      using errcode = 'check_violation';
+  end if;
+  return null;
+end $$;
+create constraint trigger payment_entries_guard_bill after insert on payment_entries
+  deferrable initially deferred for each row execute function payment_entry_bill_guard();
+
 -- Matches never exceed an installment, and never exceed what an allocation still holds after refunds and reversals. Only
 -- the plan's current revision counts: earlier revisions keep their matched history as it was.
 create function allocation_match_check(pid uuid, alloc uuid) returns void language plpgsql as $$
@@ -270,12 +303,32 @@ create function installment_match_guard() returns trigger language plpgsql as $$
 declare
   total bigint;
   cap bigint;
+  pair bigint;
+  plan_status text;
+  current_rev boolean;
 begin
+  -- Same order as the services: the allocation's payment first, then the installment. The installment row lock serializes
+  -- concurrent writers of one installment (they hold different payment locks), so the cap is checked one after the other.
   perform allocation_match_check(new.payment_id, new.allocation_id);
+  perform 1 from plan_installments where id = new.installment_id for no key update;
   select coalesce(sum(amount_cents), 0) into total from installment_matches where installment_id = new.installment_id;
   select amount_cents into cap from plan_installments where id = new.installment_id;
   if total < 0 or total > cap then
     raise exception 'matches must stay between zero and the installment amount (installment %)', new.installment_id using errcode = 'check_violation';
+  end if;
+  select coalesce(sum(amount_cents), 0) into pair from installment_matches where installment_id = new.installment_id and allocation_id = new.allocation_id;
+  if pair < 0 then
+    raise exception 'an unmatch cannot exceed what that allocation matched to the installment (installment %, allocation %)', new.installment_id, new.allocation_id
+      using errcode = 'check_violation';
+  end if;
+  if new.kind = 'match' then
+    -- New matches go to the current schedule revision of an active plan. Unmatches stay possible on any plan so refunds can release cash.
+    select p.status, (r.revision_no = (select max(x.revision_no) from plan_revisions x where x.plan_id = p.id))
+      into plan_status, current_rev
+      from payment_plans p join plan_revisions r on r.id = new.revision_id where p.id = new.plan_id for share of p;
+    if plan_status <> 'active' or not current_rev then
+      raise exception 'matches can only be added to the current schedule of an active plan (plan %)', new.plan_id using errcode = 'check_violation';
+    end if;
   end if;
   return null;
 end $$;
