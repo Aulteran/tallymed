@@ -5,6 +5,8 @@ export default {
   output: 'standalone',
   outputFileTracingRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
   poweredByHeader: false,
+  // Operator CLIs run from the standalone image and import these directly, so they must be traced, not bundled.
+  serverExternalPackages: ['zod', 'pg', '@node-rs/argon2'],
   async headers() {
     return [{
       source: '/:path*',
