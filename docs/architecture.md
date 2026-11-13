@@ -17,7 +17,7 @@ flowchart LR
   MCP --> DB
 ```
 
-The starter includes the first two Next.js applications and dev PostgreSQL. The running shell has no database driver or migrations. Add those with Application Foundation. Keep generated assets and secrets outside version control. The MCP listener and private documents service boundary are planned.
+The private app has `pg` (node-postgres, no ORM), plain-SQL migrations in `apps/web/db/migrations` and these layers under `apps/web/server`: `repositories/` (SQL only), `services/` (authorization, use cases, transactions, audit), `http.ts` (the shared POST pipeline: transport and origin checks, bounded body, session and CSRF) and thin Next route handlers and pages that call them. Client components must never import `server/`. Keep generated assets and secrets outside version control. The MCP listener and private documents service boundary are planned.
 
 ## Logical data model
 

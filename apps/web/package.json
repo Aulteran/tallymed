@@ -2,19 +2,26 @@
   "name": "@tallymed/web",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 3001",
     "build": "next build",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "migrate": "node cli/migrate.ts",
+    "bootstrap": "node cli/bootstrap.ts"
   },
   "dependencies": {
+    "@node-rs/argon2": "2.2.2",
     "next": "16.4.6",
+    "pg": "8.23.1",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "typescript": "5.9.3"

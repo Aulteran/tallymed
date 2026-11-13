@@ -2,6 +2,21 @@
 
 Use Node.js 24, npm, and Docker Compose v2 for the optional container stack. Install the repository's locked dependencies with `npm ci`. Marketing runs on 3000 and the app shell on 3001 when launched through npm. Build outputs live under each application.
 
+## Private app database, bootstrap and checks
+
+The private app needs PostgreSQL and these variables: `DATABASE_URL`, `TALLYMED_CANONICAL_ORIGIN` and optionally `TALLYMED_PROXY_SECRET` (see `.env.example`). With the Compose stack running:
+
+```sh
+docker compose run --rm web node apps/web/cli/migrate.ts
+printf '%s' 'a-long-synthetic-passphrase' | docker compose run --rm -T \
+  -e TALLYMED_BOOTSTRAP_EMAIL=admin@example.test -e TALLYMED_BOOTSTRAP_NAME='Alex Example' \
+  -e TALLYMED_HOUSEHOLD_NAME='Example Family' web node apps/web/cli/bootstrap.ts
+```
+
+Without Compose use `npm run migrate -w @tallymed/web` and `npm run bootstrap -w @tallymed/web` with `DATABASE_URL` set. Bootstrap closes permanently after one success. Real passwords never go in argv, issues or logs.
+
+`npm test` also runs the private-app tests. They need a **disposable** PostgreSQL server: set `TALLYMED_TEST_DATABASE_URL` to a URL whose role can create databases (for example `postgres://postgres:...@127.0.0.1:5432/postgres`). Each test file creates and drops its own database. Without the variable those tests are skipped locally and fail in CI. They cover fresh and upgrade migrations, bootstrap, sessions, CSRF, authorization, request limits and malicious forwarded headers using fabricated data. After `npm run build`, `npm run test:proxy` starts the built app behind a test TLS proxy and checks HTTPS sign-in, canonical redirects, cookie flags, forged headers, body limits, the absence of an MCP route and the network boundary. It needs `openssl` and the same database variable.
+
 Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in PowerShell, `cp .env.example .env` in POSIX shells), then run:
 
 ```sh

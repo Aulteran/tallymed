@@ -6,9 +6,16 @@
     "**/*.tsx",
     "**/*.mts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    "server/**/*.ts",
+    "cli/**/*.ts"
   ],
   "exclude": [
     "node_modules"
-  ]
+  ],
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  }
 }

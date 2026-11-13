@@ -1,0 +1,19 @@
+:root { color-scheme: light dark; --navy: #12304a; --teal: #0f766e; --bg: #f7f9fb; --fg: #14202b; --card: #fff; --line: #d5dde5; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e1620; --fg: #e8eef4; --card: #16222f; --line: #2b3b4b; --teal: #5eead4; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+a { color: var(--teal); }
+header.shell { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: .75rem 1rem; background: var(--navy); color: #fff; }
+header.shell a { color: #fff; }
+header.shell nav { display: flex; gap: 1rem; flex: 1; }
+header.shell form { margin: 0; }
+main { max-width: 56rem; margin: 0 auto; padding: 1.5rem 1rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: .5rem; padding: 1rem; margin-bottom: 1rem; }
+label { display: block; margin: .75rem 0 .25rem; font-weight: 600; }
+input, select, button { font: inherit; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: .35rem; max-width: 100%; }
+input, select { width: 100%; max-width: 22rem; background: var(--card); color: var(--fg); }
+button { background: var(--teal); color: #fff; border-color: var(--teal); cursor: pointer; margin-top: .75rem; }
+header.shell button { margin: 0; background: transparent; border-color: #fff; }
+.error { color: #b91c1c; font-weight: 600; } @media (prefers-color-scheme: dark) { .error { color: #fca5a5; } }
+.notice { max-width: 56rem; margin: 0 auto; padding: 1rem; font-size: .875rem; opacity: .85; }
+table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: .4rem; border-bottom: 1px solid var(--line); }
