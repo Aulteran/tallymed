@@ -1,6 +1,6 @@
 // Use cases for medical expense management. Each mutation authorizes, validates, locks, writes and audits in one
 // transaction. Money is bigint cents. No payment records exist yet, so open balance equals household responsibility.
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { authorize, type Actor } from '../authz.ts';
 import { isUniqueViolation, withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
@@ -8,24 +8,10 @@ import { MAX_CENTS } from '../money.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import * as repo from '../repositories/expenses.ts';
 import { filterSchemas, parse, schemas } from '../validation.ts';
+import { idempotent } from './support.ts';
 
 type Detail = Record<string, string | number | boolean | null>;
 const isArchived = (p: repo.Party | repo.Visit | null) => p !== null && 'archivedAt' in p && p.archivedAt !== null;
-
-function fingerprint(input: Record<string, unknown>): string {
-  const canonical = Object.keys(input).sort().map((k) => [k, typeof input[k] === 'bigint' ? String(input[k]) : input[k]]);
-  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
-/** Returns the stored result id for an exact replay, throws on the same key with different input, or null to proceed. */
-async function idempotent(tx: Queryable, actor: Actor, operation: string, key: string, input: Record<string, unknown>, resultId: string): Promise<string | null> {
-  const claim = await repo.claimIdempotency(tx, {
-    householdId: actor.householdId, actorUserId: actor.userId, operation, key, fingerprint: fingerprint(input), resultId,
-  });
-  if (!claim.replay) return null;
-  if (!claim.sameInput) throw new AppError('conflict', 'That request key was already used with different details');
-  return claim.resultId;
-}
 
 // ---------- members and providers ----------
 
@@ -122,7 +108,7 @@ export const archiveMember = (pool: Pool, actor: Actor, input: unknown, requestI
 export const archiveProvider = (pool: Pool, actor: Actor, input: unknown, requestId: string) => archive(pool, actor, 'providers', 'provider', input, requestId);
 
 /** Share-locks a member or provider for the transaction and requires it to be active. */
-async function requireActive(tx: Queryable, table: repo.PartyTable, householdId: string, id: string): Promise<repo.Party> {
+export async function requireActive(tx: Queryable, table: repo.PartyTable, householdId: string, id: string): Promise<repo.Party> {
   const p = await repo.getParty(tx, table, householdId, id, 'share');
   if (!p) throw new AppError('not_found');
   if (isArchived(p)) throw new AppError('conflict', `That ${table === 'providers' ? 'provider' : 'family member'} is archived`);

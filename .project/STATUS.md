@@ -5,7 +5,8 @@
 | M00 | Accepted | Owner accepted on 2026-11-13. Next milestone starts only when requested. |
 | M01 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after both reviews approved and the merge. Evidence below. Next: M02, and M03/M05 may run in parallel after it. |
 | M02 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone recheck and financial re-audit approved head `adce34d` with CI green; squash-merged as `15ea2bc` (PR #4). Evidence in the M02 handoff. Next: M03, and M05 after M03's migrations, only when started. |
-| M03–M07 | Planned | Wait for accepted predecessors per the milestone index. |
+| M03 | In review | Implemented on branch `feature/m03-payments-allocations-refunds-payment-plans`; PR and tested head SHA are recorded on the PR. Review round 1 changes needed; round 2 fixes are on the PR (refund reversal, bill and installment commit-time guards, lock order, contract paging) and await recheck. |
+| M04–M07 | Planned | Wait for accepted predecessors per the milestone index. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
 
@@ -55,6 +56,15 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Acceptance evidence: PR #4 squash-merged as `15ea2bc8b9d85b02739c55569c4936358ec28c4b`. Final reviewed and tested head `adce34dd101fe6d076d9e11c2a7c0a9e733aafd7`; CI `verify` and `compose-smoke` green on it. Independent milestone review (first round CHANGES NEEDED on `7b34486`, recheck APPROVE on `adce34d`) and financial audit (APPROVE on `7b34486`, re-audit APPROVE on `adce34d`) are comments on the PR. Accepted under the owner's 2026-11-13 preauthorization; the owner can still revisit it. No public roadmap change: the private app is not deployed.
 - Carried into M03: payment-allocation tables need the same commit-time guards as adjustments (financial re-audit); re-verify that open balance equals responsibility minus applied payments. Accepted limitations (N3, N6, N7, N8, N10) are in DECISIONS.md; the database pool `error` listener and password reset remain required before a real deployment. An unconfirmed estimate with no adjustments can still be deleted by manual SQL (the app has no delete path).
 - Not verified by anyone: Node 24 locally, Docker Compose locally (CI covers it), a real reverse proxy and a screen-reader pass.
+
+## M03 handoff
+
+- Branch: `feature/m03-payments-allocations-refunds-payment-plans`. The PR and tested head SHA are recorded on the PR.
+- Changed: migration `0005_payments_and_plans.sql` (payments, payment entries, voids, plans, schedule revisions, installments, matches, commit-time guards, `allocation_net` view); repositories and services for payments, refunds, reversals, plans and the due queues; `/api/expenses/payments/*` and `/api/expenses/plans/*` actions; Payments, Payment Plans, bill, and Overview screens; the stable net-allocation and locking contract in `contracts.ts` and `docs/contracts.md` for M04; the pg pool `error` listener; shared idempotency and retry helpers in `services/support.ts`; decisions in DECISIONS.md under Payments and Payment Plans decisions.
+- Carried forward from M02 and done: commit-time database guards on the payment-allocation tables; the pool `error` listener; re-verified that open balance equals responsibility minus net applied payments (`tests/web/payments.test.mjs`, upgrade test over 0004 data). Lessons applied: locked, concurrency-tested balance, allocation and match checks; before and after audit values; no sensitive values in redirect URLs; select lists keep the current record; tests do not depend on transaction-start clocks.
+- Owner-visible starter choices (see DECISIONS.md): applied cash only to confirmed bills and never above the open balance; allocation reversal is a correction, refund is explicit cash; credits come only from later adjustments; plans cover confirmed bills of one provider; matches are partial references to allocations and are released automatically when an allocation shrinks; revisions carry matches forward and keep prior history; UTC `asOf` for overdue.
+- Checks run locally: see the PR description for exact commands and results.
+- Not verified locally: Node 24, Docker Compose, a real reverse proxy and a screen-reader pass (CI covers Node 24, PostgreSQL 17, Compose, and the browser workflow with axe checks).
 
 ### Required before the first real deployment
 

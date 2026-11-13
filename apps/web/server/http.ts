@@ -8,6 +8,8 @@ import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
 import * as expenses from './services/expenses.ts';
+import * as payments from './services/payments.ts';
+import * as plans from './services/plans.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
@@ -326,7 +328,30 @@ const EXPENSE_ACTIONS: Record<string, {
   'adjustments/reverse': { service: expenses.reverseAdjustment, error: (b) => billPath(b, ''), ok: billPath },
 };
 
-const expenseRoutes = new Map(Object.entries(EXPENSE_ACTIONS).map(([name, a]) => [name, route({
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'reference', 'note', 'billId', 'allocateAmount'];
+const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str(b.paymentId) ?? id}`;
+const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
+const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
+const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
+const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence'];
+// Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
+const MONEY_ACTIONS: Record<string, {
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string) => string; keep?: string[];
+}> = {
+  'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, ok: (_b, id) => `/payments/${id}` },
+  'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount'], ok: paymentPath },
+  'payments/unapply': { service: payments.reverseAllocation, error: paymentOf, keep: ['amount', 'effectiveDate', 'reason'], ok: paymentPath },
+  'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
+  'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
+  'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
+  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'billId', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
+  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
+  'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
+  'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
+  'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },
+};
+
+const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS }).map(([name, a]) => [name, route({
   name: `expenses.${name}`,
   session: true,
   errorPath: a.error,

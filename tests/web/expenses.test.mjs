@@ -508,7 +508,7 @@ test('upgrade: migrations 0003 and 0004 apply over earlier data without changing
     await migrate(db.pool, { upTo: '0002' });
     const h = (await db.pool.query(`insert into households (name) values ('Example Family') returning id`)).rows[0].id;
     await db.pool.query(`insert into users (household_id, email, display_name, role, password_hash) values ($1, 'a@example.test', 'Alex Example', 'admin', 'x')`, [h]);
-    assert.deepEqual(await migrate(db.pool), ['0003', '0004']);
+    assert.deepEqual((await migrate(db.pool)).slice(0, 2), ['0003', '0004']);
     assert.equal((await db.pool.query('select count(*)::int n from users')).rows[0].n, 1);
     assert.equal((await db.pool.query('select count(*)::int n from bills')).rows[0].n, 0);
   } finally {

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { listMembers, listProviders, expenseOverview } from '../../server/services/expenses.ts';
-import { Banner, flat, load, Money, Options, requireSession, type SearchParams } from '../components/ui.tsx';
+import { cashSummary } from '../../server/services/payments.ts';
+import { installmentSummary, listInstallmentQueue } from '../../server/services/plans.ts';
+import { Banner, flat, load, Money, Options, requireSession, StatePill, todayUtc, type SearchParams } from '../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Overview · TallyMed' };
@@ -13,6 +15,10 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
     listMembers(ctx.pool, actor, { archived: 'yes', limit: 100 }), listProviders(ctx.pool, actor, { archived: 'yes', limit: 100 }),
   ]);
   const { data, invalid } = await load(() => expenseOverview(ctx.pool, actor, pick(params)), null);
+  const asOf = todayUtc();
+  const [cash, due, overdue] = await Promise.all([
+    cashSummary(ctx.pool, actor), installmentSummary(ctx.pool, actor, asOf), listInstallmentQueue(ctx.pool, actor, { state: 'overdue', asOf, limit: 5, ...(isId(params.memberId) ? { memberId: params.memberId } : {}), ...(isId(params.providerId) ? { providerId: params.providerId } : {}) }),
+  ]);
   const t = data?.totals;
   return <main className="wide">
     <h1>Overview</h1>
@@ -30,9 +36,17 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <section className="metrics" aria-label="Household responsibility">
         <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Confirmed responsibility</span><strong><Money cents={t.confirmedResponsibilityCents} /></strong><span className="muted">{t.confirmedCount} bills, after adjustments</span></div></Link>
         <Link href={filter({ status: 'estimate' })}><div className="card"><span>Estimated, not confirmed</span><strong><Money cents={t.estimatedResponsibilityCents} /></strong><span className="muted">{t.estimateCount} estimates, kept separate</span></div></Link>
-        <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Confirmed open balance</span><strong><Money cents={t.confirmedOpenBalanceCents} /></strong><span className="muted">Equals responsibility until payments are recorded (planned)</span></div></Link>
+        <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Confirmed open balance</span><strong><Money cents={t.confirmedOpenBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div></Link>
+        {BigInt(t.confirmedCreditCents) > 0n && <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Provider credits</span><strong><Money cents={t.confirmedCreditCents} /></strong><span className="muted">Payments applied above responsibility</span></div></Link>}
+        <Link href="/payments?unapplied=yes"><div className="card"><span>Unapplied cash</span><strong><Money cents={cash.unappliedCents} /></strong><span className="muted">Paid but not applied to a bill (all family)</span></div></Link>
+        <Link href="/plans?state=overdue"><div className="card"><span>Overdue installments</span><strong><Money cents={due.overdueCents} /></strong><span className="muted">{due.overdueCount} installments past due (all family)</span></div></Link>
+        <Link href="/plans?state=upcoming"><div className="card"><span>Upcoming installments</span><strong><Money cents={due.upcomingCents} /></strong><span className="muted">{due.upcomingCount} installments not yet due (all family)</span></div></Link>
         <Link href={filter({ awaitingVisit: 'yes' })}><div className="card"><span>Bills awaiting a visit</span><strong>{t.awaitingVisitCount}</strong></div></Link>
       </section>
+      <div className="card">
+        <h2>Overdue installments</h2>
+        {overdue.items.length === 0 ? <p>No installments are overdue in this view.</p> : <ul>{overdue.items.map((i) => <li key={i.installmentId}><Link href={`/plans/${i.planId}`}>{i.planName} #{i.seq} · due {i.dueDate}</Link> <Money cents={i.unpaidCents} /> <StatePill state={i.state} overdue /></li>)}</ul>}
+      </div>
       <div className="card">
         <h2>Bills awaiting a visit</h2>
         {data!.awaitingVisit.length === 0 ? <p>None. Every bill in this view is linked to a visit.</p> : <ul>{data!.awaitingVisit.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.providerName} · {b.memberName} · {b.statementDate}</Link></li>)}</ul>}
@@ -47,8 +61,9 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <p className="muted">Hints only. TallyMed never merges bills automatically.</p>
       </div>
     </>}
-    <p className="muted">Amounts are in USD. Payments, payment plans, HSA reimbursements and document management are planned and not available yet.</p>
+    <p className="muted">Amounts are in USD. HSA reimbursements and document management are planned and not available yet.</p>
   </main>;
 }
 
+const isId = (v: string | undefined): v is string => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
 const pick = (p: Record<string, string>) => Object.fromEntries(['memberId', 'providerId', 'from', 'to'].filter((k) => p[k]).map((k) => [k, p[k]!]));

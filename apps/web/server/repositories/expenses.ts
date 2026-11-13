@@ -139,8 +139,12 @@ export interface Bill {
   id: string; memberId: string; providerId: string; visitId: string | null; providerReference: string | null;
   statementDate: string; dueDate: string | null; originalCents: string; baseResponsibilityCents: string;
   adjustmentsCents: string; responsibilityCents: string;
-  /** Open balance. Equals responsibility until payments exist (a later milestone). */
+  /** Net applied household payments: allocations less allocation reversals and net refunds (see payments repository). */
+  appliedCents: string;
+  /** Responsibility minus net applied payments. Negative means the provider owes the household a credit. */
   openBalanceCents: string;
+  /** Provider credit: the part of net applied payments above responsibility (zero when none). */
+  creditCents: string;
   amountStatus: 'estimate' | 'confirmed'; amountSource: string; sourceNote: string; notes: string;
   memberName: string; providerName: string; memberNameAtEntry: string; providerNameAtEntry: string;
   memberArchived: boolean; providerArchived: boolean; visitDate: string | null; possibleDuplicate: boolean;
@@ -152,12 +156,15 @@ const BILL_FROM = `from bills b
   join providers p on p.household_id = b.household_id and p.id = b.provider_id
   left join visits v on v.household_id = b.household_id and v.id = b.visit_id
   left join lateral (select coalesce(sum(a.amount_cents), 0) as total from bill_adjustments a
-    where a.household_id = b.household_id and a.bill_id = b.id) adj on true`;
+    where a.household_id = b.household_id and a.bill_id = b.id) adj on true
+  left join lateral (select coalesce(sum(e.amount_cents), 0) as total from payment_entries e
+    where e.household_id = b.household_id and e.bill_id = b.id) pay on true`;
 const BILL_COLS = `b.id, b.member_id as "memberId", b.provider_id as "providerId", b.visit_id as "visitId",
   b.provider_reference as "providerReference", b.statement_date::text as "statementDate", b.due_date::text as "dueDate",
   b.original_cents::text as "originalCents", b.base_responsibility_cents::text as "baseResponsibilityCents",
   adj.total::text as "adjustmentsCents", (b.base_responsibility_cents + adj.total)::text as "responsibilityCents",
-  (b.base_responsibility_cents + adj.total)::text as "openBalanceCents",
+  pay.total::text as "appliedCents", (b.base_responsibility_cents + adj.total - pay.total)::text as "openBalanceCents",
+  greatest(pay.total - (b.base_responsibility_cents + adj.total), 0)::text as "creditCents",
   b.amount_status as "amountStatus", b.amount_source as "amountSource", b.source_note as "sourceNote", b.notes,
   m.name as "memberName", p.name as "providerName", b.member_name_snapshot as "memberNameAtEntry",
   b.provider_name_snapshot as "providerNameAtEntry", (m.archived_at is not null) as "memberArchived",
@@ -210,6 +217,8 @@ export interface BillTotals {
   billCount: number; confirmedCount: number; estimateCount: number; awaitingVisitCount: number;
   confirmedResponsibilityCents: string; estimatedResponsibilityCents: string;
   confirmedOpenBalanceCents: string; estimatedOpenBalanceCents: string;
+  /** Provider credits (net applied above responsibility), summed over confirmed bills. */
+  confirmedCreditCents: string;
 }
 
 /** One consistent aggregate over the filtered bills. Confirmed and estimated amounts are never summed together. */
@@ -223,8 +232,9 @@ export async function billTotals(db: Queryable, householdId: string, f: Omit<Bil
        (count(*) filter (where b.visit_id is null))::int as "awaitingVisitCount",
        coalesce(sum(b.base_responsibility_cents + adj.total) filter (where b.amount_status = 'confirmed'), 0)::text as "confirmedResponsibilityCents",
        coalesce(sum(b.base_responsibility_cents + adj.total) filter (where b.amount_status = 'estimate'), 0)::text as "estimatedResponsibilityCents",
-       coalesce(sum(b.base_responsibility_cents + adj.total) filter (where b.amount_status = 'confirmed'), 0)::text as "confirmedOpenBalanceCents",
-       coalesce(sum(b.base_responsibility_cents + adj.total) filter (where b.amount_status = 'estimate'), 0)::text as "estimatedOpenBalanceCents"
+       coalesce(sum(b.base_responsibility_cents + adj.total - pay.total) filter (where b.amount_status = 'confirmed'), 0)::text as "confirmedOpenBalanceCents",
+       coalesce(sum(b.base_responsibility_cents + adj.total - pay.total) filter (where b.amount_status = 'estimate'), 0)::text as "estimatedOpenBalanceCents",
+       coalesce(sum(greatest(pay.total - (b.base_responsibility_cents + adj.total), 0)) filter (where b.amount_status = 'confirmed'), 0)::text as "confirmedCreditCents"
      ${BILL_FROM} where ${where.join(' and ')}`, params);
   return rows[0]!;
 }
@@ -232,6 +242,8 @@ export async function billTotals(db: Queryable, householdId: string, f: Omit<Bil
 export interface BillLock {
   id: string; memberId: string; providerId: string; visitId: string | null; version: number;
   originalCents: bigint; baseResponsibilityCents: bigint; amountStatus: 'estimate' | 'confirmed'; adjustmentsCents: bigint;
+  /** Net applied payments, read after the lock so it cannot change under the caller. */
+  appliedCents: bigint;
 }
 
 /**
@@ -251,13 +263,22 @@ export async function lockBills(db: Queryable, householdId: string, ids: string[
   for (const r of rows) {
     const total = await db.query<{ total: string }>(
       `select coalesce(sum(amount_cents), 0)::text as total from bill_adjustments where household_id = $1 and bill_id = $2`, [householdId, r.id]);
+    const applied = await db.query<{ total: string }>(
+      `select coalesce(sum(amount_cents), 0)::text as total from payment_entries where household_id = $1 and bill_id = $2`, [householdId, r.id]);
     out.push({
       id: r.id, memberId: r.member_id, providerId: r.provider_id, visitId: r.visit_id, version: r.version,
       originalCents: BigInt(r.original_cents), baseResponsibilityCents: BigInt(r.base_responsibility_cents),
-      amountStatus: r.amount_status, adjustmentsCents: BigInt(total.rows[0]!.total),
+      amountStatus: r.amount_status, adjustmentsCents: BigInt(total.rows[0]!.total), appliedCents: BigInt(applied.rows[0]!.total),
     });
   }
   return out;
+}
+
+/** Several bills with their figures, for plan and payment screens. */
+export async function getBills(db: Queryable, householdId: string, ids: string[]): Promise<Bill[]> {
+  const { rows } = await db.query<Bill>(
+    `select ${BILL_COLS} ${BILL_FROM} where b.household_id = $1 and b.id = any($2::uuid[]) order by b.statement_date desc, b.id desc`, [householdId, ids]);
+  return rows;
 }
 
 export async function insertBill(db: Queryable, v: {
@@ -403,14 +424,14 @@ export interface HistoryEvent {
   detail: Record<string, string | number | boolean | null>;
 }
 
-/** Chronological audit events for a bill and its adjustments. */
+/** Audit events for a bill, its adjustments and payment allocations, in audit sequence order (not transaction-start clocks). */
 export async function billHistory(db: Queryable, householdId: string, billId: string): Promise<HistoryEvent[]> {
   const { rows } = await db.query<HistoryEvent>(
     `select e.id::text, e.action, e.entity_type as "entityType", e.entity_id as "entityId", u.display_name as "actorName",
        e.occurred_at as "occurredAt", e.detail
      from audit_events e left join users u on u.id = e.actor_user_id
      where e.household_id = $1 and ((e.entity_type = 'bill' and e.entity_id = $2)
-       or (e.entity_type = 'bill_adjustment' and e.detail ->> 'billId' = $2))
-     order by e.occurred_at, e.id`, [householdId, billId]);
+       or (e.entity_type in ('bill_adjustment', 'payment_allocation') and e.detail ->> 'billId' = $2))
+     order by e.id`, [householdId, billId]);
   return rows;
 }
