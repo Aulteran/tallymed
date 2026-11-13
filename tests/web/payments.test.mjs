@@ -470,7 +470,7 @@ test('upgrade: migration 0005 applies over earlier expense data without changing
     const bill = (await db.pool.query(
       `insert into bills (household_id, member_id, provider_id, statement_date, original_cents, base_responsibility_cents, amount_source, member_name_snapshot, provider_name_snapshot, created_by,
          amount_status, confirmed_at, confirmed_by) values ($1, $2, $3, '2026-03-01', 12345, 12345, 'statement', 'Pat Example', 'Example Clinic', $4, 'confirmed', now(), $4) returning id`, [h, mem, prov, u])).rows[0].id;
-    assert.deepEqual(await migrate(db.pool), ['0005']);
+    assert.deepEqual(await migrate(db.pool, { upTo: '0005' }), ['0005']);
     const { getBill } = await import('../../apps/web/server/repositories/expenses.ts');
     const b = await getBill(db.pool, h, bill);
     assert.deepEqual([b.responsibilityCents, b.appliedCents, b.openBalanceCents, b.creditCents], ['12345', '0', '12345', '0']);

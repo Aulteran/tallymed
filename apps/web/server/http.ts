@@ -8,6 +8,7 @@ import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
 import * as expenses from './services/expenses.ts';
+import * as hsa from './services/hsa.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
@@ -351,7 +352,22 @@ const MONEY_ACTIONS: Record<string, {
   'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },
 };
 
-const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS }).map(([name, a]) => [name, route({
+const allocationOf = (b: Record<string, unknown>) => `/hsa/allocations/${str(b.allocationId)}`;
+const claimOf = (b: Record<string, unknown>) => `/hsa/claims/${str(b.claimId)}`;
+const receiptOf = (b: Record<string, unknown>) => `/hsa/receipts/${str(b.receiptId)}`;
+// HSA reimbursements use the same pipeline and allow-list. A failed form returns to the page it came from.
+const HSA_ACTIONS: Record<string, {
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string) => string; keep?: string[];
+}> = {
+  'hsa/decide': { service: hsa.recordDecision, error: allocationOf, keep: ['status', 'eligibleAmount', 'rationale', 'evidenceType', 'evidenceNote', 'contextNote', 'decidedOn'], ok: allocationOf },
+  'hsa/claim': { service: hsa.submitClaim, error: allocationOf, keep: ['submittedOn', 'administrator', 'reference', 'note', 'amount'], ok: (_b, id) => `/hsa/claims/${id}` },
+  'hsa/release': { service: hsa.releaseClaimLine, error: claimOf, keep: ['kind', 'amount', 'effectiveDate', 'reason'], ok: claimOf },
+  'hsa/receipt': { service: hsa.recordReceipt, error: claimOf, keep: ['receivedOn', 'source', 'reference', 'note', 'lineId', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
+  'hsa/external-receipt': { service: hsa.recordExternalReceipt, error: allocationOf, keep: ['receivedOn', 'source', 'reference', 'note', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
+  'hsa/receipt-reverse': { service: hsa.reverseReceipt, error: receiptOf, keep: ['effectiveDate', 'reason'], ok: receiptOf },
+};
+
+const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS }).map(([name, a]) => [name, route({
   name: `expenses.${name}`,
   session: true,
   errorPath: a.error,
@@ -359,7 +375,7 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   async run({ ctx, actor, body, requestId, req }) {
     const result = await a.service(ctx.pool, actor!, body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id)) };
-    return { json: { ok: true, ...result }, status: name.endsWith('/create') ? 201 : 200 };
+    return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
 
@@ -368,4 +384,29 @@ export async function handleExpenseAction(req: Request, ctx: AppContext, action:
   const handler = expenseRoutes.get(action);
   if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
   return handler(req, ctx);
+}
+
+
+/**
+ * Scoped HSA export (GET, read-only). Authenticates by session cookie, reads one consistent snapshot and answers with a CSV that is
+ * never cached. State changes stay POST-only with CSRF; a GET cannot change anything.
+ */
+export async function handleHsaExport(req: Request, ctx: AppContext): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
+    const client = clientInfo(req.headers, ctx.config);
+    assertTransport(req.headers, ctx.config, client);
+    const session = await pageActor(ctx, req.headers);
+    if (!session) throw new AppError('unauthenticated');
+    const query = Object.fromEntries(new URL(req.url).searchParams);
+    const out = await hsa.exportHsa(ctx.pool, session.actor, query, requestId);
+    return new Response(out.csv, {
+      status: 200,
+      headers: { ...BASE_HEADERS, 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${out.filename}"` },
+    });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code === 'internal') logError('http.hsa.export', error, { requestId });
+    return errorResponse(req, null, error, null);
+  }
 }

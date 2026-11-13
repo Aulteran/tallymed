@@ -61,3 +61,34 @@ Implemented in `apps/web/server/repositories/payments.ts`, `repositories/plans.t
 - `installment_matches` is a signed, immutable ledger referencing an existing allocation. A match never creates or moves cash. Matches per installment stay between zero and its amount; matches per allocation (current revisions, all plans) never exceed the allocation's net cash. A refund or allocation reversal that shrinks an allocation releases the excess matches in the same transaction (latest due date first).
 - A revision carries matches forward onto the new installments in due-date order as new rows marked `carried`; earlier revisions keep their history. The new total cannot be below what is matched.
 - Status is derived from posted rows and an `asOf` date: `paid`, `partial` or `unpaid`, plus overdue when the due date is before `asOf` and part is unpaid.
+
+## HSA reimbursements (M04)
+
+Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` (and the SQL view `hsa_allocation_status`) is the stable read interface for reports, exports and the MCP.
+
+### Figures
+
+One row per payment allocation, all amounts decimal strings of integer cents, newest payment first with a `nextCursor` (follow it for every row):
+
+| Field | Meaning |
+| --- | --- |
+| `netCents` | Net cash of the allocation (M03 `netCents`). |
+| `decisionStatus` | Current eligibility decision (`eligible`, `ineligible`, `pending`) or `null` for unknown. |
+| `ceilingCents` | `least(decided eligible cents, netCents)`. Zero when unknown, pending or ineligible. |
+| `pendingCents` | Reserves less receipts, rejects and cancels. |
+| `receivedCents` | Receipts and external receipts less receipt reversals. |
+| `availableCents` | `max(0, ceiling - pending - received)`. |
+| `needsReviewCents` | `max(0, pending + received - ceiling)`. A positive value freezes new claims for the allocation. |
+
+HSA rows never alter bill, payment or plan figures. A receipt is not household cash.
+
+### Entries and locking
+
+- `hsa_entries` is immutable and append-only. Kinds: `reserve` (a claim line, `line_id = id`), `receipt` (pays a line, receipt origin `claim`), `external_receipt` (no line, receipt origin `external`, needs source and evidence), `receipt_reversal` (exactly offsets one receipt entry, once, and covers the whole receipt), `reject` and `cancel` (release a line's reservation). Entries reference the allocation with the composite key `(household_id, payment_id, allocation_id, bill_id)` on `payment_entries`.
+- HSA writers lock the payments behind their allocations with `lockPaymentsForMoney` (ascending id) before reading figures, take no bill or plan lock and so cannot break the global order payments, bills, plans. Deferred guards on `hsa_entries` and `hsa_eligibility_decisions` lock the payment row first and re-check at commit: pending and received never negative, each line between zero and its reservation, reservations and external receipts within the ceiling (which also freezes a payment in needs review), receipts allocated in full, reversals covering the whole receipt, and a decision within the net cash. Raw SQL writers touching several payments must lock them in ascending id order.
+- Idempotency operations: `hsa.decide`, `hsa.claim`, `hsa.release`, `hsa.receipt`, `hsa.external_receipt`, `hsa.receipt_reverse`. Result IDs: the decision, the claim, the release entry, the receipt, the receipt, the reversal event.
+- Audit actions are `hsa.*` with `allocationId`, `claimId`, `lineId` or `receiptId` in `detail` and before and after cents; free text is never copied.
+
+### Export
+
+`GET /api/hsa/export?kind=allocations|events|decisions&memberId&providerId&from&to` returns a CSV read from one repeatable-read snapshot. `allocations` ends with a `TOTAL` row equal to the sum of its rows; `events` carries `pending_effect_cents` and `received_effect_cents` so the figures rebuild from the history. Text cells that could be read as formulas are prefixed with a quote. Exports above 20,000 rows fail closed.

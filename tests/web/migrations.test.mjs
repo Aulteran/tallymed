@@ -21,7 +21,7 @@ test('fresh migration creates the schema and is idempotent', { skip: skipDb }, a
   try {
     const applied = await migrate(db.pool);
     assert.deepEqual(applied, listMigrations().map((m) => m.version));
-    for (const t of ['households', 'users', 'sessions', 'audit_events', 'bootstrap_state', 'invitations', 'login_attempts', 'schema_migrations', 'family_members', 'providers', 'visits', 'bills', 'bill_adjustments', 'idempotency_records', 'payments', 'payment_entries', 'payment_voids', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches']) {
+    for (const t of ['households', 'users', 'sessions', 'audit_events', 'bootstrap_state', 'invitations', 'login_attempts', 'schema_migrations', 'family_members', 'providers', 'visits', 'bills', 'bill_adjustments', 'idempotency_records', 'payments', 'payment_entries', 'payment_voids', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches', 'hsa_eligibility_decisions', 'hsa_claims', 'hsa_receipts', 'hsa_entries']) {
       assert.ok((await tables(db.pool)).includes(t), t);
     }
     assert.deepEqual(await migrate(db.pool), []);

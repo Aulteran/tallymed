@@ -32,6 +32,29 @@ export async function withTransaction<T>(pool: Pool, fn: (client: pg.PoolClient)
   }
 }
 
+/**
+ * Runs read-only queries against one consistent snapshot (repeatable read), so a multi-table export or report cannot mix rows
+ * from before and after a concurrent write.
+ */
+export async function withSnapshot<T>(pool: Pool, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin isolation level repeatable read read only');
+    const result = await fn(client);
+    await client.query('commit');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('rollback');
+    } catch {
+      // Keep the original error.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function isUniqueViolation(error: unknown, constraint?: string): boolean {
   const e = error as { code?: string; constraint?: string };
   return e?.code === '23505' && (constraint === undefined || e.constraint === constraint);
