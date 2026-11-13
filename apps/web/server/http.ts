@@ -230,6 +230,8 @@ function route(opts: {
   readBody?: (req: Request, ctx: AppContext) => Promise<Record<string, unknown>>;
   /** Authenticate before reading the body, so an unauthenticated caller cannot make the server buffer a large upload. */
   authBeforeBody?: boolean;
+  /** Runs right after authentication and before the body is read (a per-user limit can refuse without buffering the upload). */
+  beforeBody?: (actor: Actor) => void;
   /** Redirect browser form posts back with an error code even for size and type failures. */
   redirectAllErrors?: boolean;
   run: (input: RouteInput) => Promise<RouteResult>;
@@ -248,7 +250,10 @@ function route(opts: {
         actor = await authenticate(ctx.pool, ctx.config, sessionToken);
         if (!actor || !sessionToken) throw new AppError('unauthenticated');
       };
-      if (opts.session && opts.authBeforeBody) await signIn();
+      if (opts.session && opts.authBeforeBody) {
+        await signIn();
+        if (opts.beforeBody) opts.beforeBody(actor!);
+      }
       body = opts.readBody ? await opts.readBody(req, ctx) : await readBody(req);
       if (opts.session) {
         if (!opts.authBeforeBody) await signIn();
@@ -538,6 +543,7 @@ const documentRoutes = new Map(Object.entries(DOCUMENT_ACTIONS).map(([name, a]) 
   redirectAllErrors: true,
   ...(a.upload ? {
     authBeforeBody: true,
+    beforeBody: (actor: Actor) => checkUploadRate(actor.userId),
     readBody: (req: Request, ctx: AppContext) => readMultipart(req, ctx.config.documentMaxBytes),
   } : {}),
   async run({ ctx, actor, body, requestId, req }) {
@@ -566,6 +572,20 @@ export async function handleDocumentAction(req: Request, ctx: AppContext, action
 }
 
 export const MAX_CONCURRENT_UPLOADS = 4;
+
+/** At most this many upload attempts (accepted or refused) per person per minute, so no one can keep the server busy scanning files. */
+export const MAX_UPLOADS_PER_MINUTE = 30;
+const uploadAttempts = new Map<string, number[]>();
+function checkUploadRate(userId: string, now = Date.now()): void {
+  const recent = (uploadAttempts.get(userId) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= MAX_UPLOADS_PER_MINUTE) {
+    uploadAttempts.set(userId, recent);
+    throw new AppError('busy', 'busy', 30);
+  }
+  recent.push(now);
+  uploadAttempts.set(userId, recent);
+  if (uploadAttempts.size > 5000) for (const [k, v] of uploadAttempts) if (v.every((t) => now - t >= 60_000)) uploadAttempts.delete(k);
+}
 let uploadsInFlight = 0;
 
 /** Types a browser may render inline. PDFs are always downloaded: an in-browser PDF viewer is active content. */

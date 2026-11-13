@@ -41,7 +41,7 @@ test('PDFs with active content, archive trailers or hidden names are refused', (
   assert.equal(sniffMediaType(pdf({ body: '/J#61vaScript 1 0 R' })), null, 'escaped name');
   assert.equal(sniffMediaType(Buffer.concat([pdf(), Buffer.from('\nPK\x05\x06' + '\0'.repeat(18))])), null, 'ZIP end record (polyglot)');
   assert.equal(sniffMediaType(Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n')), null, 'no EOF marker');
-  assert.equal(sniffMediaType(pdf({ body: '/Title (JavaScripture)' })), 'application/pdf', 'harmless text is allowed');
+  assert.equal(sniffMediaType(pdf({ body: '/Subject (JavaScripture)' })), 'application/pdf', 'harmless text is allowed');
 });
 
 test('declared type, extension and size must agree with the content', () => {
@@ -147,6 +147,12 @@ test('active content hidden in compressed object streams is found, and uninspect
   assert.equal(sniffMediaType(objStmPdf('x', { extra: '/DecodeParms << /Predictor 12 >>' })), null, 'predictor changes the decoded bytes');
   assert.equal(sniffMediaType(objStmPdf('x', { data: Buffer.from('not flate data') })), null, 'corrupt stream');
   assert.equal(sniffMediaType(objStmPdf('', { data: deflateSync(Buffer.alloc(80 * 1024 * 1024)) })), null, 'expansion beyond the budget');
+  // N2) the inflate budget bounds the synchronous work one small upload can cause
+  const tokens = (mb) => '1 0 << /A 1 >> '.repeat(Math.floor((mb * 1024 * 1024) / 15));
+  assert.equal(sniffMediaType(objStmPdf(tokens(8))), 'application/pdf', '8 MB of object data is accepted');
+  const t0 = process.hrtime.bigint();
+  assert.equal(sniffMediaType(objStmPdf(tokens(40))), null, '40 MB of object data is over the budget');
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 500, 'refused quickly');
 });
 
 test('large scanned PDFs are not refused because compressed or binary stream data happens to contain a two-byte name', () => {
@@ -176,6 +182,12 @@ test('names are recognised as a reader sees them: fake stream markers, comments 
   assert.equal(sniffMediaType(wrap(`% stream\n(stream\n)\n1 0 obj\n${js}\nendobj\n(endstream)`)), null);
   // A real stream whose dictionary is followed by hidden objects after its (verified) length
   assert.equal(sniffMediaType(wrap(`2 0 obj\n<< /Length 3 >>\nstream\nabc\nendstream\nendobj\n1 0 obj\n${js}\nendobj`)), null);
+  // N1) a repeated /Length, or a /Length that ends after an earlier `endstream`, makes readers disagree about where objects are
+  const hidden = '2 0 obj\n<< /Type /Catalog /Pages 3 0 R /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>\nendobj\n3 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n';
+  const body = `abc\nendstream\nendobj\n${hidden}`;
+  assert.equal(sniffMediaType(wrap(`1 0 obj\n<< /Length 3 /Length ${body.length} >>\nstream\n${body}\nendstream\nendobj`)), null, 'duplicate /Length');
+  assert.equal(sniffMediaType(wrap(`1 0 obj\n<< /Length ${body.length} >>\nstream\n${body}\nendstream\nendobj`)), null, 'length ends after an earlier endstream');
+  assert.equal(sniffMediaType(wrap(`1 0 obj\n<< /Length ${body.length} /Length 3 >>\nstream\n${body}\nendstream\nendobj`)), null, 'duplicate /Length, other order');
   // B/C) an object stream whose dictionary holds strings that used to confuse the dictionary search
   const evil = deflateSync(Buffer.from(`1 0 ${js}`, 'latin1'));
   const objstm = (extra, data = evil) => Buffer.concat([
@@ -189,6 +201,25 @@ test('names are recognised as a reader sees them: fake stream markers, comments 
   assert.equal(sniffMediaType(objstm('/X (obj)', launch)), null, 'Launch inside an object stream');
   // a stream keyword inside a string must not swallow the objects after it
   assert.equal(sniffMediaType(wrap(`1 0 obj\n<< /Title (stream\n) >>\nendobj\n2 0 obj\n${js}\nendobj\n3 0 obj\n<< /T (\nendstream) >>`)), null);
+  // Duplicate keys in any dictionary are ambiguous and refused; /Type /Catalog written twice, escaped duplicates included
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /Type /Catalog >>\nendobj')), null, 'duplicate key');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Pages 2 0 R /P#61ges 3 0 R >>\nendobj')), null, 'duplicate key through a name escape');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /A << /X 1 >> /B << /X 2 >> /C [ << /X 1 /Y 2 >> << /X 3 >> ] /D 1 0 R /E 2 0 R >>\nendobj')), 'application/pdf', 'the same key in different dictionaries');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /A 1 /B >>\nendobj')), 'application/pdf', 'a key without a value is not a duplicate');
+  // N3) /OpenAction with a view destination (an array) is harmless and allowed; an action dictionary or reference is not
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /OpenAction [3 0 R /XYZ null null 0] >>\nendobj')), 'application/pdf', 'array destination');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /OpenAction [3 0 R /Fit] >>\nendobj')), 'application/pdf', 'fit destination');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /OpenAction 5 0 R >>\nendobj')), null, 'reference to an object that may be an action');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /OpenAction << /S /GoTo /D [3 0 R /Fit] >> >>\nendobj')), null, 'action dictionary');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Type /Catalog /OpenAction [3 0 R /Fit] /AA << >> >>\nendobj')), null, 'additional actions');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /OpenAction >>\nendobj')), null, 'OpenAction with nothing after it');
+  // Milestone N2) an object stream needs a direct /Length that ends at `endstream`; an indirect one cannot be verified
+  const ind = deflateSync(Buffer.from('1 0 << /Type /Catalog >>'));
+  const indirect = Buffer.concat([
+    Buffer.from('%PDF-1.5\n4 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length 9 0 R /Filter /FlateDecode >>\nstream\n', 'latin1'),
+    ind, Buffer.from('\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n', 'latin1'),
+  ]);
+  assert.equal(sniffMediaType(indirect), null, 'object stream with an indirect /Length');
   // B4) file attachments without an /EmbeddedFile name
   assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Subtype /FileAttachment /FS << /EF << /F 2 0 R >> >> >>\nendobj')), null);
   assert.equal(sniffMediaType(wrap('1 0 obj\n<< /FS << /EF << /F 2 0 R >> >> >>\nendobj')), null);

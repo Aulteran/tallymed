@@ -721,6 +721,23 @@ test('browser form posts get a redirect with a message when busy or when an atta
   }
 });
 
+test('one person cannot upload more than the per-minute limit, and the limit is per person', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const other = await t.other();
+    const statuses = [];
+    for (let i = 0; i < handlers.MAX_UPLOADS_PER_MINUTE + 3; i++) statuses.push((await t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE())).status);
+    assert.equal(statuses.filter((s) => s === 201).length, handlers.MAX_UPLOADS_PER_MINUTE);
+    assert.deepEqual(statuses.slice(handlers.MAX_UPLOADS_PER_MINUTE), [429, 429, 429]);
+    const refused = await t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE());
+    assert.equal(refused.headers.get('retry-after'), '30');
+    // Someone else is not affected.
+    assert.equal((await t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE(), { cookie: other.cookie, csrf: other.csrf })).status, 201);
+  } finally {
+    await t.drop();
+  }
+});
+
 test('link history keeps links to removed documents, and attach pins the version the person saw', { skip: skipDb }, async () => {
   const t = await docFixture();
   try {

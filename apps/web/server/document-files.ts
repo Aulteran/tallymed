@@ -117,9 +117,9 @@ NAME_START[0x23] = 1;
 
 const MAX_OBJSTMS = 4096;
 const MAX_DEPTH = 64;
-const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
+const MAX_INFLATED_TOTAL = 16 * 1024 * 1024;
 
-interface DictInfo { objstm: boolean; filter: boolean; flate: number; other: boolean; predictor: boolean; len: number; lenState: number }
+interface DictInfo { objstm: boolean; filter: boolean; flate: number; other: boolean; predictor: boolean; len: number; lenState: number; lenKeys: number }
 interface ScanState { budget: number; objstms: number }
 
 const unescapeName = (s: string) => s.replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
@@ -150,11 +150,45 @@ function validPdf(b: Buffer): boolean {
  */
 function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
   const n = b.length;
-  const stack: number[] = []; // 0x3c for a dictionary, 0x5b for an array
+  // Open containers: kind (0x3c dictionary, 0x5b array), the keys seen so far (dictionaries) and where the dictionary is in its
+  // key/value rhythm: 0 expects a key, 1 expects the start of a value, 2 and 3 follow the first and second integer of `N G R`.
+  const kinds: number[] = [];
+  const keys: (Set<string> | null)[] = [];
+  const states: number[] = [];
   let cur: DictInfo | null = null;
   let last: DictInfo | null = null;
   let afterDict = false;
+  let openAction = false;
   let i = 0;
+
+  /** A value that is not a name or a container (number, string, keyword). Returns false when it sits where a key must be. */
+  const value = (kind: 0 | 1 | 2): boolean => { // 0 other, 1 integer, 2 the keyword R
+    const d = kinds.length - 1;
+    if (d < 0 || kinds[d] !== 0x3c) return true;
+    const s = states[d]!;
+    if (s === 0) return false;
+    states[d] = s === 1 && kind === 1 ? 2 : s === 2 && kind === 1 ? 3 : 0;
+    return true;
+  };
+  /** A container opens in value position; closing it completes the parent's value. */
+  const open = (kind: number): boolean => {
+    const d = kinds.length - 1;
+    if (d >= MAX_DEPTH) return false;
+    if (d >= 0 && kinds[d] === 0x3c && states[d] !== 1) return false;
+    kinds.push(kind);
+    keys.push(null);
+    states.push(0);
+    return true;
+  };
+  const close = (kind: number): boolean => {
+    if (kinds.pop() !== kind) return false;
+    keys.pop();
+    states.pop();
+    const d = kinds.length - 1;
+    if (d >= 0 && kinds[d] === 0x3c) states[d] = 0;
+    return true;
+  };
+
   while (i < n) {
     const c = b[i]!;
     if (WS[c]) { i++; continue; }
@@ -164,7 +198,12 @@ function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
     }
     const hadDict = afterDict;
     afterDict = false;
-    const top = stack.length === 1 && stack[0] === 0x3c ? cur : null;
+    // /OpenAction may only be followed by an array (a view destination); a dictionary or reference could be an action.
+    if (openAction) {
+      if (c !== 0x5b) return false;
+      openAction = false;
+    }
+    const top = kinds.length === 1 && kinds[0] === 0x3c ? cur : null;
     // Position in `/Length N` or `/Length N G R` (indirect) while directly inside the object's dictionary.
     const lenStep = (isInt: boolean, text: string | null) => {
       if (!top || top.lenState === 0) return;
@@ -182,33 +221,32 @@ function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
         else if (ch === 0x29) { if (--nest === 0) break; j++; }
         else j++;
       }
-      if (j >= n) return false;
+      if (j >= n || !value(0)) return false;
       lenStep(false, null);
       i = j + 1;
     } else if (c === 0x3c) {
       if (b[i + 1] === 0x3c) {
-        if (stack.length >= MAX_DEPTH) return false;
-        if (stack.length === 0) cur = { objstm: false, filter: false, flate: 0, other: false, predictor: false, len: -1, lenState: 0 };
+        const fresh = kinds.length === 0;
+        if (!open(0x3c)) return false;
+        if (fresh) cur = { objstm: false, filter: false, flate: 0, other: false, predictor: false, len: -1, lenState: 0, lenKeys: 0 };
         lenStep(false, null);
-        stack.push(0x3c);
         i += 2;
       } else {
         const j = b.indexOf(0x3e, i + 1);
-        if (j < 0) return false;
+        if (j < 0 || !value(0)) return false;
         lenStep(false, null);
         i = j + 1;
       }
     } else if (c === 0x3e) {
-      if (b[i + 1] !== 0x3e || stack.pop() !== 0x3c) return false;
+      if (b[i + 1] !== 0x3e || !close(0x3c)) return false;
       i += 2;
-      if (stack.length === 0) { last = cur; afterDict = true; }
+      if (kinds.length === 0) { last = cur; afterDict = true; }
     } else if (c === 0x5b) {
-      if (stack.length >= MAX_DEPTH) return false;
+      if (!open(0x5b)) return false;
       lenStep(false, null);
-      stack.push(0x5b);
       i++;
     } else if (c === 0x5d) {
-      if (stack.pop() !== 0x5b) return false;
+      if (!close(0x5b)) return false;
       i++;
     } else if (c === 0x7b || c === 0x7d) {
       i++;
@@ -219,52 +257,76 @@ function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
       let hash = false;
       while (j < n && !WS[b[j]!] && !DELIM[b[j]!]) { if (b[j] === 0x23) hash = true; j++; }
       const len = j - i - 1;
-      if (len > 0 && len <= 42 && (hash ? true : len <= 14 && NAME_START[b[i + 1]!]!)) {
+      const d = kinds.length - 1;
+      const inDict = d >= 0 && kinds[d] === 0x3c;
+      const isKey = inDict && states[d] !== 1; // key position (after a complete value, including `N G R`)
+      let name: string | null = null;
+      if (isKey || (len > 0 && len <= 42 && (hash || (len <= 14 && NAME_START[b[i + 1]!]!)))) {
         const raw = b.toString('latin1', i + 1, j);
-        const name = hash ? unescapeName(raw) : raw;
-        if (FORBIDDEN_NAMES.has(name)) return false;
-        if (cur && stack.length > 0 && DICT_NAMES.has(name)) {
-          const top = cur;
-          if (name === 'ObjStm') top.objstm = true;
-          else if (name === 'Filter') top.filter = true;
-          else if (name === 'FlateDecode' || name === 'Fl') top.flate++;
-          else if (name === 'Predictor') top.predictor = true;
-          else if (OTHER_FILTERS.has(name)) top.other = true;
+        name = hash ? unescapeName(raw) : raw;
+      }
+      if (name !== null) {
+        if (name === 'OpenAction') openAction = true;
+        else if (FORBIDDEN_NAMES.has(name)) return false;
+        if (kinds.length > 0 && cur && DICT_NAMES.has(name)) {
+          if (name === 'ObjStm') cur.objstm = true;
+          else if (name === 'Filter') cur.filter = true;
+          else if (name === 'FlateDecode' || name === 'Fl') cur.flate++;
+          else if (name === 'Predictor') cur.predictor = true;
+          else if (OTHER_FILTERS.has(name)) cur.other = true;
         }
       }
-      if (top) top.lenState = len === 6 && b.toString('latin1', i + 1, j) === 'Length' ? 1 : 0;
+      if (inDict) {
+        if (isKey) {
+          // A repeated key is ambiguous: readers disagree about which of the two counts.
+          let seen = keys[d]!;
+          if (!seen) keys[d] = seen = new Set();
+          if (seen.has(name!)) return false;
+          seen.add(name!);
+          states[d] = 1;
+        } else {
+          states[d] = 0;
+        }
+      }
+      if (top) {
+        top.lenState = isKey && name === 'Length' ? 1 : 0;
+        if (top.lenState === 1) top.lenKeys++;
+      }
       i = j;
     } else { // keyword or number
       let j = i + 1;
       while (j < n && !WS[b[j]!] && !DELIM[b[j]!]) j++;
       const len = j - i;
       if (len === 6 && b.toString('latin1', i, j) === 'stream') {
-        if (inObjStm || stack.length !== 0 || !hadDict || !last) return false;
+        if (inObjStm || kinds.length !== 0 || !hadDict || !last) return false;
         let start: number;
         if (b[j] === 13 && b[j + 1] === 10) start = j + 2;
         else if (b[j] === 10) start = j + 1;
         else return false;
-        let bodyEnd = -1;
-        let next = -1;
+        // The first `endstream` after the body starts. A direct /Length must end exactly there: if it ends later, readers that
+        // trust the keyword and readers that trust the length would parse different objects, so the file is refused.
+        const idx = b.indexOf('endstream', start, 'latin1');
+        if (idx < 0) return false;
+        let bodyEnd = idx;
+        let verified = false;
         if (last.len >= 0 && start + last.len <= n) {
           let p = start + last.len;
           const stop = p + 4;
           while (p < stop && p < n && WS[b[p]!]) p++;
-          if (b.toString('latin1', p, p + 9) === 'endstream') { bodyEnd = start + last.len; next = p + 9; }
-        }
-        if (next < 0) { // no usable direct /Length: the first `endstream` ends the body, as a reader recovers
-          const idx = b.indexOf('endstream', start, 'latin1');
-          if (idx < 0) return false;
-          bodyEnd = idx;
-          next = idx + 9;
+          if (b.toString('latin1', p, p + 9) === 'endstream') {
+            if (p !== idx) return false;
+            bodyEnd = start + last.len;
+            verified = true;
+          }
         }
         if (last.objstm) {
-          if (++st.objstms > MAX_OBJSTMS) return false;
+          // Its body is decoded and read, so where it ends must not depend on which reader looks (a literal `endstream` inside
+          // compressed data could otherwise steer the scan): a direct /Length that ends at `endstream` is required.
+          if (!verified || ++st.objstms > MAX_OBJSTMS) return false;
           let body = b.subarray(start, bodyEnd);
           if (last.filter) {
             if (last.flate !== 1 || last.other || last.predictor || st.budget < 1) return false;
             try {
-              // An end-of-line marker sits between the data and `endstream`; Flate input ends at its own checksum.
               body = inflateSync(body, { finishFlush: 2 /* Z_SYNC_FLUSH */, maxOutputLength: st.budget });
             } catch {
               return false;
@@ -273,17 +335,18 @@ function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
           st.budget -= body.length;
           if (st.budget < 0 || !scanPdf(body, st, true)) return false;
         }
-        i = next;
+        i = idx + 9;
         last = null;
         continue;
       }
       let isInt = len <= 10;
       for (let k = i; isInt && k < j; k++) if (b[k]! < 48 || b[k]! > 57) isInt = false;
+      if (!value(isInt ? 1 : len === 1 && b[i] === 82 ? 2 : 0)) return false;
       lenStep(isInt, top && top.lenState > 0 ? b.toString('latin1', i, j) : null);
       i = j;
     }
   }
-  return stack.length === 0;
+  return kinds.length === 0 && !openAction;
 }
 
 /** True when an end-of-central-directory record sits within the maximum distance from the end (a ZIP polyglot). */
