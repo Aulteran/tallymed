@@ -25,6 +25,8 @@ services:
       TALLYMED_CANONICAL_ORIGIN: ${TALLYMED_CANONICAL_ORIGIN:-http://127.0.0.1:3001}
       TALLYMED_PROXY_SECRET: ${TALLYMED_PROXY_SECRET:-}
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
+      # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
+      TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
       # Private document volume (outside the web root). Backed up together with PostgreSQL.
       TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
     volumes:

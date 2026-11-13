@@ -15,6 +15,7 @@ import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
+import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
@@ -356,6 +357,18 @@ export const handleAcceptInvitation = route({
   async run({ ctx, body, requestId, req }) {
     await acceptInvitation(ctx.pool, body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?notice=account_created') };
+    return { json: { ok: true }, status: 201 };
+  },
+});
+
+export const handleSetup = route({
+  name: 'setup',
+  session: false,
+  errorPath: () => '/setup',
+  keepFields: ['householdName', 'displayName', 'email'],
+  async run({ ctx, body, client, requestId, req }) {
+    await completeSetup(ctx.pool, ctx.config, body, { ip: client.ip, requestId });
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?notice=setup_complete') };
     return { json: { ok: true }, status: 201 };
   },
 });

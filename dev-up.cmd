@@ -1,7 +1,9 @@
 @echo off
 rem TallyMed local launcher for Windows (development only, fabricated data only).
 rem Services from compose.yaml: db (PostgreSQL, pg_isready health check) and web (/healthz). The optional mcp profile is not started.
-rem This app has no first-run setup token: the first administrator is created with the bootstrap command (docs/development.md).
+rem First-run setup: while no administrator exists, the launcher generates a one-time setup token, hands it to the web container for this
+rem start only and prints it on screen once. It is never written to .env, a log or a temporary file. If you define TALLYMED_SETUP_TOKEN
+rem yourself (.env or environment) that value is used and not displayed.
 setlocal EnableExtensions
 cd /d "%~dp0"
 title TallyMed dev-up
@@ -111,8 +113,25 @@ if errorlevel 1 ( echo Database did not become healthy. & del "%TMPOUT%" >nul 2>
 docker compose run --rm web node apps/web/cli/migrate.ts > "%TMPOUT%" 2>&1
 if errorlevel 1 ( echo Database migration failed: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
 del "%TMPOUT%" >nul 2>&1
+rem Setup state: SETUPSTATE is needed, done or unknown. The token exists only in SETUPTOK and, for the one compose command below, in the environment.
+set "SETUPSTATE=unknown"
+set "SETUPTOK="
+set "BSCOUNT="
+for /f "usebackq delims=" %%n in (`docker compose exec -T db psql -U tallymed -d tallymed -tAc "select count(*) from bootstrap_state" 2^>nul`) do set "BSCOUNT=%%n"
+if defined BSCOUNT set "SETUPSTATE=done"
+if "%BSCOUNT%"=="0" set "SETUPSTATE=needed"
+if not "%SETUPSTATE%"=="needed" goto :startweb
+set "TOKDEFINED="
+if defined TALLYMED_SETUP_TOKEN set "TOKDEFINED=1"
+if exist .env findstr /b /r /c:"TALLYMED_SETUP_TOKEN=[^ ]" .env >nul 2>&1 && set "TOKDEFINED=1"
+if defined TOKDEFINED goto :startweb
+for /f "delims=" %%t in ('powershell -NoProfile -Command "$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).TrimEnd([char]61).Replace([char]43,[char]45).Replace([char]47,[char]95)"') do set "SETUPTOK=%%t"
+:startweb
+if defined SETUPTOK set "TALLYMED_SETUP_TOKEN=%SETUPTOK%"
 docker compose up -d --wait
-if errorlevel 1 ( echo Containers did not start cleanly. & pause & goto :eof )
+set "UPRESULT=%ERRORLEVEL%"
+if defined SETUPTOK set "TALLYMED_SETUP_TOKEN="
+if not "%UPRESULT%"=="0" ( set "SETUPTOK=" & echo Containers did not start cleanly. & pause & goto :eof )
 set "PORT=3001"
 if exist .env for /f "usebackq tokens=1,* delims==" %%a in (`findstr /b /c:"TALLYMED_WEB_PORT=" .env`) do set "PORT=%%b"
 set "PORT=%PORT:"=%"
@@ -133,5 +152,18 @@ echo.
 echo TallyMed is running (fabricated local data only):
 echo   App:    http://127.0.0.1:%PORT%
 echo   Health: http://127.0.0.1:%PORT%/healthz
-echo First administrator: see "Private app database, bootstrap and checks" in docs/development.md (no setup token exists).
+if "%SETUPSTATE%"=="needed" goto :showsetup
+if "%SETUPSTATE%"=="done" ( echo An administrator already exists. Sign in at http://127.0.0.1:%PORT%/login ^(no setup token is needed or shown^). & goto :eof )
+echo Could not tell whether setup is still needed. If the sign-in page says Setup required, choose Logs ^(3^): the server prints its setup token there.
+goto :eof
+:showsetup
+echo.
+echo First-time setup: no administrator exists yet. Open http://127.0.0.1:%PORT%/setup and enter the setup token.
+if not defined SETUPTOK goto :tokenfromenv
+echo   Setup token ^(shown once, not saved anywhere^): %SETUPTOK%
+echo   Choose Start again for a new token while setup is still needed.
+set "SETUPTOK="
+goto :eof
+:tokenfromenv
+echo   The token is the TALLYMED_SETUP_TOKEN value you defined in .env or your environment.
 goto :eof

@@ -2,8 +2,9 @@
 # TallyMed local launcher (development only, fabricated data only).
 # Starts the Compose stack from compose.yaml: PostgreSQL (db, health check pg_isready) and the web app (web, /healthz).
 # The optional `mcp` profile is not started here; see docs/mcp.md. Usage: ./dev-up.sh [start|stop|logs|update|wipe]
-# This app has no first-run setup token: the first administrator is created with the bootstrap command
-# (passphrase on stdin, see docs/development.md), so the launcher has nothing to display or record for that.
+# First-run setup: while no administrator exists, the launcher generates a one-time setup token, hands it to the web container for
+# this start only and prints it on screen once. It is never written to .env, a log or a temporary file. If you define
+# TALLYMED_SETUP_TOKEN yourself (.env or environment) that value is used and not displayed.
 set -u
 cd "$(dirname "$0")" || exit 1
 
@@ -62,20 +63,56 @@ wait_web() {
   echo; die "The web app did not become healthy. Run option 3 (logs) to see why."; return 1
 }
 
+# Prints 0 when no administrator exists yet, the count otherwise, and nothing when the database cannot be queried.
+admin_count() {
+  docker compose exec -T db psql -U tallymed -d tallymed -tAc 'select count(*) from bootstrap_state' 2>/dev/null | tr -d '[:space:]'
+}
+
+# True when the operator defined TALLYMED_SETUP_TOKEN in the environment or in .env.
+setup_token_defined() {
+  [ -n "${TALLYMED_SETUP_TOKEN:-}" ] && return 0
+  grep -Eq '^TALLYMED_SETUP_TOKEN=[^[:space:]]' .env 2>/dev/null
+}
+
 bring_up() {
   ensure_env || return 1
   quiet "Image build" docker compose build --quiet || return 1
   echo "Starting containers (waits for the database health check)..."
   docker compose up -d --wait db || { die "Database did not become healthy."; return 1; }
   quiet "Database migration" docker compose run --rm web node apps/web/cli/migrate.ts || return 1
-  docker compose up -d --wait || { die "Containers did not start cleanly."; return 1; }
+  # The token lives only in this variable and in the environment of the one compose command below.
+  local setup=unknown token=""
+  case $(admin_count) in
+    0) setup=needed ;;
+    ?*) setup=done ;;
+  esac
+  if [ "$setup" = needed ] && ! setup_token_defined; then
+    token=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)
+  fi
+  if [ -n "$token" ]; then
+    TALLYMED_SETUP_TOKEN=$token docker compose up -d --wait || { die "Containers did not start cleanly."; return 1; }
+  else
+    docker compose up -d --wait || { die "Containers did not start cleanly."; return 1; }
+  fi
   local port; port=$(web_port)
   wait_web "$port" || return 1
   echo
   echo "TallyMed is running (fabricated local data only):"
   echo "  App:    http://127.0.0.1:$port"
   echo "  Health: http://127.0.0.1:$port/healthz"
-  echo "First administrator: see 'Private app database, bootstrap and checks' in docs/development.md (no setup token exists)."
+  case $setup in
+    needed)
+      echo
+      echo "First-time setup: no administrator exists yet. Open http://127.0.0.1:$port/setup and enter the setup token."
+      if [ -n "$token" ]; then
+        echo "  Setup token (shown once, not saved anywhere): $token"
+        echo "  Choose Start again for a new token while setup is still needed."
+      else
+        echo "  The token is the TALLYMED_SETUP_TOKEN value you defined in .env or your environment."
+      fi ;;
+    done) echo "An administrator already exists. Sign in at http://127.0.0.1:$port/login (no setup token is needed or shown)." ;;
+    *)    echo "Could not tell whether setup is still needed. If the sign-in page says Setup required, choose Logs (3): the server prints its setup token there." ;;
+  esac
 }
 
 do_start()   { preflight && bring_up; }

@@ -17,9 +17,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return <main>
     <h1>TallyMed</h1>
     {params.notice === 'account_created' && <p role="status">Account created. Sign in to continue.</p>}
+    {params.notice === 'setup_complete' && <p role="status">Administrator created. Sign in to continue.</p>}
     {!ready
       ? <div className="card"><h2>Setup required</h2>
-        <p>No administrator exists yet. An operator must run the one-time local bootstrap command on the server (see docs/development.md). There is no web setup page.</p></div>
+        <p>No administrator exists yet. <a href="/setup">Create the first administrator</a> with the setup token from your server configuration or console output.</p></div>
       : <form className="card" method="post" action="/api/auth/login">
         <h2>Sign in</h2>
         {error && <p className="error" role="alert">{error}</p>}
