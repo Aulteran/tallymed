@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">TallyMed ledger and medical cross</title>
+  <rect width="64" height="64" rx="14" fill="#162e3b"/>
+  <path d="M19 14h25a4 4 0 0 1 4 4v28a4 4 0 0 1-4 4H19a4 4 0 0 1-4-4V18a4 4 0 0 1 4-4zm4 0v36m7-29h12m-12 7h7" fill="none" stroke="#a1eddb" stroke-width="3" stroke-linecap="round"/>
+  <rect x="33" y="32" width="24" height="24" rx="6" fill="#a1eddb" stroke="#162e3b" stroke-width="2"/>
+  <path d="M45 38v12m-6-6h12" stroke="#162e3b" stroke-width="3" stroke-linecap="round"/>
+</svg>

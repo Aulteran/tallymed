@@ -1,0 +1,17 @@
+{
+  "name": "tallymed",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "dev:marketing": "npm run dev -w @tallymed/marketing",
+    "dev:web": "npm run dev -w @tallymed/web",
+    "build": "npm run build --workspaces --if-present",
+    "build:marketing": "npm run build -w @tallymed/marketing",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "node --test",
+    "test:export": "node scripts/check-export.mjs"
+  }
+}

@@ -1,0 +1,48 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:export
+      - name: Verify repository-path export
+        run: npm run build:marketing && npm run test:export
+        env:
+          NEXT_PUBLIC_BASE_PATH: /tallymed-example
+          SITE_ORIGIN: https://example.github.io
+          TALLYMED_REPOSITORY: example/tallymed-example
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Start synthetic development stack
+        run: docker compose --env-file .env.example up --build --detach --wait
+      - name: Check web and database independently
+        run: |
+          curl --fail --retry 10 --retry-connrefused --retry-delay 2 http://127.0.0.1:3001/healthz
+          docker compose --env-file .env.example exec -T db psql -v ON_ERROR_STOP=1 -U tallymed -d tallymed -c "SELECT 1;"
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose --env-file .env.example logs
+      - name: Remove disposable stack
+        if: always()
+        run: docker compose --env-file .env.example down --volumes

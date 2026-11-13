@@ -1,0 +1,25 @@
+name: tallymed
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tallymed
+      POSTGRES_USER: tallymed
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "tallymed", "-d", "tallymed"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  web:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.web
+    environment:
+      TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
+    ports:
+      - "127.0.0.1:${TALLYMED_WEB_PORT:-3001}:3000"
+volumes:
+  postgres_data:

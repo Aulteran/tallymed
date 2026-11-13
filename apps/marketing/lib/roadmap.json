@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Marketing Website",
+    "status": "In development",
+    "description": "Introduce the project and its development roadmap."
+  },
+  {
+    "name": "Application Foundation",
+    "status": "Planned",
+    "description": "Set up the private household workspace."
+  },
+  {
+    "name": "Medical Expense Management",
+    "status": "Planned",
+    "description": "Connect family members, visits, providers and bills."
+  },
+  {
+    "name": "Payments and Payment Plans",
+    "status": "Planned",
+    "description": "Record payments, adjustments and installments."
+  },
+  {
+    "name": "HSA Reimbursements",
+    "status": "Planned",
+    "description": "Track eligible payments and reconcile reimbursements."
+  },
+  {
+    "name": "Document Management",
+    "status": "Planned",
+    "description": "Organize receipts, statements and supporting documents."
+  },
+  {
+    "name": "Optional AI Assistance",
+    "status": "Planned",
+    "description": "Review proposed document matches from an authenticated local client."
+  },
+  {
+    "name": "Self-Hosted Release",
+    "status": "Planned",
+    "description": "Verify deployment, backups and recovery."
+  }
+]
