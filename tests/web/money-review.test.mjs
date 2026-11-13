@@ -181,3 +181,47 @@ test('contracts: net allocations page with a cursor, payable bills keep the curr
     await t.db.drop();
   }
 });
+
+test('a match for a new payment appearing under a held plan lock restarts the transaction instead of deadlocking', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member();
+    const p = await t.provider();
+    const b = await t.bill({ memberId: m, providerId: p, originalAmount: '2000.00' });
+    const plan = await plans.createPlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), name: 'Plan', providerId: p, billId: b.id, totalAmount: '1500.00', installmentCount: '15', firstDueDate: '2026-06-01', cadence: 'monthly',
+    }, 'r');
+    const hh = t.actor.householdId;
+    const u = t.actor.userId;
+    const before = { ...retryStats };
+    for (let round = 0; round < 15; round++) {
+      const pm = await t.pay1({ amount: '100.00', billId: b.id });
+      const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+      const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: '2026-07-15' });
+      const raw = await t.db.pool.connect();
+      try {
+        await raw.query('begin');
+        await raw.query('select id from payment_plans where id = $1 for update', [plan.id]);
+        // The revision blocks on the plan lock held by the raw transaction.
+        const revise = plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: plan.id, version: d.plan.version, reason: 'Race', totalAmount: '1500.00', installmentCount: '15', firstDueDate: '2027-01-01' }, 'r');
+        await new Promise((r) => setTimeout(r, 60));
+        await raw.query(
+          `insert into installment_matches (id, household_id, plan_id, revision_id, installment_id, payment_id, allocation_id, bill_id, kind, amount_cents, created_by)
+           select gen_random_uuid(), $1, i.plan_id, i.revision_id, i.id, $2, $3, $4, 'match', 1000, $5 from plan_installments i where i.id = $6`,
+          [hh, pm.id, alloc, b.id, u, d.installments[0].id]);
+        await raw.query('commit');
+        // A refund on the new payment races the revision: it takes the payment lock, then needs the plan.
+        const refund = t.refund(pm.id, { allocationId: alloc, amount: '95.00' });
+        const settled = await Promise.allSettled([revise, refund]);
+        for (const r of settled) if (r.status === 'rejected') assert.ok(['conflict', 'stale_version'].includes(r.reason.code), String(r.reason.message ?? r.reason));
+        assert.equal(settled[1].status, 'fulfilled');
+      } finally {
+        raw.release();
+      }
+    }
+    assert.equal(retryStats.lockConflicts - before.lockConflicts, 0, 'no deadlock: the restart takes locks in the documented order');
+    assert.ok(retryStats.replanned - before.replanned >= 1, 'the transaction was restarted at least once');
+  } finally {
+    await t.db.drop();
+  }
+});

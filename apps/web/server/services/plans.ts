@@ -12,7 +12,7 @@ import * as payments from '../repositories/payments.ts';
 import * as repo from '../repositories/plans.ts';
 import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
 import { requireActive } from './expenses.ts';
-import { idempotent, todayUtc, withRetry } from './support.ts';
+import { idempotent, RetryTransaction, todayUtc, withRetry } from './support.ts';
 
 const cents = (v: bigint) => v.toString();
 const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
@@ -120,18 +120,19 @@ export async function getPlanDetail(pool: Pool, actor: Actor, id: string, o: { a
 
 // ---------- writes ----------
 
-/** Locks the payments that back a plan's matches, then the plan itself (payments before plans), re-checking for new matches. */
+/**
+ * Locks the payments that back a plan's matches, then the plan itself (payments before plans). If a match for a payment we have
+ * not locked appears once the plan is locked, a payment lock must not be taken while holding the plan: the transaction is
+ * restarted (RetryTransaction) so the larger set is locked in the documented order from the start.
+ */
 async function lockPlanWithPayments(tx: Queryable, actor: Actor, planId: string): Promise<{ status: 'active' | 'cancelled'; version: number }> {
-  const locked = new Set<string>();
-  for (let i = 0; i < 4; i++) {
-    const wanted = (await repo.paymentsMatchedByPlan(tx, actor.householdId, planId)).filter((p) => !locked.has(p));
-    if (wanted.length > 0) for (const p of await payments.lockPayments(tx, actor.householdId, wanted)) locked.add(p);
-    const [plan] = await repo.lockPlans(tx, actor.householdId, [planId]);
-    if (!plan) throw new AppError('not_found');
-    const missing = (await repo.paymentsMatchedByPlan(tx, actor.householdId, planId)).filter((p) => !locked.has(p));
-    if (missing.length === 0) return plan;
-  }
-  throw new AppError('conflict', 'The plan is changing. Try again.');
+  const wanted = await repo.paymentsMatchedByPlan(tx, actor.householdId, planId);
+  const locked = new Set(wanted.length > 0 ? await payments.lockPayments(tx, actor.householdId, wanted) : []);
+  const [plan] = await repo.lockPlans(tx, actor.householdId, [planId]);
+  if (!plan) throw new AppError('not_found');
+  const after = await repo.paymentsMatchedByPlan(tx, actor.householdId, planId);
+  if (after.some((p) => !locked.has(p))) throw new RetryTransaction();
+  return plan;
 }
 
 export async function createPlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
