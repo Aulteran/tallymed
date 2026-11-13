@@ -15,7 +15,11 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
     <header className="shell">
       <strong>TallyMed</strong>
       <nav aria-label="Primary">
-        <Link href="/">Dashboard</Link>
+        <Link href="/">Overview</Link>
+        <Link href="/visits">Visits</Link>
+        <Link href="/bills">Bills</Link>
+        <Link href="/members">Family</Link>
+        <Link href="/providers">Providers</Link>
         {can(actor, 'operators:manage') && <Link href="/operators">Operators</Link>}
       </nav>
       <span>{actor.displayName} ({actor.role})</span>

@@ -15,5 +15,29 @@ input, select { width: 100%; max-width: 22rem; background: var(--card); color: v
 button { background: var(--teal); color: #fff; border-color: var(--teal); cursor: pointer; margin-top: .75rem; }
 header.shell button { margin: 0; background: transparent; border-color: #fff; }
 .error { color: #b91c1c; font-weight: 600; } @media (prefers-color-scheme: dark) { .error { color: #fca5a5; } }
-.notice { max-width: 56rem; margin: 0 auto; padding: 1rem; font-size: .875rem; opacity: .85; }
+.notice { max-width: 56rem; margin: 0 auto; padding: 1rem; font-size: .875rem; }
 table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: .4rem; border-bottom: 1px solid var(--line); }
+nav[aria-label="Primary"] { flex-wrap: wrap; }
+main.wide { max-width: 72rem; }
+.row { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; align-items: flex-end; }
+.row > div { min-width: 10rem; }
+.row label { margin-top: 0; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.metrics a { display: block; text-decoration: none; color: inherit; }
+.metrics .card { margin: 0; height: 100%; } .metrics strong { display: block; font-size: 1.5rem; }
+.muted { color: color-mix(in srgb, var(--fg) 78%, var(--bg)); font-size: .875rem; }
+.pill { display: inline-block; padding: 0 .5rem; border: 1px solid var(--line); border-radius: 1rem; font-size: .8rem; }
+.pill.warn { border-color: #b45309; color: #b45309; } @media (prefers-color-scheme: dark) { .pill.warn { border-color: #fbbf24; color: #fbbf24; } }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+button.secondary { background: transparent; color: var(--fg); border-color: var(--line); }
+textarea { width: 100%; max-width: 40rem; font: inherit; padding: .5rem; border: 1px solid var(--line); border-radius: .35rem; background: var(--card); color: var(--fg); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
+.checkbox { display: flex; gap: .5rem; align-items: center; font-weight: 400; } .checkbox input { width: auto; }
+@media (max-width: 40rem) {
+  table.stack, table.stack tbody { display: block; width: 100%; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table.stack tr { display: block; border-bottom: 2px solid var(--line); padding: .5rem 0; }
+  table.stack td { display: flex; justify-content: space-between; gap: 1rem; border: 0; padding: .2rem .4rem; overflow-wrap: anywhere; }
+  table.stack td::before { content: attr(data-label); font-weight: 600; }
+  .num { text-align: left; }
+}

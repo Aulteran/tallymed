@@ -6,6 +6,7 @@ export type ErrorCode =
   | 'not_found'
   | 'stale_version'
   | 'conflict'
+  | 'duplicate_warning'
   | 'bootstrap_closed'
   | 'rate_limited'
   | 'payload_too_large'
@@ -20,6 +21,7 @@ const STATUS: Record<ErrorCode, number> = {
   not_found: 404,
   stale_version: 409,
   conflict: 409,
+  duplicate_warning: 409,
   bootstrap_closed: 409,
   rate_limited: 429,
   payload_too_large: 413,

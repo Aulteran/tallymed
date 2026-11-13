@@ -16,7 +16,8 @@
     "test:browser": "node scripts/check-browser.mjs",
     "test:performance": "node scripts/check-performance.mjs",
     "generate:og": "node scripts/generate-og.mjs",
-    "test:proxy": "node scripts/check-proxy.mjs"
+    "test:proxy": "node scripts/check-proxy.mjs",
+    "test:app-browser": "node scripts/check-app-browser.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

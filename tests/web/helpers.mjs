@@ -24,10 +24,16 @@ export async function freshDatabase({ migrateAll = true } = {}) {
   const url = new URL(ADMIN_URL);
   url.pathname = `/${name}`;
   const pool = createPool(url.href, 6);
+  let dropping = false;
+  // An idle connection can be terminated by the forced drop below; that is expected, anything earlier is not.
+  pool.on('error', (error) => {
+    if (!dropping) throw error;
+  });
   if (migrateAll) await migrate(pool);
   return {
     pool, url: url.href, name,
     async drop() {
+      dropping = true;
       await pool.end();
       const c = new pg.Client({ connectionString: ADMIN_URL });
       await c.connect();

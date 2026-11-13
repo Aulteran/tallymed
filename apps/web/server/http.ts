@@ -3,9 +3,11 @@ import type { AppConfig } from './config.ts';
 import type { Pool } from './db.ts';
 import type { Actor } from './authz.ts';
 import { AppError } from './errors.ts';
+import { flashSetCookie } from './flash.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
+import * as expenses from './services/expenses.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
@@ -146,13 +148,14 @@ export function redirect(config: AppConfig, pathAndQuery: string, headers: Recor
   });
 }
 
-function errorResponse(req: Request, ctx: AppContext | null, error: unknown, errorPath: string | null): Response {
+function errorResponse(req: Request, ctx: AppContext | null, error: unknown, errorPath: string | null, flash: string | null = null): Response {
   const app = error instanceof AppError ? error : new AppError('internal');
   const code = app.code;
   const headers: Record<string, string> = { ...BASE_HEADERS };
   if (app.retryAfterSeconds) headers['Retry-After'] = String(app.retryAfterSeconds);
   if (ctx && errorPath && wantsHtml(req) && app.status !== 413 && app.status !== 415) {
-    return redirect(ctx.config, `${errorPath}?error=${code}`, headers);
+    if (flash) headers['Set-Cookie'] = flash;
+    return redirect(ctx.config, `${errorPath}${errorPath.includes('?') ? '&' : '?'}error=${code}`, headers);
   }
   return Response.json({ error: { code, message: code === 'internal' ? 'Internal error' : app.message } }, { status: app.status, headers });
 }
@@ -165,6 +168,8 @@ function route(opts: {
   name: string;
   session: boolean;
   errorPath: (body: Record<string, unknown>) => string;
+  /** Fields to keep for re-filling the form at errorPath after a validation error (sent as a flash cookie, not in the URL). */
+  keepFields?: string[];
   run: (input: RouteInput) => Promise<RouteResult>;
 }) {
   return async (req: Request, ctx: AppContext): Promise<Response> => {
@@ -191,12 +196,14 @@ function route(opts: {
       if (!(error instanceof AppError) || error.code === 'internal') logError(`http.${opts.name}`, error, { requestId });
       else log('info', `http.${opts.name}.rejected`, { requestId, code: error.code });
       let errorPath: string | null = null;
+      let flash: string | null = null;
       try {
         errorPath = opts.errorPath(body);
+        if (opts.keepFields) flash = flashSetCookie(ctx.config, errorPath, body, opts.keepFields);
       } catch {
         errorPath = null;
       }
-      return errorResponse(req, ctx, error, errorPath);
+      return errorResponse(req, ctx, error, errorPath, flash);
     }
   };
 }
@@ -288,3 +295,52 @@ export async function pageActor(ctx: AppContext, headers: Headers): Promise<{ ac
   return actor && token ? { actor, csrf: csrfFor(token) } : null;
 }
 
+
+// ---------- expense management ----------
+
+type ExpenseService = (pool: Pool, actor: Actor, input: unknown, requestId: string) => Promise<{ id: string }>;
+const str = (v: unknown) => (typeof v === 'string' && /^[0-9a-f-]{36}$/.test(v) ? v : null);
+
+const BILL_FIELDS = ['memberId', 'providerId', 'visitId', 'providerReference', 'statementDate', 'dueDate', 'originalAmount', 'responsibilityAmount',
+  'amountStatus', 'amountSource', 'sourceNote', 'notes'];
+const ADJUSTMENT_FIELDS = ['amount', 'category', 'effectiveDate', 'reason', 'source', 'sourceNote'];
+
+const entity = (base: string) => (b: Record<string, unknown>, id: string) => `${base}/${str(b.id) ?? id}`;
+const billPath = (b: Record<string, unknown>, id: string) => `/bills/${str(b.billId) ?? str(b.id) ?? id}`;
+const EXPENSE_ACTIONS: Record<string, {
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string) => string; keep?: string[];
+}> = {
+  'members/create': { service: expenses.createMember, error: () => '/members', keep: ['name', 'dateOfBirth', 'notes'], ok: entity('/members') },
+  'members/update': { service: expenses.updateMember, error: (b) => `/members/${str(b.id)}`, ok: entity('/members') },
+  'members/archive': { service: expenses.archiveMember, error: (b) => `/members/${str(b.id)}`, ok: entity('/members') },
+  'providers/create': { service: expenses.createProvider, error: () => '/providers', keep: ['name', 'kind', 'notes'], ok: entity('/providers') },
+  'providers/update': { service: expenses.updateProvider, error: (b) => `/providers/${str(b.id)}`, ok: entity('/providers') },
+  'providers/archive': { service: expenses.archiveProvider, error: (b) => `/providers/${str(b.id)}`, ok: entity('/providers') },
+  'visits/create': { service: expenses.createVisit, error: () => '/visits', keep: ['memberId', 'providerId', 'serviceDate', 'description', 'notes'], ok: entity('/visits') },
+  'visits/update': { service: expenses.updateVisit, error: (b) => `/visits/${str(b.id)}`, ok: entity('/visits') },
+  'bills/create': { service: expenses.createBill, error: () => '/bills/new', keep: BILL_FIELDS, ok: entity('/bills') },
+  'bills/update': { service: expenses.updateBill, error: (b) => `/bills/${str(b.id)}`, ok: entity('/bills') },
+  'bills/confirm': { service: expenses.confirmBillAmounts, error: (b) => `/bills/${str(b.id)}`, ok: entity('/bills') },
+  'bills/assign-visit': { service: expenses.assignBillVisit, error: (b) => `/bills/${str(b.id)}`, ok: entity('/bills') },
+  'adjustments/create': { service: expenses.addAdjustment, error: (b) => billPath(b, ''), keep: ADJUSTMENT_FIELDS, ok: billPath },
+  'adjustments/reverse': { service: expenses.reverseAdjustment, error: (b) => billPath(b, ''), ok: billPath },
+};
+
+const expenseRoutes = new Map(Object.entries(EXPENSE_ACTIONS).map(([name, a]) => [name, route({
+  name: `expenses.${name}`,
+  session: true,
+  errorPath: a.error,
+  keepFields: a.keep,
+  async run({ ctx, actor, body, requestId, req }) {
+    const result = await a.service(ctx.pool, actor!, body, requestId);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id)) };
+    return { json: { ok: true, ...result }, status: name.endsWith('/create') ? 201 : 200 };
+  },
+})]));
+
+/** Single entry point for every expense mutation. The action comes from a fixed allow-list, never from the body. */
+export async function handleExpenseAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
+  const handler = expenseRoutes.get(action);
+  if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
+  return handler(req, ctx);
+}
