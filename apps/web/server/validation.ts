@@ -114,3 +114,109 @@ export const filterSchemas = {
 export type PartyFilter = z.infer<typeof filterSchemas.party>;
 export type VisitFilter = z.infer<typeof filterSchemas.visit>;
 export type BillFilter = z.infer<typeof filterSchemas.bill>;
+
+// ---------- payments and payment plans ----------
+
+const positiveUsd = z.string().transform((v, ctx) => {
+  try {
+    const cents = parseNonNegativeUsd(v);
+    if (cents === 0n) throw new RangeError('zero');
+    return cents;
+  } catch {
+    ctx.addIssue({ code: 'custom', message: 'invalid amount' });
+    return z.NEVER;
+  }
+});
+const paymentMethod = z.enum(['card', 'bank_transfer', 'check', 'cash', 'portal', 'other']);
+const cadence = z.enum(['weekly', 'biweekly', 'monthly', 'custom']);
+const allocationLine = z.strictObject({ billId: uuid, amount: positiveUsd });
+const refundLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
+const installmentLine = z.strictObject({ dueDate: isoDate, amount: positiveUsd });
+const intField = (min: number, max: number) => z.preprocess(blank, z.coerce.number().int().min(min).max(max).nullable().default(null));
+
+/**
+ * Allocation requests arrive either as a JSON `allocations` array or, from a form, as one `billId` plus an amount. Both
+ * normalize to an `allocations` list, so the service only ever sees one shape.
+ */
+function allocationsOf(d: { allocations?: Array<{ billId: string; amount: bigint }>; billId?: string | null; allocateAmount?: bigint | null }, fallback: bigint | null) {
+  if (d.allocations && d.allocations.length > 0) return d.allocations;
+  if (d.billId) return [{ billId: d.billId, amount: (d.allocateAmount ?? fallback) as bigint }];
+  return [];
+}
+const allocationInput = {
+  allocations: z.array(allocationLine).max(25).optional(), billId: optional(uuid), allocateAmount: optional(positiveUsd),
+};
+const mixedAllocation = (d: { allocations?: unknown[]; billId?: string | null; allocateAmount?: bigint | null }) =>
+  !(d.allocations && d.allocations.length > 0 && (d.billId || d.allocateAmount)) && !(d.allocateAmount && !d.billId);
+
+/** A schedule is generated (total, count, first due date, cadence) or listed explicitly (JSON `installments`, custom cadence). */
+const scheduleInput = {
+  cadence: z.preprocess(blank, cadence.default('monthly')),
+  totalAmount: optional(positiveUsd), installmentCount: intField(1, 120), firstDueDate: optional(isoDate),
+  installments: z.array(installmentLine).max(120).optional(),
+};
+
+export const paymentSchemas = {
+  createPayment: z.strictObject({
+    idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, reference: optional(text(80).min(1)), note: optionalText(500),
+    ...allocationInput, ...csrf,
+  }).refine(mixedAllocation).transform((d) => {
+    const { billId: _b, allocateAmount: _a, allocations: _l, ...rest } = d;
+    return { ...rest, allocations: allocationsOf(d, d.amount) };
+  }),
+  allocatePayment: z.strictObject({ idempotencyKey, paymentId: uuid, ...allocationInput, ...csrf })
+    .refine(mixedAllocation).transform((d) => ({ idempotencyKey: d.idempotencyKey, paymentId: d.paymentId, csrf: d.csrf, allocations: allocationsOf(d, null) }))
+    .refine((d) => d.allocations.length > 0 && d.allocations.every((a) => typeof a.amount === 'bigint')),
+  reverseAllocation: z.strictObject({
+    idempotencyKey, paymentId: uuid.optional(), allocationId: uuid, amount: optional(positiveUsd), effectiveDate: isoDate, reason: text(500).min(1), ...csrf,
+  }),
+  recordRefund: z.strictObject({
+    idempotencyKey, paymentId: uuid, effectiveDate: isoDate, reason: text(500).min(1),
+    lines: z.array(refundLine).max(25).optional(), unappliedAmount: optional(positiveUsd),
+    // Form shorthand: one allocation to refund, or none for unapplied cash, with an amount.
+    allocationId: optional(uuid), amount: optional(positiveUsd), ...csrf,
+  }).transform((d, ctx) => {
+    const lines = d.lines && d.lines.length > 0 ? d.lines : d.allocationId && d.amount ? [{ allocationId: d.allocationId, amount: d.amount }] : [];
+    const unapplied = d.unappliedAmount ?? (!d.allocationId && !(d.lines && d.lines.length > 0) ? d.amount : null);
+    if ((d.lines?.length && (d.allocationId || d.amount)) || (lines.length === 0 && unapplied === null)) {
+      ctx.addIssue({ code: 'custom', message: 'refund needs lines or an amount' });
+      return z.NEVER;
+    }
+    return { idempotencyKey: d.idempotencyKey, paymentId: d.paymentId, effectiveDate: d.effectiveDate, reason: d.reason, lines, unappliedCents: unapplied, csrf: d.csrf };
+  }),
+  reverseRefund: z.strictObject({ idempotencyKey, paymentId: uuid.optional(), eventId: uuid, effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
+  voidPayment: z.strictObject({ idempotencyKey, paymentId: uuid, voidedOn: isoDate, reason: text(500).min(1), ...csrf }),
+  createPlan: z.strictObject({
+    idempotencyKey, name: text(120).min(1), providerId: uuid, billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), ...scheduleInput, ...csrf,
+  }).transform((d, ctx) => {
+    const billIds = d.billIds && d.billIds.length > 0 ? d.billIds : d.billId ? [d.billId] : [];
+    if ((d.billIds?.length && d.billId) || billIds.length === 0 || new Set(billIds).size !== billIds.length) {
+      ctx.addIssue({ code: 'custom', message: 'choose the bills the plan covers' });
+      return z.NEVER;
+    }
+    const { billId: _b, billIds: _l, ...rest } = d;
+    return { ...rest, billIds };
+  }),
+  revisePlan: z.strictObject({ idempotencyKey, planId: uuid, version, reason: text(500).min(1), ...scheduleInput, ...csrf }),
+  cancelPlan: z.strictObject({ planId: uuid, version, reason: text(500).min(1), ...csrf }),
+  matchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, ...csrf }),
+  unmatchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, reason: text(500).min(1), ...csrf }),
+};
+
+export const paymentFilterSchemas = {
+  payment: z.object({
+    q: optionalFilter(text(80)), memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), billId: optionalFilter(uuid),
+    from: optionalFilter(isoDate), to: optionalFilter(isoDate), unapplied: checkbox, cursor, limit: pageSize,
+  }),
+  plan: z.object({
+    q: optionalFilter(text(80)), providerId: optionalFilter(uuid), status: optionalFilter(z.enum(['active', 'cancelled'])), cursor, limit: pageSize,
+  }),
+  installments: z.object({
+    memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), planId: optionalFilter(uuid),
+    state: z.preprocess(blank, z.enum(['overdue', 'upcoming', 'open']).default('open')),
+    asOf: optionalFilter(isoDate), cursor, limit: pageSize,
+  }),
+};
+export type PaymentFilter = z.infer<typeof paymentFilterSchemas.payment>;
+export type PlanFilter = z.infer<typeof paymentFilterSchemas.plan>;
+export type InstallmentFilter = z.infer<typeof paymentFilterSchemas.installments>;

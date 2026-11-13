@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getBillDetail, pickParties, pickVisits } from '../../../../server/services/expenses.ts';
+import { billPaymentSummary } from '../../../../server/services/payments.ts';
 import { centsToUsdInput } from '../../../../server/money.ts';
 import {
   ADJUSTMENT_CATEGORIES, AMOUNT_SOURCES, Banner, Csrf, dateOf, flat, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, q80, requireSession, Truncated, type SearchParams,
@@ -14,6 +15,7 @@ export default async function BillPage({ params, searchParams }: { params: Promi
   const q = await flatWithFlash(searchParams, `/bills/${id}`);
   const { data } = await load(() => getBillDetail(ctx.pool, actor, id), null);
   const { bill: b, adjustments, duplicates, history } = data!;
+  const { ledger, plans: billPlans } = await billPaymentSummary(ctx.pool, actor, id);
   const [providers, visits] = await Promise.all([
     pickParties(ctx.pool, actor, 'providers', { archived: true, q: q80(q.providerQ), currentId: b.providerId }),
     pickVisits(ctx.pool, actor, { memberId: b.memberId, q: q80(q.visitQ), currentId: b.visitId }),
@@ -36,7 +38,9 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       <div className="card"><span>Base household responsibility</span><strong><Money cents={b.baseResponsibilityCents} /></strong></div>
       <div className="card"><span>Adjustments</span><strong><Money cents={b.adjustmentsCents} /></strong></div>
       <div className="card"><span>Household responsibility</span><strong><Money cents={b.responsibilityCents} /></strong></div>
-      <div className="card"><span>Open balance</span><strong><Money cents={b.openBalanceCents} /></strong><span className="muted">No payments are recorded yet (planned), so this equals responsibility.</span></div>
+      <div className="card"><span>Net payments applied</span><strong><Money cents={b.appliedCents} /></strong><span className="muted">Allocations less reversals and refunds</span></div>
+      <div className="card"><span>Open balance</span><strong><Money cents={b.openBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div>
+      {BigInt(b.creditCents) > 0n && <div className="card"><span>Provider credit</span><strong><Money cents={b.creditCents} /></strong><span className="muted">Payments applied above responsibility. A cash refund is a separate recorded event.</span></div>}
     </section>
     <div className="card"><h2>Provenance</h2>
       <p>Amounts from {label(b.amountSource)}{b.sourceNote ? `: ${b.sourceNote}` : ''}. Entered {dateOf(b.createdAt)}{b.confirmedAt ? `, confirmed ${dateOf(b.confirmedAt)}` : ', not yet confirmed'}.</p>
@@ -71,6 +75,15 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       <select id="visitId" name="visitId" defaultValue={b.visitId ?? ''}><Options items={visits.items.map((v) => ({ id: v.id, name: `${v.serviceDate} · ${v.providerName}` }))} blank="Awaiting visit assignment" /></select>
       <button type="submit">Save visit link</button>
     </form>
+    <div className="card"><h2>Payments</h2>
+      {ledger.length === 0 ? <p>No payments are applied to this bill yet.</p> : <table className="stack">
+        <thead><tr><th>Effective</th><th>Entry</th><th className="num">Amount</th><th>Payment</th><th>Reason</th></tr></thead>
+        <tbody>{ledger.map((e) => <tr key={e.entryId}><td data-label="Effective">{e.effectiveDate}</td><td data-label="Entry">{label(e.kind)}</td><td data-label="Amount" className="num"><Money cents={e.amountCents} /></td>
+          <td data-label="Payment"><Link href={`/payments/${e.paymentId}`}>{e.paidOn} · {label(e.method)} {e.reference ?? ''}</Link> {e.paymentVoided && <span className="pill warn">Voided</span>}</td><td data-label="Reason">{e.reason}</td></tr>)}</tbody>
+      </table>}
+      {estimate ? <p className="muted">Confirm the amounts before applying payments to this bill.</p> : <p><Link href={`/payments?billId=${b.id}`}>Record a payment for this bill</Link></p>}
+      {billPlans.length > 0 && <p>Payment plans: {billPlans.map((pl) => <span key={pl.id}><Link href={`/plans/${pl.id}`}>{pl.name}</Link>{pl.status === 'cancelled' ? ' (cancelled)' : ''} </span>)}</p>}
+    </div>
     <div className="card"><h2>Responsibility adjustments</h2>
       {adjustments.length === 0 ? <p>No adjustments. An insurer adjustment changes responsibility and is not a household payment.</p> : <table className="stack">
         <thead><tr><th>Effective</th><th>Category</th><th className="num">Amount</th><th>Reason and source</th><th>Entered by</th><th>Status</th></tr></thead>

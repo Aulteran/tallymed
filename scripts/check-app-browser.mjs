@@ -155,6 +155,59 @@ try {
   assert.match(await text(), /\$95\.00/);
   ok('adjustment posted and responsibility recomputed ($120.50 - $25.50)');
 
+  // Payments: record cash against the bill, refund part of it, and see the bill balance follow the posted events.
+  const billId = billUrl.split('/').pop();
+  await page.goto(`${origin}/payments?billId=${billId}`);
+  await a11y('payments list and entry form');
+  await page.fill('#paidOn', '2026-03-05');
+  await page.fill('#amount', '100.00');
+  await page.fill('#reference', 'CARD-1234');
+  await page.fill('#allocateAmount', '95.00');
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  const paymentUrl = page.url();
+  assert.match(await text(), /Applied to bills\s*\n?\s*\$95\.00/);
+  assert.match(await text(), /Unapplied\s*\n?\s*\$5\.00/);
+  await a11y('payment detail');
+  await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '10.00');
+  await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Provider refund after review');
+  await page.click('form[action="/api/expenses/payments/refund"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  assert.match(await text(), /Net cash paid\s*\n?\s*\$90\.00/);
+  await page.goto(billUrl);
+  assert.match(await text(), /Net payments applied\s*\n?\s*\$85\.00/);
+  assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
+  await a11y('bill detail with payments');
+  ok('payment recorded, refunded in part, and the bill balance follows ($95.00 - $85.00 net applied)');
+
+  // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
+  await page.goto(`${origin}/plans`);
+  await a11y('plans list and form');
+  await page.fill('#name', 'Clinic plan');
+  await page.selectOption('#providerId', { label: 'Example Clinic' });
+  await page.selectOption('#billId', { value: billId });
+  await page.fill('#totalAmount', '30.00');
+  await page.fill('#installmentCount', '3');
+  await page.fill('#firstDueDate', '2026-01-15');
+  await page.click('form[action="/api/expenses/plans/create"] button[type=submit]');
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const planUrl = page.url();
+  assert.match(await text(), /Overdue/);
+  await page.selectOption('#installmentId', { index: 1 });
+  await page.selectOption('#allocationId', { index: 1 });
+  await page.fill('#amount', '5.00');
+  await page.click('form[action="/api/expenses/plans/match"] button[type=submit]');
+  await page.waitForURL(planUrl);
+  assert.match(await text(), /Matched to payments\s*\n?\s*\$5\.00/);
+  assert.match(await text(), /Partial/);
+  await a11y('plan detail');
+  await page.goto(billUrl);
+  assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
+  await page.goto(`${origin}/`);
+  assert.match(await text(), /Overdue installments\s*\n?\s*\$25\.00/);
+  await a11y('overview with payments and plans');
+  ok('plan created, installment partly matched, bill balance unchanged, overdue queue on the overview');
+
   await page.goto(`${origin}/`);
   const overview = await text();
   assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
@@ -169,6 +222,11 @@ try {
       .map((e) => `${e.tagName}.${e.className}#${e.id}:${Math.round(e.getBoundingClientRect().left)}-${Math.round(e.getBoundingClientRect().right)}:${getComputedStyle(e).display}`).slice(0, 8),
   }));
   assert.ok(overflow.scrollWidth <= overflow.width, `no horizontal page scroll on a phone: ${JSON.stringify(overflow)}`);
+  for (const path of [paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`]) {
+    await page.goto(path);
+    const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
+    assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${path}: ${JSON.stringify(o)}`);
+  }
   ok('overview queues and filtered list work; phone layout does not overflow');
 } finally {
   await cleanup();

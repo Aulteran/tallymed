@@ -87,3 +87,14 @@ export function NarrowForm({ fields, values }: { fields: Array<{ name: string; l
   </form>;
 }
 export const q80 = (v: string | undefined) => (v ? v.slice(0, 80) : undefined);
+
+export const PAYMENT_METHODS = ['card', 'bank_transfer', 'check', 'cash', 'portal', 'other'] as const;
+export const CADENCES = ['monthly', 'biweekly', 'weekly'] as const;
+export const todayUtc = () => new Date().toISOString().slice(0, 10);
+
+/** Installment state with a plain-language label; overdue is shown in addition to partial or unpaid. */
+export function StatePill({ state, overdue }: { state: string; overdue?: boolean }) {
+  return <>
+    <span className={state === 'paid' ? 'pill' : 'pill warn'}>{label(state)}</span>{overdue ? <> <span className="pill warn">Overdue</span></> : null}
+  </>;
+}
