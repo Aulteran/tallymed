@@ -45,7 +45,7 @@ export default async function ProposalPage({ params, searchParams }: { params: P
     {pr.status === 'pending' && writer && <>
       <form className="card" method="post" action="/api/assistant/proposals/approve">
         <h2>Approve</h2><Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} /><input type="hidden" name="proposalId" value={pr.id} />
-        <input type="hidden" name="documentVersion" value={pr.pinnedVersionNo} /><input type="hidden" name="targetVersion" value={pr.targetVersion} />
+        <input type="hidden" name="documentVersion" value={pr.pinnedVersionNo} /><input type="hidden" name="targetVersion" value={pr.targetVersion} /><input type="hidden" name="documentRevision" value={pr.documentRevision} />
         <p className="muted">Attaches version {pr.pinnedVersionNo} of the document to this record, exactly as shown. TallyMed checks again that neither has changed.</p>
         <button type="submit" disabled={pr.stale}>Approve and attach</button>
       </form>

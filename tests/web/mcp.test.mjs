@@ -171,14 +171,26 @@ test('revocation takes effect on the very next request, and cannot be undone', {
   }
 });
 
-test('repeated bad credentials from one address are refused outright, valid ones included', { skip: skipDb }, async () => {
+test('repeated bad credentials from one address are refused outright, but a valid credential still works', { skip: skipDb }, async () => {
   const t = await mcpFixture({ listener: { failedAuthPerMinute: 3 } });
   try {
     const good = await t.client();
     for (let i = 0; i < 3; i++) assert.equal((await raw(t.port, { headers: { authorization: 'Bearer tmcp_' + 'B'.repeat(43) }, body: rpcCall('list_my_proposals') })).status, 401);
-    const blocked = await raw(t.port, { headers: { authorization: `Bearer ${good.token}` }, body: rpcCall('list_my_proposals') });
+    const blocked = await raw(t.port, { headers: { authorization: 'Bearer tmcp_' + 'B'.repeat(43) }, body: rpcCall('list_my_proposals') });
     assert.equal(blocked.status, 429);
     assert.equal(blocked.headers['retry-after'], '60');
+    assert.equal((await raw(t.port, { headers: { authorization: `Bearer ${good.token}` }, body: rpcCall('list_my_proposals') })).status, 200);
+  } finally {
+    await t.drop();
+  }
+});
+
+test('a JSON-RPC batch is refused, so one request is one call', { skip: skipDb }, async () => {
+  const t = await mcpFixture({ listener: { callsPerMinute: 2 } });
+  try {
+    const c = await t.client();
+    const r = await raw(t.port, { headers: { authorization: `Bearer ${c.token}` }, body: [rpcCall('list_my_proposals', {}, 1), rpcCall('list_my_proposals', {}, 2)] });
+    assert.equal(r.status, 400);
   } finally {
     await t.drop();
   }
@@ -281,6 +293,9 @@ test('the MCP database role can read its tools\' columns and write proposals and
     await denied(`select note from document_attachments`);
     await denied(`select detail from audit_events`);
     await denied(`select created_by from documents`);
+    await denied(`select decision_note from document_match_proposals`);
+    await denied(`select decided_by from document_match_proposals`);
+    await denied(`select notes from visits`);
     // Not writable: money, records, documents, links, accounts, credentials.
     for (const sql of [
       `update bills set notes = 'x'`, `insert into bill_adjustments (household_id) values (gen_random_uuid())`, `delete from bills`, `update visits set description = 'x'`,
@@ -300,6 +315,31 @@ test('the MCP database role can read its tools\' columns and write proposals and
   }
 });
 
+test('the MCP role cannot forge a decided proposal or an audit row in a person\'s name', { skip: skipDb }, async () => {
+  const t = await mcpFixture();
+  try {
+    const s = await t.scene();
+    const client = (await t.db.pool.query(`select id from mcp_clients limit 1`)).rows[0] ?? { id: (await t.client()).id };
+    const base = `insert into document_match_proposals (id, household_id, client_id, document_id, document_version_id, document_version_no, target_type, bill_id, target_version, rationale, confidence`;
+    const doc = (await t.db.pool.query(`select d.id, d.household_id, v.id as vid from documents d join document_versions v on v.document_id = d.id where d.id = $1`, [s.doc.id])).rows[0];
+    const user = (await t.db.pool.query(`select id from users limit 1`)).rows[0].id;
+    const args = [doc.household_id, client.id, doc.id, doc.vid, s.bill.id];
+    await assert.rejects(t.mcpPool.query(`${base}, status, decided_by, decided_at, attachment_id) values (gen_random_uuid(), $1, $2, $3, $4, 1, 'bill', $5, 1, 'x', 'high', 'rejected', $6, now(), null)`, [...args, user]), /permission denied|pending and undecided/);
+    await assert.rejects(t.mcpPool.query(`${base}, version) values (gen_random_uuid(), $1, $2, $3, $4, 1, 'bill', $5, 1, 'x', 'high', 5)`, args), /pending and undecided/);
+    // A pending proposal is still insertable.
+    await t.mcpPool.query(`${base}) values (gen_random_uuid(), $1, $2, $3, $4, 1, 'bill', $5, 1, 'x', 'high')`, args);
+    const audit = (action, actor, entity = 'mcp_client') => t.mcpPool.query(`insert into audit_events (household_id, actor_user_id, action, entity_type, entity_id) values ($1, $2, $3, $4, 'x')`, [doc.household_id, actor, action, entity]);
+    await assert.rejects(audit('proposal.approved', null, 'document_match_proposal'), /only record its own/);
+    await assert.rejects(audit('proposal.created', user, 'document_match_proposal'), /only record its own/);
+    await assert.rejects(audit('mcp.tool_called', null, 'user'), /only record its own/);
+    await audit('mcp.tool_called', null);
+    // The web role is unaffected.
+    await t.db.pool.query(`insert into audit_events (household_id, actor_user_id, action, entity_type) values ($1, $2, 'proposal.approved', 'document_match_proposal')`, [doc.household_id, user]);
+  } finally {
+    await t.drop();
+  }
+});
+
 test('the listener refuses to start as a role with more access than the MCP needs', { skip: skipDb }, async () => {
   const t = await mcpFixture();
   try {
@@ -311,8 +351,10 @@ test('the listener refuses to start as a role with more access than the MCP need
       [`grant insert on payments to ${t.role}`, /payments/],
       [`grant delete on documents to ${t.role}`, /documents/],
       [`grant select (notes) on bills to ${t.role}`, /bills/],
-      [`grant update (revoked_at) on mcp_clients to ${t.role}`, /more columns/],
-      [`grant select (note) on document_attachments to ${t.role}`, /document_attachments|more columns/],
+      [`grant update (revoked_at) on mcp_clients to ${t.role}`, /more access/],
+      [`grant select (notes) on visits to ${t.role}`, /visits/],
+      [`grant select (decision_note) on document_match_proposals to ${t.role}`, /decision_note/],
+      [`grant select (note) on document_attachments to ${t.role}`, /document_attachments|more access/],
     ]) {
       await t.db.pool.query(grant);
       await assert.rejects(assertRestrictedRole(t.mcpPool), pattern, grant);

@@ -202,12 +202,15 @@ export async function startListener(deps: ListenerDeps): Promise<Listener> {
       if (new URL(req.url ?? '/', 'http://x').pathname !== MCP_PATH) return refuse(res, 404, 'not_found');
       if (req.method !== 'POST') return refuse(res, 405, 'method_not_allowed', { Allow: 'POST' });
 
-      if (failedAuth.blocked(peer)) return refuse(res, 429, 'rate_limited', { 'Retry-After': '60' });
+      // A peer that has failed too often is refused only when it also fails to present a valid credential, so a noisy neighbour
+      // on the same address cannot lock the legitimate assistant out.
+      const blocked = failedAuth.blocked(peer);
       let principal: mcp.McpPrincipal;
       try {
         principal = await mcp.authenticateClient(deps.pool, bearer(req));
       } catch (error) {
         if (error instanceof AppError && error.code === 'unauthenticated') {
+          if (blocked) return refuse(res, 429, 'rate_limited', { 'Retry-After': '60' });
           failedAuth.hit(peer);
           log('info', 'mcp.auth_failed', { requestId });
           return refuse(res, 401, 'unauthenticated', { 'WWW-Authenticate': 'Bearer realm="tallymed-mcp"' });
@@ -217,6 +220,8 @@ export async function startListener(deps: ListenerDeps): Promise<Listener> {
       if (!calls.hit(principal.clientId)) return refuse(res, 429, 'rate_limited', { 'Retry-After': '60' });
 
       const body = await readJson(req);
+      // One request is one call: a JSON-RPC batch would let a client multiply its rate limit and audit volume.
+      if (Array.isArray(body)) return refuse(res, 400, 'invalid_input');
       const server = buildServer(deps, principal);
       // Stateless: no session survives the request, so a revoked or expired credential is refused on the very next call.
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

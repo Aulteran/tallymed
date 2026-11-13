@@ -59,7 +59,7 @@ export async function revokeClient(pool: Pool, actor: Actor, input: unknown, req
     if (!await assistant.revokeClient(tx, actor.householdId, d.clientId, actor.userId)) throw new AppError('conflict', 'That credential does not exist or was already revoked');
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'assistant.client_revoked', entityType: 'mcp_client', entityId: d.clientId, requestId,
-      detail: { clientId: d.clientId },
+      detail: { clientId: d.clientId, reason: d.reason },
     });
   });
   return { id: d.clientId };
@@ -94,7 +94,7 @@ export async function approveProposal(pool: Pool, actor: Actor, input: unknown, 
   const d = parse(assistantSchemas.approve, input);
   const attachmentId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
-    const replay = await idempotent(tx, actor, 'proposal.approve', d.idempotencyKey, { proposalId: d.proposalId, documentVersion: d.documentVersion, targetVersion: d.targetVersion }, attachmentId);
+    const replay = await idempotent(tx, actor, 'proposal.approve', d.idempotencyKey, { proposalId: d.proposalId, documentVersion: d.documentVersion, targetVersion: d.targetVersion, documentRevision: d.documentRevision }, attachmentId);
     if (replay) return { id: d.proposalId, replayed: true };
     // The target type and id of a proposal never change, so this unlocked read only decides which locks to take.
     const probe = await assistant.getProposal(tx, actor.householdId, d.proposalId);
@@ -109,6 +109,8 @@ export async function approveProposal(pool: Pool, actor: Actor, input: unknown, 
     if (!lockedDoc || lockedDoc.removedAt || p.documentRemoved) throw new AppError('stale_version', 'The document was removed since the proposal');
     // What the person saw must still be what the proposal names, and what the proposal names must still be current.
     if (d.documentVersion !== p.pinnedVersionNo || d.targetVersion !== p.targetVersion) throw new AppError('stale_version', 'This proposal changed since you opened it. Reload and review it again.');
+    // The title, kind and note the person read belong to the document row; an edit since then means they approved something else.
+    if (d.documentRevision !== lockedDoc.version) throw new AppError('stale_version', 'The document was edited since you opened this proposal. Reload and review it again.');
     if (p.currentVersionNo !== p.pinnedVersionNo) throw new AppError('stale_version', 'The document has a newer version than the one proposed. Reject this proposal and review the new version.');
     if (p.targetVersionNow !== p.targetVersion) throw new AppError('stale_version', 'The record changed since the proposal was made. Reject it and review the current record.');
     const version = await docs.getVersion(tx, actor.householdId, p.documentId, p.pinnedVersionNo);

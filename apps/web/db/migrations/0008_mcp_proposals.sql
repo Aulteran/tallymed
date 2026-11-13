@@ -130,6 +130,33 @@ begin
 end $$;
 create trigger document_match_proposals_guard_change before update or delete on document_match_proposals for each row execute function document_match_proposals_guard_change();
 
+-- A new proposal is always pending and undecided, whoever inserts it. The MCP role holds INSERT, so a decision or an attachment
+-- cannot be forged by inserting an already-decided row (which would also permanently block a genuine proposal).
+create function document_match_proposals_guard_insert() returns trigger language plpgsql as $$
+begin
+  if new.status <> 'pending' or new.decided_by is not null or new.decided_at is not null or new.decision_note is not null
+     or new.attachment_id is not null or new.version <> 1 then
+    raise exception 'a new proposal is pending and undecided' using errcode = 'check_violation';
+  end if;
+  return new;
+end $$;
+create trigger document_match_proposals_guard_insert before insert on document_match_proposals for each row execute function document_match_proposals_guard_insert();
+
+-- The MCP role can insert audit rows (it records its own tool calls) but only its own kinds, never in a person's name. The role is
+-- recognised by what it cannot do: it cannot read accounts, which the web role always can.
+create function audit_events_guard_restricted_insert() returns trigger language plpgsql as $$
+begin
+  if not has_table_privilege(current_user, 'users', 'SELECT') then
+    if new.actor_user_id is not null
+       or new.action not in ('mcp.tool_called', 'mcp.tool_refused', 'mcp.document_content_read', 'proposal.created')
+       or new.entity_type not in ('mcp_client', 'document', 'document_match_proposal') then
+      raise exception 'the assistant role may only record its own tool calls and proposals' using errcode = 'check_violation';
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger audit_events_guard_restricted_insert before insert on audit_events for each row execute function audit_events_guard_restricted_insert();
+
 create function document_match_proposals_no_truncate() returns trigger language plpgsql as $$
 begin
   raise exception 'proposals cannot be truncated' using errcode = 'check_violation';
@@ -156,7 +183,8 @@ begin
   execute format('grant select (household_id, bill_id, amount_cents) on bill_adjustments to %I', role_name);
   execute format('grant select (id, household_id, service_date, description, member_name_snapshot, provider_name_snapshot, version) on visits to %I', role_name);
   execute format('grant select (id, household_id, name, token_hash, scopes, expires_at, revoked_at, last_used_at) on mcp_clients to %I', role_name);
-  execute format('grant select on document_match_proposals to %I', role_name);
+  -- Not the reviewer's decision note, the reviewer or the attachment: the role never needs to read what people typed or who decided.
+  execute format('grant select (id, household_id, client_id, document_id, document_version_id, document_version_no, target_type, bill_id, visit_id, target_id, target_version, rationale, confidence, status, decided_at, version, created_at) on document_match_proposals to %I', role_name);
   execute format('grant insert on document_match_proposals, audit_events to %I', role_name);
   execute format('grant update (last_used_at) on mcp_clients to %I', role_name);
 end $$;

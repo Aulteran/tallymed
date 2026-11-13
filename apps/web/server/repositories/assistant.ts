@@ -42,7 +42,7 @@ export async function revokeClient(db: Queryable, householdId: string, id: strin
 
 export interface ProposalRow {
   id: string; status: 'pending' | 'approved' | 'rejected'; confidence: 'low' | 'medium' | 'high'; rationale: string; createdAt: Date; sortKey: string;
-  documentId: string; documentTitle: string; documentKind: string; documentNote: string; documentRemoved: boolean; pinnedVersionNo: number; documentVersionId: string; currentVersionNo: number;
+  documentId: string; documentTitle: string; documentKind: string; documentNote: string; documentRemoved: boolean; documentRevision: number; pinnedVersionNo: number; documentVersionId: string; currentVersionNo: number;
   fileName: string; mediaType: string; sizeBytes: string; sha256: string;
   targetType: 'bill' | 'visit'; targetId: string; targetVersion: number; targetVersionNow: number | null;
   targetProvider: string | null; targetMember: string | null; targetDate: string | null; targetReference: string | null; targetDescription: string | null;
@@ -53,7 +53,7 @@ export interface ProposalRow {
 }
 
 const PROPOSAL_SELECT = `select p.id, p.status, p.confidence, p.rationale, p.created_at as "createdAt", p.created_at::text as "sortKey",
-    p.document_id as "documentId", d.title as "documentTitle", d.kind as "documentKind", d.note as "documentNote", (d.removed_at is not null) as "documentRemoved",
+    p.document_id as "documentId", d.title as "documentTitle", d.kind as "documentKind", d.note as "documentNote", (d.removed_at is not null) as "documentRemoved", d.version as "documentRevision",
     p.document_version_no as "pinnedVersionNo", p.document_version_id as "documentVersionId", (select max(x.version_no) from document_versions x where x.document_id = p.document_id)::int as "currentVersionNo",
     pv.original_name as "fileName", pv.media_type as "mediaType", pv.size_bytes::text as "sizeBytes", encode(pv.sha256, 'hex') as sha256,
     p.target_type as "targetType", p.target_id as "targetId", p.target_version as "targetVersion", coalesce(b.version, vi.version) as "targetVersionNow",

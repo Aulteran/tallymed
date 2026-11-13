@@ -162,14 +162,26 @@ export async function auditCall(pool: Pool, p: McpPrincipal, tool: string, outco
   }).catch((error) => logError('mcp.audit_failed', error));
 }
 
+/** The only columns the MCP role may read. Must match tallymed_apply_mcp_grants in migration 0008. */
+const READABLE_COLUMNS: Record<string, string[]> = {
+  documents: ['id', 'household_id', 'title', 'kind', 'note', 'version', 'removed_at', 'created_at'],
+  document_versions: ['id', 'household_id', 'document_id', 'version_no', 'storage_key', 'sha256', 'size_bytes', 'media_type', 'original_name', 'state', 'created_at'],
+  document_attachments: ['household_id', 'document_id', 'document_version_id', 'target_type', 'target_id', 'detached_at'],
+  bills: ['id', 'household_id', 'provider_reference', 'statement_date', 'due_date', 'amount_status', 'base_responsibility_cents', 'member_name_snapshot', 'provider_name_snapshot', 'version'],
+  bill_adjustments: ['household_id', 'bill_id', 'amount_cents'],
+  visits: ['id', 'household_id', 'service_date', 'description', 'member_name_snapshot', 'provider_name_snapshot', 'version'],
+  mcp_clients: ['id', 'household_id', 'name', 'token_hash', 'scopes', 'expires_at', 'revoked_at', 'last_used_at'],
+  document_match_proposals: ['id', 'household_id', 'client_id', 'document_id', 'document_version_id', 'document_version_no', 'target_type', 'bill_id', 'visit_id', 'target_id', 'target_version', 'rationale', 'confidence', 'status', 'decided_at', 'version', 'created_at'],
+};
+const INSERTABLE_TABLES = new Set(['document_match_proposals', 'audit_events']);
+const UPDATABLE_COLUMNS: Record<string, string[]> = { mcp_clients: ['last_used_at'] };
+
 /**
  * Refuses to run as a role that could do more than the MCP is meant to. Called at startup: the listener will not start when the
  * database role it was given can write anything but proposals, audit rows and its own last-used time, or read accounts, sessions
  * and payments. The grants are applied by `setup-role`; this proves they are what is in force.
  */
 export async function assertRestrictedRole(pool: Pool): Promise<void> {
-  const readable = new Set(['documents', 'document_versions', 'document_attachments', 'bills', 'bill_adjustments', 'visits', 'mcp_clients', 'document_match_proposals']);
-  const insertable = new Set(['document_match_proposals', 'audit_events']);
   const { rows: role } = await pool.query<{ super: boolean; createrole: boolean; createdb: boolean; owns: number }>(
     `select r.rolsuper as super, r.rolcreaterole as createrole, r.rolcreatedb as createdb,
             (select count(*)::int from pg_class c where c.relowner = r.oid and c.relkind in ('r','p','v','m','S','f')) as owns
@@ -177,22 +189,24 @@ export async function assertRestrictedRole(pool: Pool): Promise<void> {
   if (!role[0] || role[0].super || role[0].createrole || role[0].createdb || role[0].owns > 0) {
     throw new Error('The MCP database role must not be a superuser, create roles or databases, or own tables. Run the setup-role command.');
   }
-  const { rows } = await pool.query<{ t: string; sel: boolean; ins: boolean; upd: boolean; del: boolean; trunc: boolean; secret: boolean; token: boolean }>(
-    `select tablename as t,
-            has_any_column_privilege(current_user, quote_ident(tablename), 'SELECT') as sel,
-            has_any_column_privilege(current_user, quote_ident(tablename), 'INSERT') as ins,
-            has_any_column_privilege(current_user, quote_ident(tablename), 'UPDATE') as upd,
-            has_table_privilege(current_user, quote_ident(tablename), 'DELETE') as del,
-            has_table_privilege(current_user, quote_ident(tablename), 'TRUNCATE') as trunc,
-            case when tablename = 'bills' then has_column_privilege(current_user, 'bills', 'notes', 'SELECT') else false end as secret,
-            case when tablename = 'mcp_clients' then has_column_privilege(current_user, 'mcp_clients', 'token_hash', 'UPDATE') else false end as token
-       from pg_tables where schemaname = 'public'`);
-  const bad = rows.filter((r) => (r.sel && !readable.has(r.t)) || (r.ins && !insertable.has(r.t)) || (r.upd && r.t !== 'mcp_clients') || r.del || r.trunc || r.secret || r.token);
-  if (bad.length > 0) {
-    throw new Error(`The MCP database role has more access than allowed (${bad.map((b) => b.t).join(', ')}). Run the setup-role command and use that role in TALLYMED_MCP_DATABASE_URL.`);
+  const { rows } = await pool.query<{ t: string; c: string; sel: boolean; ins: boolean; upd: boolean }>(
+    `select c.relname as t, a.attname as c,
+            has_column_privilege(current_user, c.oid, a.attnum, 'SELECT') as sel,
+            has_column_privilege(current_user, c.oid, a.attnum, 'INSERT') as ins,
+            has_column_privilege(current_user, c.oid, a.attnum, 'UPDATE') as upd
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace join pg_attribute a on a.attrelid = c.oid
+      where n.nspname = 'public' and c.relkind in ('r', 'p') and a.attnum > 0 and not a.attisdropped`);
+  // Every column is compared with the allow-lists, so a hand-made role with a wider grant (a notes column, a decision note) is refused.
+  const bad = new Set<string>();
+  for (const r of rows) {
+    if ((r.sel && !READABLE_COLUMNS[r.t]?.includes(r.c)) || (r.ins && !INSERTABLE_TABLES.has(r.t)) || (r.upd && !UPDATABLE_COLUMNS[r.t]?.includes(r.c))) bad.add(`${r.t}.${r.c}`);
   }
-  const { rows: cols } = await pool.query<{ ok: boolean }>(
-    `select not (has_column_privilege(current_user, 'mcp_clients', 'revoked_at', 'UPDATE') or has_column_privilege(current_user, 'mcp_clients', 'scopes', 'UPDATE')
-                or has_column_privilege(current_user, 'document_attachments', 'note', 'SELECT') or has_column_privilege(current_user, 'bill_adjustments', 'reason', 'SELECT')) as ok`);
-  if (!cols[0]?.ok) throw new Error('The MCP database role can read or change more columns than allowed. Run the setup-role command.');
+  const { rows: tables } = await pool.query<{ t: string }>(
+    `select c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind in ('r', 'p')
+        and (has_table_privilege(current_user, c.oid, 'DELETE') or has_table_privilege(current_user, c.oid, 'TRUNCATE'))`);
+  for (const t of tables) bad.add(`${t.t} (delete or truncate)`);
+  if (bad.size > 0) {
+    throw new Error(`The MCP database role has more access than allowed (${[...bad].slice(0, 6).join(', ')}). Run the setup-role command and use that role in TALLYMED_MCP_DATABASE_URL.`);
+  }
 }

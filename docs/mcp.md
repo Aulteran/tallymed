@@ -14,7 +14,7 @@ TallyMed works completely without AI. This optional feature lets a program you r
 
 There is no tool to approve, reject, attach, detach, pay, refund, edit, delete or invite, and no way to run SQL. The tools a credential may not use are not even listed. All text a tool returns (titles, notes, file names, names, descriptions) and everything inside a document is untrusted data: each response says so, and none of it can change what the service does.
 
-The listener connects to PostgreSQL as its own role, `tallymed_mcp`, which can read only the columns these tools return and can insert only proposals and audit rows (plus update its own credentials' last-used time). It cannot read accounts, sessions, payments, HSA records, free-text notes on bills or adjustments, or the reasons people typed, and it cannot write money or documents. The listener checks this at startup and refuses to start if the role can do more.
+The listener connects to PostgreSQL as its own role, `tallymed_mcp`, which can read only the columns these tools return and can insert only proposals and audit rows (plus update its own credentials' last-used time). It cannot read accounts, sessions, payments, HSA records, free-text notes on bills, visits or adjustments, or the reasons and reviewers of decisions, and it cannot write money or documents. It can insert only pending proposals and audit rows of its own kinds (`mcp.*`, `proposal.created`, never in a person's name); the database refuses anything else. It is not scoped to one household in the database: household isolation rests on the listener's queries, which suits a single-household install. The listener checks this at startup and refuses to start if the role can do more.
 
 ## Data boundary: read this before granting `documents:content`
 
@@ -30,7 +30,7 @@ Everything an assistant client reads is returned to that client. If the client i
 
    This creates (or updates) the role `tallymed_mcp` (set `TALLYMED_MCP_ROLE` for another name) and applies the grants. Run it again after every upgrade that adds tables (it is safe to repeat). In the Compose stack use `docker compose run --rm -T web node apps/web/cli/mcp.ts setup-role`.
 
-2. **Configure the listener.** Set these on the MCP process only (never on the web service):
+2. **Configure the listener.** Set these on the MCP process only (never on the web service). A database password with characters such as `@`, `/` or `:` must be percent-encoded in a URL (the Compose file does not do it for you; prefer a password of letters and digits):
 
    | Variable | Meaning |
    | --- | --- |
@@ -69,7 +69,7 @@ Clients that only support a local stdio server can use a small bridge such as `m
 Use all three layers; the listener enforces the first two itself and needs the third from you:
 
 1. **Bind** to a loopback or private interface only. For the same machine use `127.0.0.1`. For a LAN use that interface's private address (or `0.0.0.0` inside a container with the published port bound to a private interface).
-2. **Application allowlist and checks** (always on): the peer address must be loopback or in `TALLYMED_MCP_ALLOWED_CIDRS`; the `Host` header must be listed; an `Origin` header is refused unless listed; only `POST /mcp` is served; bodies are limited to 64 KB; repeated bad credentials from one address are refused for a minute; each credential is rate limited.
+2. **Application allowlist and checks** (always on): the peer address must be loopback or in `TALLYMED_MCP_ALLOWED_CIDRS`; the `Host` header must be listed; an `Origin` header is refused unless listed; only `POST /mcp` is served; bodies are limited to 64 KB; repeated bad credentials from one address are refused for a minute (a valid credential from that address still works); each credential is rate limited, one request counting as one call, and a JSON-RPC batch is refused.
 3. **Host firewall**: allow the MCP port only from the client machines (for example `ufw allow from 192.168.1.40 to any port 8765 proto tcp`) and deny it from everywhere else, including the Docker bridge for other containers. Inside Docker the peer address of a published port may be the bridge gateway, so the firewall and the published interface, not the application allowlist, are the real restriction there.
 
 **Never route MCP through the web reverse proxy.** The web app's proxy publishes the browser UI only; do not add a location or upstream for the MCP port, and do not publish the port on a public interface. The listener refuses any request that carries `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Via` or the web proxy's secret header, so a misrouted request fails closed, and the web app has no route to the listener or its database role. Verify from outside your network that the MCP port is closed, and that `https://<your web origin>/mcp` is a 404.
@@ -80,7 +80,7 @@ Open **Proposals** (the count shows in the menu). Each proposal shows the docume
 
 ## Revoke and rotate
 
-On **Assistant**, **Revoke** a credential with a reason. It stops working on its next request (there are no sessions to expire). Revocation cannot be undone. Proposals from a revoked credential stay visible: you can reject them, but not approve them. Rotate by creating a new credential, updating the client and revoking the old one. A credential also expires on its own. If a token is exposed, revoke first, then review the audit trail (`mcp.tool_called`, `mcp.tool_refused`, `proposal.created`) for what it did.
+On **Assistant**, **Revoke** a credential with a reason. It stops working on its next request (there are no sessions to expire). Revocation cannot be undone. Proposals from a revoked credential stay visible: you can reject them, but not approve them. Rotate by creating a new credential, updating the client and revoking the old one. The reason you give is kept in the audit trail. A credential also expires on its own; a pending proposal from an expired (not revoked) credential can still be reviewed and approved by a person. If a token is exposed, revoke first, then review the audit trail (`mcp.tool_called`, `mcp.tool_refused`, `proposal.created`) for what it did.
 
 ## What is recorded
 

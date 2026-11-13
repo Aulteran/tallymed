@@ -359,7 +359,7 @@ export const assistantSchemas = {
   }),
   revokeClient: z.strictObject({ clientId: uuid, reason: text(300).min(1), ...csrf }),
   /** `documentVersion` and `targetVersion` are the versions the person was shown; either having moved on refuses the approval. */
-  approve: z.strictObject({ idempotencyKey, proposalId: uuid, documentVersion: version, targetVersion: version, ...csrf }),
+  approve: z.strictObject({ idempotencyKey, proposalId: uuid, documentVersion: version, targetVersion: version, documentRevision: version, ...csrf }),
   reject: z.strictObject({ proposalId: uuid, reason: text(300).min(1), ...csrf }),
 };
 

@@ -24,7 +24,11 @@ async function proposed(t, over = {}) {
   assert.equal(r.isError, false, JSON.stringify(r.data));
   return { s, c, token, args, id: r.data.proposalId };
 }
-const approve = (t, id, over = {}, actor = t.actor) => assistant.approveProposal(t.db.pool, actor, { idempotencyKey: randomUUID(), proposalId: id, documentVersion: 1, targetVersion: 1, ...over }, 'r');
+/** Approves as a reviewer who has just loaded the page: the document revision defaults to the live one. */
+const approve = async (t, id, over = {}, actor = t.actor) => {
+  const documentRevision = (await one(t, `select d.version from documents d join document_match_proposals p on p.document_id = d.id where p.id = $1`, [id]))?.version ?? 1;
+  return assistant.approveProposal(t.db.pool, actor, { idempotencyKey: randomUUID(), proposalId: id, documentVersion: 1, targetVersion: 1, documentRevision, ...over }, 'r');
+};
 const reject = (t, id, over = {}, actor = t.actor) => assistant.rejectProposal(t.db.pool, actor, { proposalId: id, reason: 'Not the right bill', ...over }, 'r');
 
 test('approving attaches the reviewed document version to the reviewed record once, with provenance', { skip: skipDb }, async () => {
@@ -169,7 +173,7 @@ test('an edited bill, a removed document, an existing link or a view that moved 
     // Unknown and malformed ids.
     await assert.rejects(approve(t, randomUUID()), { code: 'not_found' });
     await assert.rejects(assistant.approveProposal(t.db.pool, t.actor, { proposalId: 'x' }, 'r'), { code: 'invalid_input' });
-    await assert.rejects(assistant.approveProposal(t.db.pool, t.actor, { idempotencyKey: randomUUID(), proposalId: a.id, documentVersion: 1, targetVersion: 1, extra: 'x' }, 'r'), { code: 'invalid_input' });
+    await assert.rejects(assistant.approveProposal(t.db.pool, t.actor, { idempotencyKey: randomUUID(), proposalId: a.id, documentVersion: 1, targetVersion: 1, documentRevision: 1, extra: 'x' }, 'r'), { code: 'invalid_input' });
     // Every refusal left the proposals pending and the lists intact.
     assert.equal((await assistant.listProposals(t.db.pool, t.actor, { status: 'pending' })).items.length, 4);
   } finally {
@@ -209,12 +213,31 @@ test('a rejected proposal stays rejected, keeps its reason and cannot be raised 
   }
 });
 
+test('editing the document after the reviewer opened the proposal refuses the approval', { skip: skipDb }, async () => {
+  const t = await mcpFixture();
+  try {
+    const a = await proposed(t);
+    const seen = (await one(t, `select version from documents where id = $1`, [a.s.doc.id])).version;
+    await docs.updateDocument(t.db.pool, t.actor, { id: a.s.doc.id, version: String(seen), title: 'A different title', kind: 'other' }, 'r');
+    await assert.rejects(approve(t, a.id, { documentRevision: seen }), { code: 'stale_version' });
+    assert.equal((await attachments(t)).length, 0);
+    const now = (await assistant.getProposal(t.db.pool, t.actor, a.id)).documentRevision;
+    assert.equal(now, seen + 1);
+    await approve(t, a.id, { documentRevision: now });
+    assert.equal((await attachments(t)).length, 1);
+  } finally {
+    await t.drop();
+  }
+});
+
 test('revoking the proposing credential blocks approval of its proposals but not rejection', { skip: skipDb }, async () => {
   const t = await mcpFixture();
   try {
     const a = await proposed(t);
     const client = (await rows(t, `select client_id from document_match_proposals where id = $1`, [a.id]))[0].client_id;
     await assistant.revokeClient(t.db.pool, t.actor, { clientId: client, reason: 'key leaked' }, 'r');
+    // The reason a person gave is kept in the audit trail.
+    assert.equal((await rows(t, `select detail from audit_events where action = 'assistant.client_revoked'`))[0].detail.reason, 'key leaked');
     const d = await assistant.getProposal(t.db.pool, t.actor, a.id);
     assert.equal(d.clientRevoked, true);
     assert.equal(d.stale, true);
@@ -306,7 +329,7 @@ test('the assistant routes need a session, the canonical origin and a CSRF token
   const t = await mcpFixture();
   try {
     const a = await proposed(t);
-    const body = { idempotencyKey: randomUUID(), proposalId: a.id, documentVersion: 1, targetVersion: 1 };
+    const body = { idempotencyKey: randomUUID(), proposalId: a.id, documentVersion: 1, targetVersion: 1, documentRevision: 1 };
     assert.equal((await api(t, 'proposals/approve', body, { cookie: '' })).status, 401);
     assert.equal((await api(t, 'proposals/approve', body, { csrf: null })).status, 403);
     assert.equal((await api(t, 'proposals/approve', body, { csrf: 'wrong' })).status, 403);
@@ -321,7 +344,7 @@ test('the assistant routes need a session, the canonical origin and a CSRF token
     // Browser form posts redirect back to the proposal, with an error code and never the typed values in the URL.
     const b = await proposed(t);
     await svc.updateBill(t.db.pool, t.actor, { id: b.s.bill.id, version: 1, providerId: b.s.p, providerReference: 'INV-1001', statementDate: '2026-01-02', notes: 'x' }, 'r');
-    const stale = await api(t, 'proposals/approve', { idempotencyKey: randomUUID(), proposalId: b.id, documentVersion: '1', targetVersion: '1' }, { type: 'form', html: true });
+    const stale = await api(t, 'proposals/approve', { idempotencyKey: randomUUID(), proposalId: b.id, documentVersion: '1', targetVersion: '1', documentRevision: '1' }, { type: 'form', html: true });
     assert.equal(stale.status, 303);
     assert.equal(new URL(stale.headers.get('location')).pathname, `/proposals/${b.id}`);
     assert.equal(new URL(stale.headers.get('location')).search, '?error=stale_version');
