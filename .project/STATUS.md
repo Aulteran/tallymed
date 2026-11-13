@@ -3,7 +3,7 @@
 | Milestone | State | Next action |
 | --- | --- | --- |
 | M00 | Accepted | Owner accepted on 2026-11-13. Next milestone starts only when requested. |
-| M01 | In review | Independent milestone and security reviews on the PR head, then owner merge and acceptance. |
+| M01 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after both reviews approved and the merge. Evidence below. Next: M02, and M03/M05 may run in parallel after it. |
 | M02–M07 | Planned | Wait for accepted predecessors per the milestone index. |
 
 Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. No milestone has been accepted. The Pages workflow is gated by the repository variable documented in the publishing guide.
@@ -34,3 +34,16 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Not verified locally: Node 24 (unavailable), Docker Compose stack (no Docker daemon), browser checks, a real reverse proxy product (nginx/Caddy/Traefik), a real-browser sign-in pass.
 - Review fixes (PR #3): atomic login throttle with concurrent-burst test, bounded failed-login rows and audit, invitation revoke and re-issue, duplicate JSON key rejection, startup warning for https without proxy secret, `type: module`. Remaining limitations are listed in DECISIONS.md under Application Foundation decisions. Reviewers must recheck on the new head.
 - Remaining for acceptance: independent milestone and security review, CI green on the final head, owner merge and acceptance. Next milestone: M02 only after acceptance.
+
+### M01 acceptance evidence
+
+- PR: Aulteran/tallymed#3, squash-merged as `69394f57e16c417e09e704a9f37bc1bffaf183cd`. Final reviewed and tested head `872783f12f31af8f468b6131db82eb6e82261cc9`; CI `verify` (Node 24, PostgreSQL 17, browser and performance checks, HTTPS proxy check) and `compose-smoke` (migrate, bootstrap, sign-in) both green on it.
+- Independent reviews on `872783f` (comments on the PR): milestone review approved after re-check; security review approved with no blocking findings. First-round findings on `51673aa` (concurrent login-throttle bypass, unbounded failed-login rows, no invitation revoke, duplicate JSON keys) were fixed in a separate thread and re-verified.
+- Acceptance was recorded under the owner's 2026-11-13 preauthorization for M01 to M05 (merge on green CI after required reviews). The owner can still revisit it. No public roadmap change: the private app is not publicly deployed, so public roadmap data is unchanged.
+- Not verified: manual browser sign-in, a real reverse-proxy product's header stripping, Docker Compose locally (CI covers it).
+
+### Required before the first real deployment
+
+- **Password change and reset.** There is no password change or reset flow. Bootstrap is closed and re-inviting an existing address is blocked, so a forgotten administrator password has no recovery short of database edits. Schedule a local reset CLI (same trust model as bootstrap), an authenticated change-password action that revokes other sessions, and a common-password check before any real deployment.
+- **Shared-address lockout.** Twenty failed sign-ins from one trusted client address, for example a household behind one NAT, block sign-in for everyone on that address for 15 minutes, and anyone who knows an account address can lock that account for 15 minutes. Document both in the operator guide and revisit a per-account-plus-address key or delay-based throttle.
+- Also deferred: pruning of expired sessions and a global cap on unauthenticated password-hashing work.
