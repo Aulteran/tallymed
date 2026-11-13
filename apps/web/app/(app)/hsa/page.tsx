@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA · TallyMed' };
 
 const STATES: Array<[string, string]> = [
-  ['', 'All payments'], ['undecided', 'Not decided yet'], ['eligible', 'Eligible'], ['available', 'Available to claim'], ['pending', 'Has pending claims'],
+  ['', 'All payments'], ['undecided', 'Not decided yet'], ['eligible', 'Eligible'], ['available', 'Available to claim'], ['pending', 'Has pending claims'], ['received', 'Has reimbursements received'],
   ['needs_review', 'Needs review'], ['ineligible', 'Ineligible'],
 ];
 
@@ -42,7 +42,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
       <Link href={link('eligible')}><div className="card"><span>Eligible</span><strong><Money cents={t.eligibleCents} /></strong><span className="muted">Confirmed eligible net cash, {t.allocationCount} payments</span></div></Link>
       <Link href={link('available')}><div className="card"><span>Available</span><strong><Money cents={t.availableCents} /></strong><span className="muted">Eligible less pending and received</span></div></Link>
       <Link href={link('pending')}><div className="card"><span>Pending</span><strong><Money cents={t.pendingCents} /></strong><span className="muted">Reserved by claims not yet paid</span></div></Link>
-      <div className="card"><span>Received</span><strong><Money cents={t.receivedCents} /></strong><span className="muted">Reimbursements, less reversals</span></div>
+      <Link href={link('received')}><div className="card"><span>Received</span><strong><Money cents={t.receivedCents} /></strong><span className="muted">Reimbursements, less reversals</span></div></Link>
       <Link href={link('needs_review')}><div className="card"><span>Needs review</span><strong><Money cents={t.needsReviewCents} /></strong><span className="muted">{t.needsReviewCount} payments above their ceiling</span></div></Link>
       <Link href={link('undecided')}><div className="card"><span>Not decided yet</span><strong>{t.undecidedCount}</strong><span className="muted">Payments with no eligibility decision</span></div></Link>
     </section>}

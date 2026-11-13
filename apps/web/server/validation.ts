@@ -268,7 +268,7 @@ export const hsaSchemas = {
       ctx.addIssue({ code: 'custom', message: 'a receipt needs one amount per claim line' });
       return z.NEVER;
     }
-    const { lines: _l, lineId: _i, amount: _m, claimId: _c, ...rest } = d;
+    const { lines: _l, lineId: _i, amount: _m, ...rest } = d;
     return { ...rest, lines };
   }),
   /** A reimbursement that was not initiated from a claim here. Source and evidence are required. */
@@ -287,7 +287,7 @@ export const hsaSchemas = {
   reverseReceipt: z.strictObject({ idempotencyKey, receiptId: uuid, allocationId: uuid.optional(), effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
 };
 
-const hsaState = z.enum(['undecided', 'eligible', 'available', 'pending', 'needs_review', 'ineligible']);
+const hsaState = z.enum(['undecided', 'eligible', 'available', 'pending', 'received', 'needs_review', 'ineligible']);
 export const hsaFilterSchemas = {
   scope: z.object({ memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), from: optionalFilter(isoDate), to: optionalFilter(isoDate) }),
   allocations: z.object({

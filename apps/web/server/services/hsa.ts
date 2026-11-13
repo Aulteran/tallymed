@@ -193,7 +193,7 @@ export async function submitClaim(pool: Pool, actor: Actor, input: unknown, requ
 /** Rejects or cancels the open reservation of a claim line (all of it by default), releasing the amount back to available. */
 export async function releaseClaimLine(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
-  const { csrf: _csrf, idempotencyKey, claimId: _claim, allocationId: _alloc, ...d } = parse(hsaSchemas.releaseLine, input);
+  const { csrf: _csrf, idempotencyKey, claimId, allocationId, ...d } = parse(hsaSchemas.releaseLine, input);
   const id = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.release', idempotencyKey, d, id);
@@ -203,6 +203,8 @@ export async function releaseClaimLine(pool: Pool, actor: Actor, input: unknown,
     await lockForAllocations(tx, actor, [probe.allocationId]);
     const [line] = await repo.linesById(tx, actor.householdId, [d.lineId]);
     if (!line) throw new AppError('not_found');
+    // The form's claim and payment fields only steer redirects; a mismatch means a mixed-up or tampered request.
+    if ((claimId && claimId !== line.claimId) || (allocationId && allocationId !== line.allocationId)) throw new AppError('invalid_input');
     const open = BigInt(line.pendingCents);
     const amount = d.amount ?? open;
     if (open <= 0n) throw new AppError('conflict', 'Nothing is left to release on that claim line');
@@ -231,7 +233,8 @@ export async function releaseClaimLine(pool: Pool, actor: Actor, input: unknown,
  */
 export async function recordReceipt(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
-  const { csrf: _csrf, idempotencyKey, lines, ...r } = parse(hsaSchemas.recordReceipt, input);
+  const { csrf: _csrf, idempotencyKey, lines, claimId: _claimId, ...r0 } = parse(hsaSchemas.recordReceipt, input);
+  const r = { ...r0, claimId: _claimId };
   const receiptId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.receipt', idempotencyKey, { ...r, lines }, receiptId);
@@ -244,6 +247,7 @@ export async function recordReceipt(pool: Pool, actor: Actor, input: unknown, re
     for (const l of lines) {
       const line = fresh.get(l.lineId);
       if (!line) throw new AppError('not_found');
+      if (r.claimId && r.claimId !== line.claimId) throw new AppError('invalid_input');
       if (l.amount > BigInt(line.pendingCents)) throw new AppError('conflict', 'That receipt is more than is still reserved on the claim line');
     }
     await repo.insertReceipt(tx, {
@@ -322,13 +326,14 @@ export async function recordExternalReceipt(pool: Pool, actor: Actor, input: unk
  */
 export async function reverseReceipt(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
-  const { csrf: _csrf, idempotencyKey, allocationId: _alloc, ...d } = parse(hsaSchemas.reverseReceipt, input);
+  const { csrf: _csrf, idempotencyKey, allocationId, ...d } = parse(hsaSchemas.reverseReceipt, input);
   const eventId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.receipt_reverse', idempotencyKey, d, eventId);
     if (replayId) return { id: replayId, replayed: true };
     const probe = await repo.receiptEntries(tx, actor.householdId, d.receiptId);
     if (probe.length === 0) throw new AppError('not_found');
+    if (allocationId && !probe.some((e) => e.allocationId === allocationId)) throw new AppError('invalid_input');
     await lockForAllocations(tx, actor, probe.map((e) => e.allocationId));
     const entries = await repo.receiptEntries(tx, actor.householdId, d.receiptId);
     if (entries.some((e) => e.reversed)) throw new AppError('conflict', 'That receipt was already reversed');

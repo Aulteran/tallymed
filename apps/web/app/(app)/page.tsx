@@ -51,7 +51,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <section className="metrics" aria-label="HSA reimbursements">
         <Link href={hsaLink('available')}><div className="card"><span>HSA available</span><strong><Money cents={hsaTotals.availableCents} /></strong><span className="muted">Eligible and not yet claimed (statement dates do not filter this)</span></div></Link>
         <Link href={hsaLink('pending')}><div className="card"><span>HSA pending</span><strong><Money cents={hsaTotals.pendingCents} /></strong><span className="muted">Reserved by open claims</span></div></Link>
-        <Link href={hsaLink('eligible')}><div className="card"><span>HSA received</span><strong><Money cents={hsaTotals.receivedCents} /></strong><span className="muted">Not household cash; provider balances unchanged</span></div></Link>
+        <Link href={hsaLink('received')}><div className="card"><span>HSA received</span><strong><Money cents={hsaTotals.receivedCents} /></strong><span className="muted">Not household cash; provider balances unchanged</span></div></Link>
         <Link href={hsaLink('needs_review')}><div className="card"><span>HSA needs review</span><strong><Money cents={hsaTotals.needsReviewCents} /></strong><span className="muted">{hsaTotals.needsReviewCount} payments above their ceiling</span></div></Link>
       </section>
       <div className="card">

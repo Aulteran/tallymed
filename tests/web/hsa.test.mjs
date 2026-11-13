@@ -434,17 +434,32 @@ test('database guards: raw writers cannot over-reserve, over-pay, skip evidence,
     for (const r of results.filter((x) => x.status === 'rejected')) assert.match(r.reason.message, /exceed the eligible ceiling/);
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['6000', '6000', '0', '0', '0']);
     // A line cannot be paid or released beyond its reservation, nor a receipt left unallocated or partly reversed.
-    const rid = randomUUID();
-    await pool.query(`insert into hsa_receipts (id, household_id, received_on, amount_cents, origin, source, created_by) values ($1, $2, '2026-05-02', 1100, 'claim', 'other', $3)`, [rid, hh, u]);
-    await assert.rejects(entry(pool, { kind: 'receipt', claimId: claim.id, lineId: line.lineId, receiptId: rid, cents: 1100 }), /beyond its reservation/);
+    // Each attempt runs in one transaction with its receipt header, since a header alone is refused at commit.
+    const withReceipt = async (cents, fn) => {
+      const c = await pool.connect();
+      const rid = randomUUID();
+      try {
+        await c.query('begin');
+        await c.query(`insert into hsa_receipts (id, household_id, received_on, amount_cents, origin, source, created_by) values ($1, $2, '2026-05-02', $3, 'claim', 'other', $4)`, [rid, hh, cents, u]);
+        await fn(c, rid);
+        await c.query('commit');
+      } catch (e) {
+        await c.query('rollback').catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    };
+    await assert.rejects(withReceipt(1100, (c, rid) => entry(c, { kind: 'receipt', claimId: claim.id, lineId: line.lineId, receiptId: rid, cents: 1100 })), /beyond its reservation/);
     await assert.rejects(entry(pool, { kind: 'cancel', claimId: claim.id, lineId: line.lineId, cents: 1001 }), /beyond its reservation/);
-    const rid2 = randomUUID();
-    await pool.query(`insert into hsa_receipts (id, household_id, received_on, amount_cents, origin, source, created_by) values ($1, $2, '2026-05-02', 1000, 'claim', 'other', $3)`, [rid2, hh, u]);
-    await assert.rejects(entry(pool, { kind: 'receipt', claimId: claim.id, lineId: line.lineId, receiptId: rid2, cents: 400 }), /allocated in full/);
-    await assert.rejects(entry(pool, { kind: 'receipt', claimId: randomUUID(), lineId: line.lineId, receiptId: rid2, cents: 1000 }), /foreign key|same claim/);
-    // Kind and reference rules: wrong receipt origin, reversing a non-receipt, a reversal that does not match.
-    await assert.rejects(entry(pool, { kind: 'external_receipt', receiptId: rid2, cents: 1000 }), /receipt does not match/);
-    await assert.rejects(entry(pool, { kind: 'receipt_reversal', receiptId: rid2, reverses: line.lineId, cents: 1000 }), /exactly offset|foreign key/);
+    // A receipt header with no entries, or with entries that do not add up, never commits.
+    await assert.rejects(withReceipt(1000, async () => {}), /allocated in full/);
+    await assert.rejects(withReceipt(1000, (c, rid) => entry(c, { kind: 'receipt', claimId: claim.id, lineId: line.lineId, receiptId: rid, cents: 400 })), /allocated in full/);
+    await assert.rejects(withReceipt(1000, (c, rid) => entry(c, { kind: 'receipt', claimId: randomUUID(), lineId: line.lineId, receiptId: rid, cents: 1000 })), /foreign key|same claim/);
+    assert.equal(await t.count('hsa_receipts'), 0, 'no orphan receipt header was left behind');
+    // Kind and reference rules: wrong receipt origin, reversing a non-receipt.
+    await assert.rejects(withReceipt(1000, (c, rid) => entry(c, { kind: 'external_receipt', receiptId: rid, cents: 1000 })), /receipt does not match/);
+    await assert.rejects(withReceipt(1000, (c, rid) => entry(c, { kind: 'receipt_reversal', receiptId: rid, reverses: line.lineId, cents: 1000 })), /exactly offset|foreign key/);
     // Evidence: an external receipt without evidence, and a decision without evidence.
     await assert.rejects(pool.query(`insert into hsa_receipts (id, household_id, received_on, amount_cents, origin, source, created_by) values (gen_random_uuid(), $1, '2026-05-02', 100, 'external', 'other', $2)`, [hh, u]), /check/);
     await assert.rejects(pool.query(
@@ -454,7 +469,8 @@ test('database guards: raw writers cannot over-reserve, over-pay, skip evidence,
     await assert.rejects(pool.query(
       `insert into hsa_eligibility_decisions (id, household_id, payment_id, allocation_id, bill_id, status, eligible_cents, rationale, evidence_type, evidence_note, decided_on, created_by)
        values (gen_random_uuid(), $1, $2, $3, $4, 'eligible', 10001, 'x', 'receipt', 'y', '2026-05-01', $5)`, [hh, a.paymentId, a.allocationId, a.bill.id, u]), /net cash/);
-    // Immutability, including truncate.
+    // Immutability, including truncate (needs a committed receipt to act on).
+    await t.receipt([{ lineId: line.lineId, amount: '1.00' }]);
     for (const table of ['hsa_entries', 'hsa_claims', 'hsa_receipts', 'hsa_eligibility_decisions']) {
       await assert.rejects(pool.query(`update ${table} set household_id = household_id`), /append-only/);
       await assert.rejects(pool.query(`delete from ${table}`), /append-only/);
@@ -467,7 +483,6 @@ test('database guards: raw writers cannot over-reserve, over-pay, skip evidence,
     await assert.rejects(pool.query(
       `insert into hsa_entries (id, household_id, payment_id, allocation_id, bill_id, event_id, kind, claim_id, line_id, amount_cents, effective_date, created_by)
        values ($1, $2, $3, $4, $5, gen_random_uuid(), 'reserve', $6, $1, 100, '2026-05-01', $7)`, [randomUUID(), h2, a.paymentId, a.allocationId, a.bill.id, c2, u]), /payment allocation|foreign key/);
-    assert.ok(rid && rid2);
   } finally {
     await t.db.drop();
   }
@@ -673,5 +688,50 @@ test('upgrade over payment data from the prior schema: existing allocations star
     assert.equal(billContract(await svc.getBillDetail(db.pool, actor, b.id).then((d) => d.bill)).openBalanceCents, '6000', 'only the payment refund moved the provider balance');
   } finally {
     await db.drop();
+  }
+});
+
+test('review follow-ups: status follows net received, mixed-up form ids are refused, the figures contract caps its page, and a received filter exists', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const a = await t.alloc({ bill: '100.00', paid: '100.00' });
+    const b = await t.alloc({ bill: '100.00', paid: '100.00' });
+    await t.decide(a.allocationId, 'eligible', '100.00');
+    await t.decide(b.allocationId, 'eligible', '100.00');
+    const c1 = await t.claim([{ allocationId: a.allocationId, amount: '40.00' }]);
+    const c2 = await t.claim([{ allocationId: b.allocationId, amount: '30.00' }]);
+    const l1 = await t.line(c1.id);
+    const l2 = await t.line(c2.id);
+    // A fully reversed receipt no longer reads as fulfilled, and the claim is closed with nothing received.
+    const full = await t.receipt([{ lineId: l1.lineId, amount: '40.00' }]);
+    assert.equal((await t.line(c1.id)).status, 'fulfilled');
+    await t.reverse(full.id);
+    const after = await t.line(c1.id);
+    assert.deepEqual([after.status, after.receivedCents, after.pendingCents], ['reversed', '0', '0']);
+    const claim = await hsa.getHsaClaimDetail(t.db.pool, t.actor, c1.id);
+    assert.deepEqual([claim.claim.receivedCents, claim.claim.open], ['0', false]);
+    // A partly reversed line (paid in two receipts, one reversed) is partially fulfilled; a reversal with pending left is submitted.
+    const r1 = await t.receipt([{ lineId: l2.lineId, amount: '10.00' }]);
+    await t.receipt([{ lineId: l2.lineId, amount: '5.00' }]);
+    await t.reverse(r1.id);
+    assert.deepEqual([(await t.line(c2.id)).status, (await t.line(c2.id)).receivedCents], ['partially_fulfilled', '500']);
+    const c3 = await t.claim([{ allocationId: a.allocationId, amount: '10.00' }]);
+    const r3 = await t.receipt([{ lineId: (await t.line(c3.id)).lineId, amount: '4.00' }]);
+    await t.reverse(r3.id);
+    assert.equal((await t.line(c3.id)).status, 'submitted');
+    // Mixed-up claim or payment ids on a form are refused instead of silently ignored.
+    await assert.rejects(hsa.releaseClaimLine(t.db.pool, t.actor, { idempotencyKey: t.key(), claimId: c1.id, lineId: l2.lineId, kind: 'cancel', effectiveDate: '2026-05-01', reason: 'x' }, 'r'), code('invalid_input'));
+    await assert.rejects(hsa.releaseClaimLine(t.db.pool, t.actor, { idempotencyKey: t.key(), allocationId: a.allocationId, lineId: l2.lineId, kind: 'cancel', effectiveDate: '2026-05-01', reason: 'x' }, 'r'), code('invalid_input'));
+    await assert.rejects(t.receipt([{ lineId: l2.lineId, amount: '1.00' }], { claimId: c1.id }), code('invalid_input'));
+    await assert.rejects(t.reverse(r1.id, { allocationId: a.allocationId }), code('invalid_input'));
+    await hsa.releaseClaimLine(t.db.pool, t.actor, { idempotencyKey: t.key(), claimId: c2.id, allocationId: b.allocationId, lineId: l2.lineId, kind: 'cancel', effectiveDate: '2026-05-01', reason: 'Matching ids work' }, 'r');
+    // The figures contract caps an oversized page limit instead of rejecting it.
+    const page = await listHsaFigures(t.db.pool, t.actor, { limit: 500 });
+    assert.equal(page.items.length, 2);
+    assert.equal((await listHsaFigures(t.db.pool, t.actor, { limit: 0 })).items.length, 1);
+    // The received filter lists allocations with reimbursements received.
+    assert.deepEqual((await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'received' })).items.map((r) => r.allocationId), [b.allocationId]);
+  } finally {
+    await t.db.drop();
   }
 });

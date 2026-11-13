@@ -231,6 +231,21 @@ end $$;
 create constraint trigger hsa_entries_guard after insert on hsa_entries
   deferrable initially deferred for each row execute function hsa_entry_guard();
 
+-- A receipt header never stands alone: at commit its entries add up to its amount, so a raw INSERT of a header with no entries
+-- (or with the wrong total) is refused. The entry guard above re-checks the same sum when entries are added later.
+create function hsa_receipt_guard() returns trigger language plpgsql as $$
+declare
+  allocated bigint;
+begin
+  select coalesce(sum(amount_cents), 0) into allocated from hsa_entries where receipt_id = new.id and kind in ('receipt', 'external_receipt');
+  if allocated <> new.amount_cents then
+    raise exception 'a receipt must be allocated in full (receipt %, amount %, allocated %)', new.id, new.amount_cents, allocated using errcode = 'check_violation';
+  end if;
+  return null;
+end $$;
+create constraint trigger hsa_receipts_guard after insert on hsa_receipts
+  deferrable initially deferred for each row execute function hsa_receipt_guard();
+
 -- A decision cannot certify more than the allocation's net cash at commit. Reductions below pending and received are allowed
 -- (they are real, historical decisions) and show as needs review.
 create function hsa_decision_guard() returns trigger language plpgsql as $$

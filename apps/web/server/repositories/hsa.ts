@@ -6,7 +6,7 @@ import type { HsaAllocationFilter, HsaClaimFilter, HsaScope } from '../validatio
 
 export type DecisionStatus = 'eligible' | 'ineligible' | 'pending';
 export type HsaEntryKind = 'reserve' | 'receipt' | 'external_receipt' | 'receipt_reversal' | 'reject' | 'cancel';
-export type LineStatus = 'submitted' | 'partially_fulfilled' | 'fulfilled' | 'rejected' | 'canceled';
+export type LineStatus = 'submitted' | 'partially_fulfilled' | 'fulfilled' | 'rejected' | 'canceled' | 'reversed';
 
 /** One payment allocation with its current decision and every reconciliation figure (see docs/ledger.md). */
 export interface HsaAllocation {
@@ -61,6 +61,7 @@ function scopeWhere(f: HsaScope & { state?: string }, params: unknown[]): string
     case 'eligible': where.push(`s.ceiling_cents > 0`); break;
     case 'available': where.push(`s.available_cents > 0`); break;
     case 'pending': where.push(`s.pending_cents > 0`); break;
+    case 'received': where.push(`s.received_cents > 0`); break;
     case 'needs_review': where.push(`s.needs_review_cents > 0`); break;
     case 'ineligible': where.push(`s.decision_status = 'ineligible'`); break;
     default: break;
@@ -194,11 +195,15 @@ interface LineRow {
 
 function lineOf(r: LineRow): Line {
   const reserved = BigInt(r.reserved), gross = BigInt(r.gross), pending = BigInt(r.pending_raw), rejected = BigInt(r.rejected);
+  // Status follows what is actually received (paid less reversed), so a fully reversed receipt never reads as fulfilled.
+  const received = gross - BigInt(r.reversed);
   let status: LineStatus;
-  if (pending > 0n) status = gross > 0n ? 'partially_fulfilled' : 'submitted';
-  else if (gross === reserved) status = 'fulfilled';
-  else if (gross > 0n) status = 'partially_fulfilled';
-  else status = rejected > 0n ? 'rejected' : 'canceled';
+  if (pending > 0n) status = received > 0n ? 'partially_fulfilled' : 'submitted';
+  else if (received === reserved) status = 'fulfilled';
+  else if (received > 0n) status = 'partially_fulfilled';
+  else if (rejected > 0n) status = 'rejected';
+  else if (BigInt(r.canceled) > 0n) status = 'canceled';
+  else status = 'reversed';
   return {
     lineId: r.line_id, claimId: r.claim_id, allocationId: r.allocation_id, paymentId: r.payment_id, billId: r.bill_id, memberName: r.member_name,
     billLabel: r.bill_label, paidOn: r.paid_on, reservedCents: r.reserved, receivedGrossCents: r.gross, reversedCents: r.reversed, rejectedCents: r.rejected,

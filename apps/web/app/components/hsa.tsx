@@ -10,7 +10,7 @@ export const EvidenceOptions = () => <>{EVIDENCE_TYPES.map((v) => <option key={v
 export const SourceOptions = () => <>{RECEIPT_SOURCES.map((v) => <option key={v} value={v}>{label(v)}</option>)}</>;
 
 export const LINE_LABEL: Record<LineStatus, string> = {
-  submitted: 'Submitted', partially_fulfilled: 'Partially fulfilled', fulfilled: 'Fulfilled', rejected: 'Rejected', canceled: 'Canceled',
+  submitted: 'Submitted', partially_fulfilled: 'Partially fulfilled', fulfilled: 'Fulfilled', rejected: 'Rejected', canceled: 'Canceled', reversed: 'Receipt reversed',
 };
 export const LineStatusPill = ({ status }: { status: LineStatus }) => <span className={status === 'fulfilled' ? 'pill' : 'pill warn'}>{LINE_LABEL[status]}</span>;
 

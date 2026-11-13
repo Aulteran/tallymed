@@ -139,7 +139,7 @@ export interface HsaAllocationContract {
 /** One page of HSA figures, newest payment first; follow `nextCursor` until null for every row. Filters match the HSA screens. */
 export async function listHsaFigures(pool: Pool | Queryable, actor: Actor, filter: { memberId?: string; providerId?: string; from?: string; to?: string; state?: string; limit?: number; cursor?: string } = {}): Promise<{ items: HsaAllocationContract[]; nextCursor: string | null }> {
   authorize(actor, 'expenses:read');
-  const page = await hsaRepo.listAllocations(pool, actor.householdId, parse(hsaFilterSchemas.allocations, { limit: String(Math.min(filter.limit ?? 100, 100)), ...filter }));
+  const page = await hsaRepo.listAllocations(pool, actor.householdId, parse(hsaFilterSchemas.allocations, { ...filter, limit: String(Math.max(1, Math.min(filter.limit ?? 100, 100))) }));
   return {
     items: page.items.map((a) => ({
       allocationId: a.allocationId, paymentId: a.paymentId, billId: a.billId, memberId: a.memberId, providerId: a.providerId, paidOn: a.paidOn, netCents: a.netCents,
