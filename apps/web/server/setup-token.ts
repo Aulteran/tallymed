@@ -61,7 +61,9 @@ function banner(origin: string, token: string | null): string {
  * Returns the token that currently opens setup, generating (and printing) one if none is configured. Call it only while
  * setup is still needed, so a completed installation never produces a token.
  */
-export function ensureSetupToken(config: Pick<AppConfig, 'setupToken' | 'canonicalOrigin'>): { token: string; source: SetupTokenSource } {
+export function ensureSetupToken(config: Pick<AppConfig, 'setupToken' | 'setupTokenError' | 'canonicalOrigin'>): { token: string; source: SetupTokenSource } {
+  // An invalid configured token fails closed: no setup, and no silently different generated token.
+  if (config.setupTokenError) throw new AppError('internal', config.setupTokenError);
   if (config.setupToken) return { token: config.setupToken, source: 'env' };
   const s = state();
   if (!s.generated) {
@@ -73,7 +75,7 @@ export function ensureSetupToken(config: Pick<AppConfig, 'setupToken' | 'canonic
 }
 
 /** Prints the startup notice while setup is needed. For a configured token the banner names the variable, never the value. */
-export function announceSetup(config: Pick<AppConfig, 'setupToken' | 'canonicalOrigin'>): void {
+export function announceSetup(config: Pick<AppConfig, 'setupToken' | 'setupTokenError' | 'canonicalOrigin'>): void {
   if (config.setupToken) {
     output(banner(config.canonicalOrigin, null));
     log('info', 'setup.required', { tokenSource: 'env' });
@@ -98,7 +100,7 @@ const pruned = (list: number[], now: number) => list.filter((t) => now - t < SET
  * global because an attacker can use any address, and per address when a trusted proxy reports one.
  * `ip` is null unless it came through the trusted proxy path.
  */
-export function checkSetupToken(config: Pick<AppConfig, 'setupToken' | 'canonicalOrigin'>, presented: string, ip: string | null, now = Date.now()): { source: SetupTokenSource } {
+export function checkSetupToken(config: Pick<AppConfig, 'setupToken' | 'setupTokenError' | 'canonicalOrigin'>, presented: string, ip: string | null, now = Date.now()): { source: SetupTokenSource } {
   const s = state();
   s.failures = pruned(s.failures, now);
   const mine = ip ? pruned(s.byAddress.get(ip) ?? [], now) : [];

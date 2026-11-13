@@ -53,7 +53,7 @@ export async function bootstrapAdmin(
  * its attempt limit run before the password is hashed, and the token itself is never written anywhere.
  */
 export async function completeSetup(
-  pool: Pool, config: Pick<AppConfig, 'setupToken' | 'canonicalOrigin'>, input: unknown,
+  pool: Pool, config: Pick<AppConfig, 'setupToken' | 'setupTokenError' | 'canonicalOrigin'>, input: unknown,
   ctx: { ip: string | null; requestId: string },
 ): Promise<{ householdId: string; adminUserId: string }> {
   if (await isBootstrapped(pool)) throw new AppError('not_found');

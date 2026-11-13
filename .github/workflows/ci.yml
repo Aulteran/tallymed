@@ -51,7 +51,7 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     env:
-      TALLYMED_SETUP_TOKEN: ci-synthetic-setup-token-0f3a9c7e1b5d2468
+      TALLYMED_SETUP_TOKEN: k7Qz4mVx9LpR2wTn8YbH5cJd3FgS6aUe
     steps:
       - uses: actions/checkout@v6
       - name: Validate release Compose file

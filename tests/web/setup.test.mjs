@@ -1,10 +1,10 @@
 // First-administrator setup with a one-time setup token. All data is fabricated.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadConfig } from '../../apps/web/server/config.ts';
+import { loadConfig, parseSetupToken } from '../../apps/web/server/config.ts';
 import * as handlers from '../../apps/web/server/http.ts';
 import { setLogSink } from '../../apps/web/server/log.ts';
-import { isBootstrapped } from '../../apps/web/server/services/bootstrap.ts';
+import { bootstrapAdmin, isBootstrapped } from '../../apps/web/server/services/bootstrap.ts';
 import { announceSetupWhenNeeded } from '../../apps/web/server/setup-announce.ts';
 import {
   announceSetup, checkSetupToken, closeSetup, ensureSetupToken, MAX_SETUP_FAILURES, MAX_SETUP_FAILURES_PER_ADDRESS,
@@ -13,8 +13,9 @@ import {
 import { migrate } from '../../apps/web/server/migrate.ts';
 import { freshDatabase, loginJson, ORIGIN, PASSWORD, PROXY_SECRET, post, skipDb, testConfig } from './helpers.mjs';
 
-const ENV_TOKEN = 'synthetic-setup-token-0123456789-abcdef';
+const ENV_TOKEN = 'k7Qz4mVx9LpR2wTn8YbH5cJd3FgS6aUe';
 const baseEnv = { DATABASE_URL: 'postgres://x/y', TALLYMED_CANONICAL_ORIGIN: 'https://tallymed.example' };
+const seedAdmin = (db) => bootstrapAdmin(db.pool, { householdName: 'Seed Family', email: 'seed@example.test', displayName: 'Seed', password: PASSWORD });
 const code = async (res) => (await res.clone().json()).error?.code;
 const admin = (n = 1, extra = {}) => ({ householdName: 'Example Family', displayName: 'Alex Example', email: `admin${n}@example.test`, password: PASSWORD, ...extra });
 
@@ -42,10 +43,35 @@ test('config: an operator-defined token must be long, printable and not guessabl
   assert.equal(loadConfig(baseEnv).setupToken, null);
   assert.equal(loadConfig({ ...baseEnv, TALLYMED_SETUP_TOKEN: '' }).setupToken, null);
   assert.equal(loadConfig({ ...baseEnv, TALLYMED_SETUP_TOKEN: ENV_TOKEN }).setupToken, ENV_TOKEN);
-  const bad = ['short', 'a'.repeat(40), 'abcabcabcabcabcabcabcabcabc', 'changeme-changeme-changeme-1234', 'has space in the middle of the token 123', 'x'.repeat(129), 'tokén-with-non-ascii-characters-123456'];
+  const bad = ['short', 'a'.repeat(40), 'abcabcabcabcabcabcabcabcabc', 'changeme-changeme-changeme-1234', 'has space in the middle of the token 123', 'x'.repeat(129),
+    'tokén-with-non-ascii-characters-123456', 'abcdefghijklmnopqrstuvwxyz', '0123456789abcdefghijklmn', 'qwertyuiopasdfghjklzxcvbnm', 'abcdefghij-abcdefghij-abcdefghij',
+    'correct-horse-battery-staple', 'correct-horse-battery-staple-9Xk2Lm', 'Tallymed2026!Tallymed2026!', 'Zq7Wm3Kx9Rv2Lp5N-0123456789-Hy', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabcdefghijklmnop'];
   for (const value of bad) {
-    assert.throws(() => loadConfig({ ...baseEnv, TALLYMED_SETUP_TOKEN: value }), (e) => e.message.includes('TALLYMED_SETUP_TOKEN') && !e.message.includes(value), value);
+    // An invalid value never throws from loadConfig (it must not take down a finished installation); it closes setup instead.
+    const c = loadConfig({ ...baseEnv, TALLYMED_SETUP_TOKEN: value });
+    assert.equal(c.setupToken, null, value);
+    assert.ok(c.setupTokenError?.includes('TALLYMED_SETUP_TOKEN') && !c.setupTokenError.includes(value), value);
+    assert.throws(() => parseSetupToken(value), undefined, value);
   }
+  for (const good of ['k7Qz4mVx9LpR2wTn8YbH5cJd3FgS6aUe', 'Zq7Wm3Kx9Rv2Lp5NhY8cTb4Jd6FgS1aUeXo0', '3f9a1c7e5b2d8046a1c93e7f5b0d2846c8a4e1f7b3d9052a6c0e8f4b1d7a359'])
+    assert.equal(parseSetupToken(good), good);
+});
+
+test('an invalid configured token never breaks an installation that has an administrator, but closes setup while it is needed', { skip: skipDb }, async () => {
+  const c = capture();
+  const { db, ctx } = await setup({ TALLYMED_SETUP_TOKEN: 'correct-horse-battery-staple-9Xk2Lm' });
+  try {
+    assert.ok(ctx.config.setupTokenError);
+    const res = await postSetup(ctx, { setupToken: 'anything', ...admin() });
+    assert.equal(res.status, 500);
+    assert.equal(await announceSetupWhenNeeded(1, 1), false);
+    assert.equal(c.out.length, 0, 'no banner and no generated replacement token');
+    assert.ok(c.logs.some((l) => l.includes('setup.config_invalid')));
+    // Once an administrator exists, the same configuration is harmless: sign-in works and setup answers 404.
+    await seedAdmin(db);
+    assert.equal((await postSetup(ctx, { setupToken: 'anything', ...admin(2) })).status, 404);
+    assert.equal((await loginJson(handlers, ctx, 'seed@example.test')).res.status, 200);
+  } finally { await db.drop(); c.restore(); }
 });
 
 test('generated token: 256 random bits, printed once to the console, never through structured logs', () => {

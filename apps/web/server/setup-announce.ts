@@ -22,6 +22,10 @@ export async function announceSetupWhenNeeded(attempts = 120, delayMs = 3000): P
   for (let i = 0; i < attempts; i++) {
     try {
       if (await isBootstrapped(ctx.pool)) return false;
+      if (ctx.config.setupTokenError) {
+        log('error', 'setup.config_invalid', { reason: ctx.config.setupTokenError, note: 'setup is closed until TALLYMED_SETUP_TOKEN is fixed or emptied' });
+        return false;
+      }
       announceSetup(ctx.config);
       return true;
     } catch (error) {
