@@ -2,7 +2,9 @@
 
 Medical expenses, accounted for. TallyMed is a planned self-hosted medical expense ledger for one family, covering bills, provider payments, installment plans, supporting documents and HSA reimbursement.
 
-**Starter status.** This repository runs a static marketing foundation with a descriptive roadmap, a Next.js web shell with a liveness endpoint, and a development PostgreSQL container. The shell stores no records and has no sign-in. The complete marketing milestone, the private ledger, documents, authenticated MCP, and supported deployment and recovery are planned.
+**Status.** TallyMed is pre-release. The repository contains the public marketing site, the private household app (ledger, payments and plans, HSA reimbursements, documents), the optional LAN-only assistant listener, and operator guidance for a self-hosted install. No stable release has been published and the operator drills described in the release notes are still to be recorded; use fabricated data until a release says otherwise. See [operations](docs/operations.md).
+
+**Branches.** `dev` is the default branch: branch from it and open pull requests against it. `main` is the release branch. A push to `main` publishes the container images to GitHub Container Registry and deploys the public site.
 
 ## Run locally
 
@@ -21,10 +23,11 @@ Open http://localhost:3000. In another terminal, run `npm run dev:web` for the s
 | `apps/web` | Private application shell |
 | `packages/brand` | Ledger and Medical Cross assets |
 | `infra` | Container build |
+| `deploy` | Compose file and example environment for published images |
 | `docs` | Human guides and specifications |
 | `.project` | Milestone plans, decisions, and handoff status |
 | `.claude/skills` | Reusable Claude Code workflows |
 
-Start with [Publish and initialize Claude Code Projects](docs/github-and-claude.md). See the [product specification](docs/product.md), [architecture](docs/architecture.md), [ledger rules](docs/ledger.md), [security and operations](docs/security.md), and [milestone index](.project/README.md).
+Start with [Publish and initialize Claude Code Projects](docs/github-and-claude.md). See the [product specification](docs/product.md), [architecture](docs/architecture.md), [ledger rules](docs/ledger.md), [security and operations](docs/security.md), the [self-hosted operations guide](docs/operations.md), and [milestone index](.project/README.md).
 
 The TallyMed source is distributed under [GNU AGPL version 3 only](LICENSE), SPDX `AGPL-3.0-only`. Third-party packages retain their own licenses.

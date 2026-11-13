@@ -2,7 +2,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 permissions:
   contents: read
 concurrency:
@@ -52,6 +52,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Validate release Compose file
+        run: docker compose -f deploy/compose.release.yaml config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-disposable-only
+          TALLYMED_IMAGE_TAG: sha-000000000000
+          TALLYMED_CANONICAL_ORIGIN: https://tallymed.example
+          TALLYMED_PROXY_SECRET: ci-disposable-proxy-secret-0123456789
       - name: Start synthetic development stack
         run: docker compose --env-file .env.example up --build --detach --wait
       - name: Check web and database independently

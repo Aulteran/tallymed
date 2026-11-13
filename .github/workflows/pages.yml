@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+# main is the release branch: the public site changes only when dev is merged into main. In Settings -> Environments -> github-pages,
+# deployment branches must allow main (the default branch is dev).
 permissions:
   contents: read
 concurrency:

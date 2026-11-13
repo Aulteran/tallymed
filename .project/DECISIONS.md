@@ -158,3 +158,4 @@ Known limitations (owner-visible):
 - The review screens show the proposal, the document's metadata, a link to download the pinned version, and the record summary; they do not render the document inline (PDFs are never inline).
 - Proposals from a revoked credential cannot be approved, only rejected; the reviewer attaches the document by hand if it is right.
 - The password change and reset flow and shared-NAT lockout documentation from M01 remain required before a real deployment.
+- **Branching and release (owner, M07).** `dev` is the default branch and the target for work. `main` is the release branch; a push to `main` publishes the web and MCP images to ghcr.io and deploys the public site. Images are tagged `sha-<12>` and `latest`; operators pin a `sha-` tag or digest. The publish workflow uses only `GITHUB_TOKEN` and the Docker CLI.

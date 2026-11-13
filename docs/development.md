@@ -35,4 +35,4 @@ Stop the npm web dev server before starting Compose. The web port binds to loopb
 
 Future app tests use disposable PostgreSQL and fabricated data. Test authorization with real sessions and a second actor, data constraints with real transactions, and core UI workflows in a browser. Use current official specifications when introducing new protocol, framework or tax references. For bugs and contributions, open a GitHub issue with a synthetic reproduction and link the relevant plan. Keep credentials, medical details, financial exports and live backups out of issues, pull requests and CI.
 
-For the eventual web deployment, set `TALLYMED_SOURCE_URL` to the corresponding source for the running build. See [security and operations](security.md) for the planned reverse-proxy topology and release criteria.
+Work branches from `dev` (the default branch) and pull requests target `dev`; `main` is the release branch and publishing is described in [operations](operations.md). For a deployment, set `TALLYMED_SOURCE_URL` to the corresponding source for the running build. See [security and operations](security.md) for the planned reverse-proxy topology and release criteria.
