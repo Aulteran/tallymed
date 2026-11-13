@@ -2,4 +2,9 @@
 **/.next
 **/out
 .git
-.env*
+**/.env*
+deploy
+**/.mcp-tls
+**/*.pem
+**/*.key
+**/*.crt

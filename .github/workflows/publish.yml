@@ -40,6 +40,7 @@ jobs:
           owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
           short=${COMMIT:0:12}
           created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Build both images first so a failed build never leaves only one of them moved to the new commit.
           for name in web mcp; do
             image="ghcr.io/${owner}/tallymed-${name}"
             docker build \
@@ -52,6 +53,9 @@ jobs:
               --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
               --label "org.opencontainers.image.title=tallymed-${name}" \
               .
+          done
+          for name in web mcp; do
+            image="ghcr.io/${owner}/tallymed-${name}"
             docker push "${image}:sha-${short}"
             docker push "${image}:latest"
             digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "${image}:sha-${short}")

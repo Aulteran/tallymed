@@ -56,7 +56,7 @@ jobs:
         run: docker compose -f deploy/compose.release.yaml config --quiet
         env:
           POSTGRES_PASSWORD: ci-disposable-only
-          TALLYMED_IMAGE_TAG: sha-000000000000
+          TALLYMED_WEB_IMAGE: ghcr.io/aulteran/tallymed-web:sha-000000000000
           TALLYMED_CANONICAL_ORIGIN: https://tallymed.example
           TALLYMED_PROXY_SECRET: ci-disposable-proxy-secret-0123456789
       - name: Start synthetic development stack
@@ -74,6 +74,15 @@ jobs:
             http://127.0.0.1:3001/api/auth/login)
           test "$code" = 200
           docker compose --env-file .env.example exec -T db psql -v ON_ERROR_STOP=1 -U tallymed -d tallymed -c "SELECT 1;"
+      - name: Check operator commands in the built images
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env.example run --rm web node apps/web/cli/documents.ts verify
+          docker compose --env-file .env.example --profile mcp build mcp
+          printf 'synthetic-ci-role-password-0123456789' | docker compose --env-file .env.example --profile mcp run --rm -T \
+            -e DATABASE_URL=postgres://tallymed:local-dev-only@db:5432/tallymed mcp node apps/web/cli/mcp.ts setup-role
+          # The assistant listener must stay off unless explicitly enabled.
+          docker compose --env-file .env.example --profile mcp run --rm mcp node apps/web/cli/mcp.ts
       - name: Show logs on failure
         if: failure()
         run: docker compose --env-file .env.example logs

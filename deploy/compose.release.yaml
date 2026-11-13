@@ -18,8 +18,18 @@ services:
       timeout: 3s
       retries: 12
   web:
-    image: ghcr.io/${TALLYMED_IMAGE_OWNER:-aulteran}/tallymed-web:${TALLYMED_IMAGE_TAG:?Set TALLYMED_IMAGE_TAG to a sha-<commit> tag or digest}
+    image: ${TALLYMED_WEB_IMAGE:?Set TALLYMED_WEB_IMAGE to ghcr.io/aulteran/tallymed-web:sha-<commit> or an @sha256 digest reference}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     depends_on:
       db:
         condition: service_healthy
@@ -37,8 +47,12 @@ services:
   # Optional assistant listener. Off unless you start the `mcp` profile AND set TALLYMED_MCP_ENABLED=true (docs/mcp.md).
   mcp:
     profiles: ["mcp"]
-    image: ghcr.io/${TALLYMED_IMAGE_OWNER:-aulteran}/tallymed-mcp:${TALLYMED_IMAGE_TAG:?Set TALLYMED_IMAGE_TAG to a sha-<commit> tag or digest}
+    image: ${TALLYMED_MCP_IMAGE:-ghcr.io/aulteran/tallymed-mcp:unset-pin-an-image}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +67,7 @@ services:
       TALLYMED_MCP_ALLOWED_HOSTS: ${TALLYMED_MCP_ALLOWED_HOSTS:-}
       TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
     volumes:
+      # Relative paths resolve next to this file, so the default is deploy/.mcp-tls. Create it with tls.crt and tls.key before starting.
       - ${TALLYMED_MCP_TLS_DIR:-./.mcp-tls}:/run/tallymed-mcp:ro
       - documents_data:/var/lib/tallymed/documents:ro
     ports:

@@ -21,16 +21,16 @@ Pushing to `main` publishes two images to GitHub Container Registry, built from 
 
 | Image | Purpose |
 | --- | --- |
-| `ghcr.io/aulteran/tallymed-web` | Web application and operator commands (`migrate`, `bootstrap`, `documents`, `mcp setup-role`) |
-| `ghcr.io/aulteran/tallymed-mcp` | Optional assistant listener (off unless enabled) |
+| `ghcr.io/aulteran/tallymed-web` | Web application and operator commands (`migrate`, `bootstrap`, `documents`) |
+| `ghcr.io/aulteran/tallymed-mcp` | Optional assistant listener (off unless enabled) and its `setup-role` command; the web image does not contain the listener code |
 
-Each push gets an immutable-by-convention tag `sha-<first 12 characters of the commit>` and moves `latest`. Run a `sha-` tag or a digest in production, never `latest`, so you know which commit you run and can roll back. Each image carries OCI labels for the source repository and exact revision. `main` is the release branch: it only receives changes that were verified on `dev`. Release notes name the supported commit for each release. The published packages are created private by the registry; the repository owner must make them public in the package settings before anyone else can pull them.
+Each push gets the tag `sha-<first 12 characters of the commit>` and moves `latest`. A sha tag is a convenience, not an immutable pin: a manual re-run of the workflow on the same commit pushes the tag again with a different digest. The immutable reference is the digest, which the publish job prints in its run summary (`ghcr.io/<owner>/tallymed-web@sha256:…`); record it in your notes and use it for `TALLYMED_WEB_IMAGE`. Never run `latest`, so you know which build you run and can roll back. Each image carries OCI labels for the source repository and exact revision. `main` is the release branch: it only receives changes that were verified on `dev`. Release notes name the supported commit for each release. The published packages are created private by the registry; the repository owner must make them public in the package settings before anyone else can pull them.
 
 ## First installation
 
 You need a Linux host with Docker Engine and Docker Compose v2, a dedicated DNS name, and a TLS-terminating reverse proxy.
 
-1. Copy `deploy/compose.release.yaml` and `deploy/release.env.example` to the host. Rename the second to `deploy/.env` and set the values: a long random `POSTGRES_PASSWORD`, `TALLYMED_IMAGE_TAG`, the public `https://` `TALLYMED_CANONICAL_ORIGIN`, a random `TALLYMED_PROXY_SECRET` of 32 or more characters, and `TALLYMED_SOURCE_URL` for the commit you run (the AGPL requires offering corresponding source to users of the network service). Keep the file readable by you only (`chmod 600`).
+1. Copy `deploy/compose.release.yaml` and `deploy/release.env.example` to the host. Rename the second to `deploy/.env` and set the values: a random `POSTGRES_PASSWORD` (`openssl rand -hex 32`; it goes into a database URL, so use hex, not base64), `TALLYMED_WEB_IMAGE` (a `…:sha-<commit>` tag or a `…@sha256:…` digest reference; also `TALLYMED_MCP_IMAGE` if you enable the assistant), the public `https://` `TALLYMED_CANONICAL_ORIGIN`, a random `TALLYMED_PROXY_SECRET` of 32 or more characters, and `TALLYMED_SOURCE_URL` for the commit you run (the AGPL requires offering corresponding source to users of the network service). Keep the file readable by you only (`chmod 600`).
 2. Start the database, then migrate and bootstrap. Define a shorthand for the commands used below:
 
    ```sh
@@ -83,7 +83,7 @@ Keep the secret out of any file that is world-readable (an `include` file with m
 
 1. Run a backup (below) and confirm it decrypts and its manifest verifies.
 2. Read the release notes for the target version, including migrations and any operator step.
-3. Set `TALLYMED_IMAGE_TAG` in `deploy/.env` to the new `sha-` tag, then:
+3. Set `TALLYMED_WEB_IMAGE` (and `TALLYMED_MCP_IMAGE` if used) in `deploy/.env` to the new reference, then:
 
    ```sh
    dc pull
@@ -94,57 +94,64 @@ Keep the secret out of any file that is world-readable (an `include` file with m
    dc run --rm web node apps/web/cli/documents.ts verify
    ```
 
-   If you use the assistant, run `printf '%s' "$MCP_DB_PASSWORD" | dc run --rm -T web node apps/web/cli/mcp.ts setup-role` after migrating, then restart the `mcp` profile.
+   If you use the assistant, run `setup-role` after migrating. It lives in the assistant image, so run it there, with the owner database URL, and then restart the listener: `printf '%s' "$MCP_DB_PASSWORD" | dc --profile mcp run --rm -T -e DATABASE_URL="postgres://tallymed:$POSTGRES_PASSWORD@db:5432/tallymed" mcp node apps/web/cli/mcp.ts setup-role` (the password is 24 to 200 characters; use `openssl rand -hex 32`). CI runs this command in the built image.
 4. Sign in, open the Overview and compare its totals with the figures you recorded before the upgrade.
 
-**Rollback limits.** Migrations only go forward; there are no down migrations. Pointing `TALLYMED_IMAGE_TAG` back at an older tag is safe only if the release notes say the schema is compatible, otherwise restore the pre-upgrade backup into a fresh database. Anything entered after the backup is lost by a restore, so upgrade when you can pause entry.
+**Rollback limits.** Migrations only go forward; there are no down migrations. Pointing `TALLYMED_WEB_IMAGE` back at an older reference is safe only if the release notes say the schema is compatible, otherwise restore the pre-upgrade backup into a fresh database. Anything entered after the backup is lost by a restore, so upgrade when you can pause entry.
 
 ## Encrypted backup
 
 A recovery set has three parts that must stay together: a PostgreSQL dump, the private document volume, and the configuration (`deploy/.env`, which holds secrets, and your proxy configuration). Encrypt the set before it leaves the host and keep the decryption key somewhere else.
 
-Stopping the web service while you copy gives a consistent set, because nothing can write between the database dump and the volume copy. A short outage is the price. Use [age](https://age-encryption.org) (or GnuPG) and keep the private key off the host and apart from the backups.
+Stopping the web service while you copy gives a consistent set, because nothing can write between the database dump and the volume copy. A short outage is the price. Use [age](https://age-encryption.org) (or GnuPG) and keep the private key off the host and apart from the backups. The commands below briefly write the plaintext set to a directory, so run them on an encrypted disk (or a tmpfs) and only as a user who can read `deploy/.env`.
 
 ```sh
-stamp=$(date -u +%Y%m%dT%H%M%SZ); set="tallymed-$stamp"; mkdir -m 700 "$set"
+stamp=$(date -u +%Y%m%dT%H%M%SZ); bundle="tallymed-$stamp"; mkdir -m 700 "$bundle"
 dc stop web
-dc exec -T db pg_dump -U tallymed -d tallymed --format=custom > "$set/db.dump"
-docker run --rm -v tallymed_documents_data:/data:ro -v "$PWD/$set:/out" alpine tar -C /data -cf /out/documents.tar .
+dc exec -T db pg_dump -U tallymed -d tallymed --format=custom > "$bundle/db.dump"
+docker run --rm -v tallymed_documents_data:/data:ro -v "$PWD/$bundle:/out" alpine tar -C /data -cf /out/documents.tar .
 dc start web
-cp deploy/.env "$set/env"
-(cd "$set" && sha256sum db.dump documents.tar env > manifest.sha256)
-tar -cf - "$set" | age --recipient "$AGE_RECIPIENT" > "$set.tar.age"
-rm -r "$set"
+cp deploy/.env "$bundle/env"
+(cd "$bundle" && sha256sum db.dump documents.tar env > manifest.sha256)
+tar -cf - "$bundle" | age --recipient "$AGE_RECIPIENT" > "$bundle.tar.age"
+rm -r "$bundle"
 ```
 
-The volume is named `<project>_documents_data`; with the provided file the project is `tallymed`. Copy `$set.tar.age` to a protected destination you do not run the app on. Keep at least one recent backup that you have restored successfully. The backup contains medical and financial information; treat the encrypted file with the same care as the database.
+The volume is named `<project>_documents_data`; with the provided file the project is `tallymed`. Copy `$bundle.tar.age` to a protected destination you do not run the app on. Keep at least one recent backup that you have restored successfully. The backup contains medical and financial information; treat the encrypted file with the same care as the database.
 
 ## Restore and drill
 
 Restore into an isolated project with a different name and port so a drill can never touch the running installation. Do it on a separate host or at least a separate Compose project, and use the same procedure for a real recovery by choosing the real project name.
 
+Prepare the drill's environment file first. The restored `env` carries the production origin and secrets; make a copy with a loopback origin and throwaway secrets, so a drill can sign in over `http://127.0.0.1:3101` and never shares a secret with production. The restored database keeps its data, so nothing else in the copy needs to match production, except that `POSTGRES_PASSWORD` is only used when the drill creates its own empty database.
+
 ```sh
 age --decrypt --identity "$AGE_IDENTITY_FILE" tallymed-<stamp>.tar.age | tar -xf -
 (cd tallymed-<stamp> && sha256sum --check manifest.sha256)
-drill() { TALLYMED_WEB_PORT=3101 docker compose -p tallymed-drill --env-file tallymed-<stamp>/env -f deploy/compose.release.yaml "$@"; }
+umask 077
+sed -e 's|^TALLYMED_CANONICAL_ORIGIN=.*|TALLYMED_CANONICAL_ORIGIN=http://127.0.0.1:3101|' \
+    -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+    -e "s|^TALLYMED_PROXY_SECRET=.*|TALLYMED_PROXY_SECRET=$(openssl rand -base64 36)|" \
+    tallymed-<stamp>/env > drill.env
+drill() { TALLYMED_WEB_PORT=3101 docker compose -p tallymed-drill --env-file drill.env -f deploy/compose.release.yaml "$@"; }
 drill up -d --wait db
 drill exec -T db pg_restore -U tallymed -d tallymed --no-owner --exit-on-error < tallymed-<stamp>/db.dump
 docker run --rm -v tallymed-drill_documents_data:/data -v "$PWD/tallymed-<stamp>:/in:ro" alpine \
-  sh -c 'tar -C /data -xf /in/documents.tar && chmod 700 /data'
+  sh -c 'tar -C /data -xf /in/documents.tar && chown -R 1000:1000 /data && chmod 700 /data'
 drill run --rm web node apps/web/cli/migrate.ts
 drill run --rm web node apps/web/cli/documents.ts verify
 drill up -d --wait web
 ```
 
-Then check the restored instance on `http://127.0.0.1:3101` (use a loopback canonical origin in a copy of the env file for the drill):
+The `node` user in the image is uid 1000; if the volume is not owned by it, `documents verify` reports permission errors, which the first drill should rule out. The first `drill up` creates the drill database with the throwaway password, and `pg_restore` then loads your data into it. Then check the restored instance on `http://127.0.0.1:3101`:
 
 - `migrate` reports the database is up to date, or applies only the migrations that postdate the backup.
 - `documents verify` exits 0: every stored version matches its recorded size and SHA-256, and there are no missing files.
 - You can sign in, and the Overview totals, a sample of bills, payments and HSA claims match what you recorded from the live system (open balance equals responsibility minus applied payments; the HSA ceiling is the lesser of the decided amount and net cash). Open one document and confirm it downloads with the recorded checksum.
 - A person without access to a record still cannot open it, and the session you restore did not carry an old browser's access (sessions expire; sign in again).
-- If the restored instance should run the assistant, create the restricted role again with `setup-role`; it is not in the dump.
+- If the restored instance should run the assistant, create the restricted role again with `setup-role` (from the assistant image, as in the upgrade step); it is not in the dump.
 
-Record each drill: date, release tag, backup identifier, who ran it, the results above, and anything that failed. Remove the drill project afterwards with `drill down --volumes`. Never run a drill with real household data on a machine you do not control, and never attach a backup, a log from one, or a screenshot of real records to an issue or pull request.
+Record each drill: date, release tag, backup identifier, who ran it, the results above, and anything that failed. Afterwards remove the drill project with `drill down --volumes`, and delete the decrypted `tallymed-<stamp>` directory and `drill.env` (they hold plaintext data and the production env copy). Never run a drill with real household data on a machine you do not control, and never attach a backup, a log from one, or a screenshot of real records to an issue or pull request.
 
 ## Integrity checks to run regularly
 
@@ -157,4 +164,4 @@ Record each drill: date, release tag, backup identifier, who ran it, the results
 
 Before a stable tag, the maintainer records in `.project/STATUS.md` and the release notes: the exact commit and image tag, supported upgrade paths, the CI run, the fresh-install, upgrade and isolated-restore drill results, the proxy and MCP negative tests (CI: `npm run test:proxy`, and the MCP suite), the dependency licence and secret-scan review, and the owner's release decision. Public site copy changes only after that evidence exists.
 
-To report a security issue, use the repository's private vulnerability reporting once enabled, with synthetic evidence only.
+To report a security issue, see [SECURITY.md](../SECURITY.md).

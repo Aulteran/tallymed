@@ -28,7 +28,7 @@ Everything an assistant client reads is returned to that client. If the client i
    printf '%s' "$MCP_DB_PASSWORD" | DATABASE_URL=... npm run mcp -w @tallymed/web -- setup-role
    ```
 
-   This creates (or updates) the role `tallymed_mcp` (set `TALLYMED_MCP_ROLE` for another name) and applies the grants. Run it again after every upgrade that adds tables (it is safe to repeat). In the Compose stack use `docker compose run --rm -T web node apps/web/cli/mcp.ts setup-role`.
+   This creates (or updates) the role `tallymed_mcp` (set `TALLYMED_MCP_ROLE` for another name) and applies the grants. Run it again after every upgrade that adds tables (it is safe to repeat). The web image does not contain the listener code, so in a Compose stack run it from the assistant image with the owner database URL: `docker compose --profile mcp run --rm -T -e DATABASE_URL=postgres://tallymed:<owner password>@db:5432/tallymed mcp node apps/web/cli/mcp.ts setup-role`. For the published-image stack see [operations](operations.md).
 
 2. **Configure the listener.** Set these on the MCP process only (never on the web service). A database password with characters such as `@`, `/` or `:` must be percent-encoded in a URL (the Compose file does not do it for you; prefer a password of letters and digits):
 
@@ -47,7 +47,7 @@ Everything an assistant client reads is returned to that client. If the client i
    | `TALLYMED_MCP_CALLS_PER_MINUTE`, `TALLYMED_MCP_FAILED_AUTH_PER_MINUTE`, `TALLYMED_MCP_PENDING_PER_CLIENT`, `TALLYMED_MCP_PENDING_PER_HOUSEHOLD` | Limits (defaults 120, 20, 50, 200). |
    | `TALLYMED_MCP_CONTAINER` | `true` only inside a container, where the process cannot know its own private address and may bind `0.0.0.0`. All other non-loopback requirements still apply. |
 
-3. **Start it.** `npm run mcp -w @tallymed/web` (or `node apps/web/cli/mcp.ts` from the image). With Compose, set `TALLYMED_MCP_ENABLED=true`, `TALLYMED_MCP_DB_PASSWORD`, the allowlist and host names, put `tls.crt` and `tls.key` in `./.mcp-tls`, then `docker compose --profile mcp up -d mcp`. The default `docker compose up` never starts it. The endpoint is `POST /mcp` on the configured address (MCP streamable HTTP, stateless, JSON responses).
+3. **Start it.** `npm run mcp -w @tallymed/web` (or `node apps/web/cli/mcp.ts` from the image). With Compose, set `TALLYMED_MCP_ENABLED=true`, `TALLYMED_MCP_DB_PASSWORD`, the allowlist and host names, put `tls.crt` and `tls.key` in `./.mcp-tls` (relative to the Compose file, so `deploy/.mcp-tls` for `deploy/compose.release.yaml`, or set `TALLYMED_MCP_TLS_DIR`), then `docker compose --profile mcp up -d mcp`. The default `docker compose up` never starts it. The endpoint is `POST /mcp` on the configured address (MCP streamable HTTP, stateless, JSON responses).
 
 4. **Create a credential.** Sign in as an administrator and open **Assistant**. Name it, choose a lifetime (at most 365 days) and the permissions, and copy the token from the next page. It is shown once, only its SHA-256 digest is stored, and a lost token cannot be recovered: revoke it and make another. Up to ten credentials can be active at a time.
 
