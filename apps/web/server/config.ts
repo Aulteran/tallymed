@@ -70,7 +70,7 @@ function isRepetitive(value: string): boolean {
  * An operator-defined setup token is a bearer credential for creating the first administrator, so it must be long and
  * not guessable from a dictionary: 32 to 128 printable ASCII characters without whitespace, at least 16 different
  * characters, no run of 5 sequential characters or keyboard-row fragment, no repeated 8-character block, no common word
- * or placeholder. Values from `openssl rand -base64 32` or `-hex 32` pass. Error messages never contain the value.
+ * or placeholder. Values from `openssl rand -base64 32` pass; a 32-byte hex value (16 symbols) often has fewer than 16 distinct characters and is rejected about a quarter of the time, so use base64 or `-hex 48`. Error messages never contain the value.
  */
 export function parseSetupToken(value: string | undefined): string | null {
   if (value === undefined || value === '') return null;
