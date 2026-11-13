@@ -13,7 +13,8 @@ export default async function NewBill({ searchParams }: { searchParams: SearchPa
     pickParties(ctx.pool, actor, 'providers', { q: q80(p.providerQ), currentId: p.providerId }),
     pickVisits(ctx.pool, actor, { memberId: p.memberId, q: q80(p.visitQ), currentId: p.visitId }).catch(() => ({ items: [], truncated: false })),
   ]);
-  return <main>
+  return <main id="main">
+    <p className="crumb"><Link href="/bills">← Bills</Link></p>
     <h1>Enter a bill</h1>
     <Banner code={p.error} />
     {(members.truncated || providers.truncated || visits.truncated || p.memberQ || p.providerQ || p.visitQ) && <>

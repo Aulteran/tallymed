@@ -16,13 +16,14 @@ export default async function DocumentPage({ params, searchParams }: { params: P
   const active = attachments.filter((a) => !a.detachedAt);
   const enabled = !!ctx.store && !removed;
   const here = `/documents/${d.id}`;
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/documents">← Documents</Link></p>
     <h1>{d.title}</h1>
     <p>{label(d.kind)} · {mediaLabel(d.mediaType)} · {formatBytes(d.sizeBytes)} · version {d.currentVersionNo} · added {dateOf(d.createdAt)} by {d.createdByName ?? 'unknown'}
       {removed && <> <span className="pill warn">Removed</span></>}{!removed && active.length === 0 && <> <span className="pill warn">Unmatched</span></>}</p>
     {d.note && <p>{d.note}</p>}
     <Banner code={q.error} />
-    {enabled && <p><a href={`/api/documents/download/${d.id}`}>Download current version</a>{d.mediaType.startsWith('image/') && <> · <a href={`/api/documents/download/${d.id}?disposition=inline`}>Open in the browser</a></>}</p>}
+    {enabled && <p className="actions"><a className="button" href={`/api/documents/download/${d.id}`}>Download current version</a>{d.mediaType.startsWith('image/') && <a className="button secondary" href={`/api/documents/download/${d.id}?disposition=inline`}>Open in the browser</a>}</p>}
     {removed && <p>This document was removed{d.removalReason ? `: ${d.removalReason}` : ''}. Its history is kept; the file is deleted after the retention period.</p>}
 
     <div className="card"><h2>Linked records</h2>

@@ -17,7 +17,7 @@ export const LineStatusPill = ({ status }: { status: LineStatus }) => <span clas
 export function DecisionPill({ a }: { a: Pick<HsaAllocation, 'decisionStatus' | 'needsReviewCents'> }) {
   if (BigInt(a.needsReviewCents) > 0n) return <span className="pill warn">Needs review</span>;
   if (a.decisionStatus === 'eligible') return <span className="pill">Eligible</span>;
-  if (a.decisionStatus === 'ineligible') return <span className="pill">Ineligible</span>;
+  if (a.decisionStatus === 'ineligible') return <span className="pill neutral">Ineligible</span>;
   return <span className="pill warn">{a.decisionStatus === 'pending' ? 'Decision pending' : 'Not decided'}</span>;
 }
 

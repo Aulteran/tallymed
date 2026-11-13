@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { appContext } from '../../server/context.ts';
 import { pageActor } from '../../server/http.ts';
 import { isBootstrapped } from '../../server/services/bootstrap.ts';
+import { AuthShell } from '../components/AuthShell.tsx';
 import { errorMessage } from '../components/messages.ts';
 
 export const dynamic = 'force-dynamic';
@@ -14,15 +15,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
   const ready = await isBootstrapped(ctx.pool);
   const error = errorMessage(params.error);
-  return <main>
-    <h1>TallyMed</h1>
+  return <AuthShell>
     {params.notice === 'account_created' && <p role="status">Account created. Sign in to continue.</p>}
     {params.notice === 'setup_complete' && <p role="status">Administrator created. Sign in to continue.</p>}
     {!ready
-      ? <div className="card"><h2>Setup required</h2>
+      ? <div className="card"><h1>Setup required</h1>
         <p>No administrator exists yet. <a href="/setup">Create the first administrator</a> with the setup token from your server configuration or console output.</p></div>
       : <form className="card" method="post" action="/api/auth/login">
-        <h2>Sign in</h2>
+        <h1>Sign in</h1>
+        <p>Your household's medical expense ledger.</p>
         {error && <p className="error" role="alert">{error}</p>}
         <label htmlFor="email">Email</label>
         <input id="email" name="email" type="email" autoComplete="username" required maxLength={254} />
@@ -30,5 +31,5 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <input id="password" name="password" type="password" autoComplete="current-password" required maxLength={128} />
         <button type="submit">Sign in</button>
       </form>}
-  </main>;
+  </AuthShell>;
 }

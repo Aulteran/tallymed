@@ -7,7 +7,7 @@ const home = await readFile(new URL('index.html', output), 'utf8');
 const roadmap = await readFile(new URL('roadmap/index.html', output), 'utf8');
 assert.match(home, /In development/);
 assert.ok(home.includes('href="' + deployment.basePath + '/roadmap/"'));
-assert.ok(home.includes('src="' + deployment.basePath + '/ledger.svg"'));
+assert.ok(home.includes('href="' + deployment.basePath + '/icon.svg"'), 'Favicon is served under the base path');
 assert.ok(home.includes('src="' + deployment.basePath + '/_next/'));
 if (deployment.source) assert.ok(home.includes('href="' + deployment.source + '"'));
 for (const id of ['hero-title', 'problem-title', 'features-title', 'preview-title', 'flow-title', 'host-title', 'ai-title', 'progress-title', 'faq-title']) {

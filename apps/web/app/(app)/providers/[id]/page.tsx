@@ -13,7 +13,8 @@ export default async function ProviderPage({ params, searchParams }: { params: P
   const { data: p } = await load(() => getProvider(ctx.pool, actor, id), null);
   const visits = await listVisits(ctx.pool, actor, { providerId: id, limit: 10 });
   const bills = await listBills(ctx.pool, actor, { providerId: id, limit: 10 });
-  return <main>
+  return <main id="main">
+    <p className="crumb"><Link href="/providers">← Providers</Link></p>
     <h1>{p!.name} {p!.archivedAt && <span className="pill warn">Archived</span>}</h1>
     <Banner code={q.error} />
     <form className="card" method="post" action="/api/expenses/providers/update">
@@ -31,9 +32,9 @@ export default async function ProviderPage({ params, searchParams }: { params: P
           <input type="hidden" name="archived" value="yes" /><button type="submit" className="secondary">Archive provider</button></>}
     </form>
     <div className="card"><h2>Recent visits</h2>
-      {visits.items.length === 0 ? <p>No visits.</p> : <ul>{visits.items.map((v) => <li key={v.id}><Link href={`/visits/${v.id}`}>{v.serviceDate} · {v.memberName}</Link></li>)}</ul>}</div>
+      {visits.items.length === 0 ? <p>No visits.</p> : <ul className="rows">{visits.items.map((v) => <li key={v.id}><Link href={`/visits/${v.id}`}>{v.serviceDate} · {v.memberName}</Link></li>)}</ul>}</div>
     <div className="card"><h2>Recent bills</h2>
-      {bills.items.length === 0 ? <p>No bills.</p> : <ul>{bills.items.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.statementDate} · {b.memberName}</Link> <Money cents={b.responsibilityCents} /></li>)}</ul>}
+      {bills.items.length === 0 ? <p>No bills.</p> : <ul className="rows">{bills.items.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.statementDate} · {b.memberName}</Link> <Money cents={b.responsibilityCents} /></li>)}</ul>}
       <Link href={`/bills?providerId=${p!.id}`}>All bills</Link></div>
   </main>;
 }

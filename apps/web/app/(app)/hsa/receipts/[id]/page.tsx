@@ -12,7 +12,8 @@ export default async function HsaReceiptPage({ params, searchParams }: { params:
   const q = await flatWithFlash(searchParams, `/hsa/receipts/${id}`);
   const { data } = await load(() => getHsaReceiptDetail(ctx.pool, actor, id), null);
   const { receipt: r, entries, history } = data!;
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/hsa/claims">← Claims and reimbursements</Link></p>
     <h1>Reimbursement of <Money cents={r.amountCents} /> on {r.receivedOn}</h1>
     <p>{label(r.source)}{r.reference ? ` · ${r.reference}` : ''} · {r.origin === 'claim' ? 'Paid against claim lines' : 'Not claimed here'} · recorded by {r.createdByName ?? 'unknown'} {dateOf(r.createdAt)} {r.reversed && <span className="pill warn">Reversed</span>} · <Link href="/hsa/claims">All claims</Link></p>
     {r.evidenceType && <p>Evidence: {label(r.evidenceType)}{r.evidenceNote ? `: ${r.evidenceNote}` : ''}</p>}

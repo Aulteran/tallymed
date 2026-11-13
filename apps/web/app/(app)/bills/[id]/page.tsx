@@ -23,7 +23,8 @@ export default async function BillPage({ params, searchParams }: { params: Promi
   ]);
   const estimate = b.amountStatus === 'estimate';
   const hidden = (<><Csrf token={csrf} /><input type="hidden" name="id" value={b.id} /><input type="hidden" name="version" value={b.version} /></>);
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/bills">← Bills</Link></p>
     <h1>{b.providerName} bill {b.providerReference ?? ''}</h1>
     <p>
       <Link href={`/members/${b.memberId}`}>{b.memberName}</Link> {b.memberArchived && <span className="pill warn">Member archived</span>} ·
@@ -38,9 +39,9 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       <div className="card"><span>Billed amount</span><strong><Money cents={b.originalCents} /></strong></div>
       <div className="card"><span>Base household responsibility</span><strong><Money cents={b.baseResponsibilityCents} /></strong></div>
       <div className="card"><span>Adjustments</span><strong><Money cents={b.adjustmentsCents} /></strong></div>
-      <div className="card"><span>Household responsibility</span><strong><Money cents={b.responsibilityCents} /></strong></div>
+      <div className="card accent"><span>Household responsibility</span><strong><Money cents={b.responsibilityCents} /></strong></div>
       <div className="card"><span>Net payments applied</span><strong><Money cents={b.appliedCents} /></strong><span className="muted">Allocations less reversals and refunds</span></div>
-      <div className="card"><span>Open balance</span><strong><Money cents={b.openBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div>
+      <div className="card accent"><span>Open balance</span><strong><Money cents={b.openBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div>
       {BigInt(b.creditCents) > 0n && <div className="card"><span>Provider credit</span><strong><Money cents={b.creditCents} /></strong><span className="muted">Payments applied above responsibility. A cash refund is a separate recorded event.</span></div>}
     </section>
     <div className="card"><h2>Provenance</h2>
@@ -82,7 +83,7 @@ export default async function BillPage({ params, searchParams }: { params: Promi
         <tbody>{ledger.map((e) => <tr key={e.entryId}><td data-label="Effective">{e.effectiveDate}</td><td data-label="Entry">{label(e.kind)}</td><td data-label="Amount" className="num"><Money cents={e.amountCents} /></td>
           <td data-label="Payment"><Link href={`/payments/${e.paymentId}`}>{e.paidOn} · {label(e.method)} {e.reference ?? ''}</Link> {e.paymentVoided && <span className="pill warn">Voided</span>}</td><td data-label="Reason">{e.reason}</td></tr>)}</tbody>
       </table>}
-      {estimate ? <p className="muted">Confirm the amounts before applying payments to this bill.</p> : <p><Link href={`/payments?billId=${b.id}`}>Record a payment for this bill</Link></p>}
+      {estimate ? <p className="muted">Confirm the amounts before applying payments to this bill.</p> : <p className="actions"><Link className="button secondary" href={`/payments?billId=${b.id}`}>Record a payment for this bill</Link></p>}
       {billPlans.length > 0 && <p>Payment plans: {billPlans.map((pl) => <span key={pl.id}><Link href={`/plans/${pl.id}`}>{pl.name}</Link>{pl.status === 'cancelled' ? ' (cancelled)' : ''} </span>)}</p>}
     </div>
     <div className="card"><h2>Responsibility adjustments</h2>

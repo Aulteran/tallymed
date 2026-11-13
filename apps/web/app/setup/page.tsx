@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { appContext } from '../../server/context.ts';
 import { isBootstrapped } from '../../server/services/bootstrap.ts';
 import { ensureSetupToken } from '../../server/setup-token.ts';
+import { AuthShell } from '../components/AuthShell.tsx';
 import { errorMessage } from '../components/messages.ts';
 import { flatWithFlash } from '../components/ui.tsx';
 
@@ -17,10 +18,9 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
   const error = errorMessage(params.error);
   const kept = await flatWithFlash(searchParams, '/setup');
-  return <main>
-    <h1>Set up TallyMed</h1>
+  return <AuthShell>
     <form className="card" method="post" action="/api/setup">
-      <h2>Create the first administrator</h2>
+      <h1>Create the first administrator</h1>
       <p>Enter the setup token from <code>TALLYMED_SETUP_TOKEN</code>, or the one the server printed to its console when it started.</p>
       {error && <p className="error" role="alert">{error}</p>}
       <label htmlFor="setupToken">Setup token</label>
@@ -35,5 +35,5 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
       <input id="password" name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" />
       <button type="submit">Create administrator</button>
     </form>
-  </main>;
+  </AuthShell>;
 }
