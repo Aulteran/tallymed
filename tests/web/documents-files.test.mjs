@@ -167,6 +167,63 @@ test('large scanned PDFs are not refused because compressed or binary stream dat
   assert.equal(sniffMediaType(Buffer.concat([scan(randomBytes(1024)).subarray(0, -7), Buffer.from('2 0 obj << /Launch >> endobj\n%%EOF\n')])), null);
 });
 
+test('names are recognised as a reader sees them: fake stream markers, comments and strings cannot hide or fake anything', () => {
+  const wrap = (objs) => Buffer.from(`%PDF-1.5\n${objs}\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n`, 'latin1');
+  const js = '<< /Type /Catalog /OpenAction << /S /JavaScript /JS (app.alert(1)) >> >>';
+  // A) active content wrapped in comment lines that look like stream markers
+  assert.equal(sniffMediaType(wrap(`%stream\n1 0 obj\n${js}\nendobj\n%endstream`)), null);
+  assert.equal(sniffMediaType(wrap(`%stream\n1 0 obj\n<< /Type /Catalog /Launch 1 0 R >>\nendobj\n%endstream`)), null);
+  assert.equal(sniffMediaType(wrap(`% stream\n(stream\n)\n1 0 obj\n${js}\nendobj\n(endstream)`)), null);
+  // A real stream whose dictionary is followed by hidden objects after its (verified) length
+  assert.equal(sniffMediaType(wrap(`2 0 obj\n<< /Length 3 >>\nstream\nabc\nendstream\nendobj\n1 0 obj\n${js}\nendobj`)), null);
+  // B/C) an object stream whose dictionary holds strings that used to confuse the dictionary search
+  const evil = deflateSync(Buffer.from(`1 0 ${js}`, 'latin1'));
+  const objstm = (extra, data = evil) => Buffer.concat([
+    Buffer.from(`%PDF-1.5\n4 0 obj\n<< /Type /ObjStm /N 1 /First 4 ${extra} /Length ${data.length} /Filter /FlateDecode >>\nstream\n`, 'latin1'),
+    data, Buffer.from('\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n', 'latin1'),
+  ]);
+  for (const extra of ['', '/X (obj)', '/X (endobj endstream obj)', `/X (${'obj endobj '.repeat(1000)})`, '/X <6f626a> /Y (stream\n)', '/Y % obj\n/Z 1']) {
+    assert.equal(sniffMediaType(objstm(extra)), null, extra.slice(0, 30));
+  }
+  const launch = deflateSync(Buffer.from('1 0 << /Type /Catalog /Launch 3 0 R >>'));
+  assert.equal(sniffMediaType(objstm('/X (obj)', launch)), null, 'Launch inside an object stream');
+  // a stream keyword inside a string must not swallow the objects after it
+  assert.equal(sniffMediaType(wrap(`1 0 obj\n<< /Title (stream\n) >>\nendobj\n2 0 obj\n${js}\nendobj\n3 0 obj\n<< /T (\nendstream) >>`)), null);
+  // B4) file attachments without an /EmbeddedFile name
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Subtype /FileAttachment /FS << /EF << /F 2 0 R >> >> >>\nendobj')), null);
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /FS << /EF << /F 2 0 R >> >> >>\nendobj')), null);
+  // unparseable structure is refused rather than guessed
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /A [ 1 2 >>\nendobj')), null, 'mismatched delimiters');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /A (unterminated\nendobj')), null, 'open string');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Length 3 >>\nstream\nabc\nendobj')), null, 'no endstream');
+  assert.equal(sniffMediaType(wrap('1 0 obj\nstream\nabc\nendstream\nendobj')), null, 'stream without a dictionary');
+  // ordinary structure is still accepted, including an indirect /Length and an unfiltered object stream
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Length 2 0 R >>\nstream\nBT (hi) Tj ET\nendstream\nendobj\n2 0 obj\n12\nendobj')), 'application/pdf');
+  assert.equal(sniffMediaType(wrap('1 0 obj\n<< /Length 5 >>\nstream\n/JS /A\nendstream\nendobj')), 'application/pdf', 'names inside a plain content stream are data');
+  assert.equal(sniffMediaType(objstm('', Buffer.from('1 0 << /Type /Catalog >>'))), null, 'flate filter with raw data is corrupt');
+});
+
+test('scanning an adversarial PDF takes linear time', () => {
+  const head = '%PDF-1.4\n';
+  const tail = '\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n';
+  const size = 10 * 1024 * 1024 - 1024;
+  const adversarial = {
+    'tiny streams with no object keyword': 'stream\nendstream'.repeat(Math.floor(size / 16)),
+    'tiny real streams': '1 0 obj << /Length 0 >> stream\nendstream endobj\n'.repeat(Math.floor(size / 46)),
+    'one-letter names': '/A '.repeat(Math.floor(size / 3)),
+    'near-miss names': '/JSX /Au /EFx /OpenActio '.repeat(Math.floor(size / 25)),
+    'nested arrays and dictionaries': '[<<'.repeat(30) + '>>]'.repeat(30) + ' '.repeat(100) + '(a)'.repeat(Math.floor(size / 3 / 2)),
+    'tiny object streams': '<< /Type /ObjStm /Length 0 >> stream\nendstream '.repeat(Math.floor(size / 44)),
+  };
+  for (const [name, body] of Object.entries(adversarial)) {
+    const file = Buffer.from(head + body.slice(0, size) + tail, 'latin1');
+    const t = process.hrtime.bigint();
+    sniffMediaType(file);
+    const ms = Number(process.hrtime.bigint() - t) / 1e6;
+    assert.ok(ms < 1000, `${name}: ${ms.toFixed(0)} ms`);
+  }
+});
+
 test('a JPEG may carry zero padding after its end marker but nothing else', () => {
   const j = jpeg();
   assert.equal(sniffMediaType(Buffer.concat([j, Buffer.alloc(512)])), 'image/jpeg');

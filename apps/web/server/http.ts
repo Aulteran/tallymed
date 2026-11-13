@@ -489,6 +489,23 @@ const documentPage = (b: Record<string, unknown>, id?: string) => {
   return returnPath(b) ?? (doc ? `/documents/${doc}` : '/documents');
 };
 
+/** The record page a form was posted from (its Referer path, when it is one of the allowed record pages), else the document list. */
+const busyReturnPath = (req: Request): string => {
+  try {
+    const p = new URL(req.headers.get('referer') ?? '').pathname;
+    return RETURN_TO.test(p) ? p : '/documents';
+  } catch {
+    return '/documents';
+  }
+};
+const TARGET_PAGES: Record<string, string> = { bill: '/bills', visit: '/visits', hsa_receipt: '/hsa/receipts' };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** After a failed attach, land back on the record the person was attaching to (also when the form carried no returnTo). */
+const attachErrorPage = (b: Record<string, unknown>): string => {
+  const base = typeof b.targetType === 'string' ? TARGET_PAGES[b.targetType] : undefined;
+  return returnPath(b) ?? (base && typeof b.targetId === 'string' && UUID_RE.test(b.targetId) ? `${base}/${b.targetId}` : documentPage(b));
+};
+
 interface DocumentAction {
   run: (ctx: AppContext, actor: Actor, body: Record<string, unknown>, requestId: string) => Promise<{ id: string }>;
   error: (b: Record<string, unknown>) => string;
@@ -509,7 +526,7 @@ const DOCUMENT_ACTIONS: Record<string, DocumentAction> = {
   },
   'update': { run: (ctx, actor, b, rid) => documents.updateDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => documentPage(b), ok: (b, id) => documentPage(b, id), keep: ['title', 'kind', 'note'] },
   'remove': { run: (ctx, actor, b, rid) => documents.removeDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => documentPage(b), ok: () => '/documents', keep: ['reason'] },
-  'attach': { run: (ctx, actor, b, rid) => documents.attachDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => documentPage(b), ok: (b, id) => documentPage(b, id), keep: ['note'] },
+  'attach': { run: (ctx, actor, b, rid) => documents.attachDocument(ctx.pool, actor, withoutReturn(b), rid), error: attachErrorPage, ok: (b, id) => documentPage(b, id), keep: ['note'] },
   'detach': { run: (ctx, actor, b, rid) => documents.detachDocument(ctx.pool, actor, withoutReturn(b), rid), error: (b) => returnPath(b) ?? '/documents', ok: (b, id) => returnPath(b) ?? `/documents/${id}`, keep: ['reason'] },
 };
 
@@ -537,7 +554,8 @@ export async function handleDocumentAction(req: Request, ctx: AppContext, action
   if (!DOCUMENT_ACTIONS[action]!.upload) return handler(req, ctx);
   // An upload is buffered in memory several times over; cap how many run at once in this process.
   if (uploadsInFlight >= MAX_CONCURRENT_UPLOADS) {
-    return Response.json({ error: { code: 'busy', message: 'busy' } }, { status: 429, headers: { ...BASE_HEADERS, 'Retry-After': '2' } });
+    // Browser form posts go back to the page they came from with a friendly message; API callers get the JSON error.
+    return errorResponse(req, ctx, new AppError('busy', 'busy', 2), busyReturnPath(req));
   }
   uploadsInFlight++;
   try {

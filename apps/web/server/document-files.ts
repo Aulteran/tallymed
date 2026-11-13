@@ -96,61 +96,194 @@ function validJpeg(full: Buffer): boolean {
   return false;
 }
 
-const PDF_ACTIVE = /\/(JavaScript|JS|Launch|EmbeddedFiles?|RichMedia|OpenAction|AA|XFA|SubmitForm|ImportData|GoToR|GoToE|Encrypt)(?![A-Za-z0-9])/;
+const FORBIDDEN_NAMES = new Set([
+  'JavaScript', 'JS', 'Launch', 'EmbeddedFile', 'EmbeddedFiles', 'EF', 'FileAttachment', 'RichMedia', 'OpenAction', 'AA', 'XFA',
+  'SubmitForm', 'ImportData', 'GoToR', 'GoToE', 'Encrypt',
+]);
+// Names the scanner records from a stream dictionary, to decide whether the stream is an object stream and how it is encoded.
+const DICT_NAMES = new Set([
+  'ObjStm', 'Filter', 'FlateDecode', 'Fl', 'Predictor', 'Crypt', 'DecodeParms', 'DP', 'F', 'FFilter',
+  'ASCIIHexDecode', 'AHx', 'ASCII85Decode', 'A85', 'LZWDecode', 'LZW', 'RunLengthDecode', 'RL', 'CCITTFaxDecode', 'CCF', 'DCTDecode', 'DCT', 'JBIG2Decode', 'JPXDecode',
+]);
+const OTHER_FILTERS = new Set(['ASCIIHexDecode', 'AHx', 'ASCII85Decode', 'A85', 'LZWDecode', 'LZW', 'RunLengthDecode', 'RL', 'CCITTFaxDecode', 'CCF', 'DCTDecode', 'DCT', 'JBIG2Decode', 'JPXDecode', 'Crypt']);
+
+const WS = new Uint8Array(256);
+for (const c of [0, 9, 10, 12, 13, 32]) WS[c] = 1;
+const DELIM = new Uint8Array(256);
+for (const c of '()<>[]{}/%') DELIM[c.charCodeAt(0)] = 1;
+const NAME_START = new Uint8Array(256); // first byte of a name worth looking up (or an escape, which can hide any first byte)
+for (const n of [...FORBIDDEN_NAMES, ...DICT_NAMES]) NAME_START[n.charCodeAt(0)] = 1;
+NAME_START[0x23] = 1;
+
+const MAX_OBJSTMS = 4096;
+const MAX_DEPTH = 64;
+const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
+
+interface DictInfo { objstm: boolean; filter: boolean; flate: number; other: boolean; predictor: boolean; len: number; lenState: number }
+interface ScanState { budget: number; objstms: number }
+
+const unescapeName = (s: string) => s.replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
 
 /**
- * A PDF must start with its header at byte 0, end with an EOF marker, and show no archive trailer (so it is not also a ZIP) or
- * active content: scripts, launch actions, embedded files, rich media, form submission and encryption (which hides content
- * from this check). Name escapes (`/J#61vaScript`) are decoded before the scan. This is a conservative heuristic, not a full
- * parser and not a guarantee: object streams are inflated and scanned, but other hiding places may exist, so downloads are also
- * attachment-only and sandboxed and a person opening a saved PDF in a local reader should treat it as untrusted.
+ * A PDF must start with its header at byte 0, end with an EOF marker, and show no archive trailer (so it is not also a ZIP). The
+ * body is then tokenized in one linear pass (see `scanPdf`) and refused when it names scripts, launch actions, embedded files, rich
+ * media, form submission or encryption (which hides content from this check). This is a conservative filter, not a guarantee of
+ * safety: the real controls are that downloads are attachment-only, sandboxed and nosniff, and a person opening a saved PDF in a
+ * local reader should treat it as untrusted.
  */
 function validPdf(b: Buffer): boolean {
   if (!/^%PDF-(1\.[0-7]|2\.0)[\r\n]/.test(b.subarray(0, 12).toString('latin1'))) return false;
   const tail = b.subarray(Math.max(0, b.length - 1024)).toString('latin1');
   if (!/%%EOF\s*$/.test(tail)) return false;
   if (hasZipTrailer(b)) return false;
-  const decode = (t: string) => t.replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
-  const text = b.toString('latin1');
-  return structureIsClean(b, text, decode);
+  return scanPdf(b, { budget: MAX_INFLATED_TOTAL, objstms: 0 }, false);
 }
 
-const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
-
 /**
- * Names can hide inside compressed object streams (PDF 1.5). Every object stream is inflated (bounded) and scanned like the
- * file body. A stream that cannot be inflated, uses a filter chain or predictor other than plain Flate, or would expand beyond the
- * budget makes the file refused, because its content cannot be checked.
+ * One pass over the bytes, never revisiting any: comments, strings, hex strings, names, arrays, dictionaries and keywords are
+ * recognised as a reader would, so a name only counts where it is a name (not in a comment, string or stream body) and a fake
+ * `stream` or `obj` inside a comment or string means nothing. Stream bodies are skipped using a direct /Length that is verified to
+ * end at `endstream`, else the first `endstream` after the body starts; stream bodies of object streams (/Type /ObjStm) are
+ * inflated (bounded) and scanned the same way. Everything the pass cannot parse unambiguously refuses the file: unbalanced
+ * delimiters, an unterminated string, a `stream` keyword without a dictionary, a missing `endstream`, an object stream with an
+ * encoding other than a single plain Flate, a corrupt or oversized object stream, or too many object streams.
  */
-function structureIsClean(b: Buffer, text: string, decode: (t: string) => string): boolean {
-  let budget = MAX_INFLATED_TOTAL;
-  // Names are searched only outside stream bodies: inside compressed or binary data two-byte names such as /JS or /AA occur by
-  // chance and would refuse ordinary scans. Object streams are the exception and are inflated and searched below.
-  const outside: string[] = [];
-  let copied = 0;
-  const stream = /(?<!end)stream(\r\n|\n)/g;
-  for (let m = stream.exec(text); m; m = stream.exec(text)) {
-    const start = m.index + m[0].length;
-    const dictFrom = Math.max(text.lastIndexOf('obj', m.index), m.index - 2000, 0);
-    const dict = decode(text.slice(dictFrom, m.index));
-    const end = text.indexOf('endstream', start);
-    if (end < 0) return false;
-    outside.push(text.slice(copied, start));
-    copied = end;
-    stream.lastIndex = end + 'endstream'.length;
-    if (!/\/ObjStm(?![A-Za-z0-9])/.test(dict)) continue;
-    if (!/\/Filter\s*(\/FlateDecode|\[\s*\/FlateDecode\s*\])(?![A-Za-z0-9])/.test(dict) || /\/Predictor\s+(?!1(?!\d))/.test(dict) || /\/Crypt(?![A-Za-z0-9])/.test(dict)) return false;
-    try {
-      // An end-of-line marker sits between the data and `endstream`; Flate input ends at its own checksum.
-      const out = inflateSync(b.subarray(start, end), { finishFlush: 2 /* Z_SYNC_FLUSH */, maxOutputLength: Math.min(budget, MAX_INFLATED_TOTAL) });
-      budget -= out.length;
-      if (PDF_ACTIVE.test(decode(out.toString('latin1')))) return false;
-    } catch {
-      return false;
+function scanPdf(b: Buffer, st: ScanState, inObjStm: boolean): boolean {
+  const n = b.length;
+  const stack: number[] = []; // 0x3c for a dictionary, 0x5b for an array
+  let cur: DictInfo | null = null;
+  let last: DictInfo | null = null;
+  let afterDict = false;
+  let i = 0;
+  while (i < n) {
+    const c = b[i]!;
+    if (WS[c]) { i++; continue; }
+    if (c === 0x25) { // comment to end of line
+      while (i < n && b[i] !== 10 && b[i] !== 13) i++;
+      continue;
+    }
+    const hadDict = afterDict;
+    afterDict = false;
+    const top = stack.length === 1 && stack[0] === 0x3c ? cur : null;
+    // Position in `/Length N` or `/Length N G R` (indirect) while directly inside the object's dictionary.
+    const lenStep = (isInt: boolean, text: string | null) => {
+      if (!top || top.lenState === 0) return;
+      if (top.lenState === 1) { if (isInt) { top.len = Number(text); top.lenState = 2; } else top.lenState = 0; }
+      else if (top.lenState === 2) { if (isInt) top.lenState = 3; else top.lenState = 0; }
+      else { if (text === 'R') top.len = -1; top.lenState = 0; }
+    };
+    if (c === 0x28) { // string
+      let j = i + 1;
+      let nest = 1;
+      while (j < n) {
+        const ch = b[j]!;
+        if (ch === 0x5c) j += 2;
+        else if (ch === 0x28) { nest++; j++; }
+        else if (ch === 0x29) { if (--nest === 0) break; j++; }
+        else j++;
+      }
+      if (j >= n) return false;
+      lenStep(false, null);
+      i = j + 1;
+    } else if (c === 0x3c) {
+      if (b[i + 1] === 0x3c) {
+        if (stack.length >= MAX_DEPTH) return false;
+        if (stack.length === 0) cur = { objstm: false, filter: false, flate: 0, other: false, predictor: false, len: -1, lenState: 0 };
+        lenStep(false, null);
+        stack.push(0x3c);
+        i += 2;
+      } else {
+        const j = b.indexOf(0x3e, i + 1);
+        if (j < 0) return false;
+        lenStep(false, null);
+        i = j + 1;
+      }
+    } else if (c === 0x3e) {
+      if (b[i + 1] !== 0x3e || stack.pop() !== 0x3c) return false;
+      i += 2;
+      if (stack.length === 0) { last = cur; afterDict = true; }
+    } else if (c === 0x5b) {
+      if (stack.length >= MAX_DEPTH) return false;
+      lenStep(false, null);
+      stack.push(0x5b);
+      i++;
+    } else if (c === 0x5d) {
+      if (stack.pop() !== 0x5b) return false;
+      i++;
+    } else if (c === 0x7b || c === 0x7d) {
+      i++;
+    } else if (c === 0x29) {
+      return false; // a stray closing parenthesis is not valid syntax
+    } else if (c === 0x2f) { // name
+      let j = i + 1;
+      let hash = false;
+      while (j < n && !WS[b[j]!] && !DELIM[b[j]!]) { if (b[j] === 0x23) hash = true; j++; }
+      const len = j - i - 1;
+      if (len > 0 && len <= 42 && (hash ? true : len <= 14 && NAME_START[b[i + 1]!]!)) {
+        const raw = b.toString('latin1', i + 1, j);
+        const name = hash ? unescapeName(raw) : raw;
+        if (FORBIDDEN_NAMES.has(name)) return false;
+        if (cur && stack.length > 0 && DICT_NAMES.has(name)) {
+          const top = cur;
+          if (name === 'ObjStm') top.objstm = true;
+          else if (name === 'Filter') top.filter = true;
+          else if (name === 'FlateDecode' || name === 'Fl') top.flate++;
+          else if (name === 'Predictor') top.predictor = true;
+          else if (OTHER_FILTERS.has(name)) top.other = true;
+        }
+      }
+      if (top) top.lenState = len === 6 && b.toString('latin1', i + 1, j) === 'Length' ? 1 : 0;
+      i = j;
+    } else { // keyword or number
+      let j = i + 1;
+      while (j < n && !WS[b[j]!] && !DELIM[b[j]!]) j++;
+      const len = j - i;
+      if (len === 6 && b.toString('latin1', i, j) === 'stream') {
+        if (inObjStm || stack.length !== 0 || !hadDict || !last) return false;
+        let start: number;
+        if (b[j] === 13 && b[j + 1] === 10) start = j + 2;
+        else if (b[j] === 10) start = j + 1;
+        else return false;
+        let bodyEnd = -1;
+        let next = -1;
+        if (last.len >= 0 && start + last.len <= n) {
+          let p = start + last.len;
+          const stop = p + 4;
+          while (p < stop && p < n && WS[b[p]!]) p++;
+          if (b.toString('latin1', p, p + 9) === 'endstream') { bodyEnd = start + last.len; next = p + 9; }
+        }
+        if (next < 0) { // no usable direct /Length: the first `endstream` ends the body, as a reader recovers
+          const idx = b.indexOf('endstream', start, 'latin1');
+          if (idx < 0) return false;
+          bodyEnd = idx;
+          next = idx + 9;
+        }
+        if (last.objstm) {
+          if (++st.objstms > MAX_OBJSTMS) return false;
+          let body = b.subarray(start, bodyEnd);
+          if (last.filter) {
+            if (last.flate !== 1 || last.other || last.predictor || st.budget < 1) return false;
+            try {
+              // An end-of-line marker sits between the data and `endstream`; Flate input ends at its own checksum.
+              body = inflateSync(body, { finishFlush: 2 /* Z_SYNC_FLUSH */, maxOutputLength: st.budget });
+            } catch {
+              return false;
+            }
+          }
+          st.budget -= body.length;
+          if (st.budget < 0 || !scanPdf(body, st, true)) return false;
+        }
+        i = next;
+        last = null;
+        continue;
+      }
+      let isInt = len <= 10;
+      for (let k = i; isInt && k < j; k++) if (b[k]! < 48 || b[k]! > 57) isInt = false;
+      lenStep(isInt, top && top.lenState > 0 ? b.toString('latin1', i, j) : null);
+      i = j;
     }
   }
-  outside.push(text.slice(copied));
-  return !PDF_ACTIVE.test(decode(outside.join('')));
+  return stack.length === 0;
 }
 
 /** True when an end-of-central-directory record sits within the maximum distance from the end (a ZIP polyglot). */

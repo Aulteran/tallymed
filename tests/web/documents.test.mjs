@@ -701,6 +701,26 @@ test('uploads in flight are capped per process', { skip: skipDb }, async () => {
   }
 });
 
+test('browser form posts get a redirect with a message when busy or when an attach fails; API callers keep JSON', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const referer = `http://app.internal:3000/bills/${randomUUID()}`;
+    const results = await Promise.all(Array.from({ length: 14 }, () => t.http('upload', { idempotencyKey: randomUUID() }, PNG_FILE(), { html: true, headers: { referer } })));
+    assert.ok(results.every((r) => r.status === 303), results.map((r) => r.status).join());
+    const busy = results.filter((r) => (r.headers.get('location') ?? '').includes('error=busy'));
+    assert.ok(busy.length > 0, 'some uploads were told to retry');
+    assert.match(busy[0].headers.get('location'), /\/bills\/[0-9a-f-]{36}\?error=busy$/, 'back to the page the form came from');
+    assert.equal(busy[0].headers.get('retry-after'), '2');
+    // A failed attach with no returnTo lands back on the record being attached to.
+    const billId = randomUUID();
+    const failed = await t.post('attach', { idempotencyKey: randomUUID(), documentId: randomUUID(), targetType: 'bill', targetId: billId, csrf: t.csrf }, { html: true });
+    assert.equal(failed.status, 303);
+    assert.match(failed.headers.get('location'), new RegExp(`/bills/${billId}\\?error=`));
+  } finally {
+    await t.drop();
+  }
+});
+
 test('link history keeps links to removed documents, and attach pins the version the person saw', { skip: skipDb }, async () => {
   const t = await docFixture();
   try {
