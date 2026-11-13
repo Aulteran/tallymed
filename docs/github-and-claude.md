@@ -13,7 +13,9 @@ git remote add origin https://github.com/YOUR-OWNER/tallymed.git
 git push -u origin main
 ```
 
-Authenticate to GitHub if prompted. On GitHub, confirm the root contains `CLAUDE.md`, `.claude/skills/`, `.project/` and `.github/workflows/`. Open Actions and verify CI. For branch rules, require PRs and the `verify` and `compose-smoke` checks after their first run. If you work alone, record the independent Claude review in the PR conversation or PR body. A thread using your GitHub identity may be unable to count as an approving reviewer under GitHub's branch rules.
+Then create the `dev` branch (`git branch dev && git push -u origin dev`) and set it as the default branch under **Settings → Branches**. Day-to-day work branches from and targets `dev`; `main` is the release branch, updated only by merging `dev`.
+
+Authenticate to GitHub if prompted. On GitHub, confirm the root contains `CLAUDE.md`, `.claude/skills/`, `.project/` and `.github/workflows/`. Open Actions and verify CI. For branch rules on `dev` and `main`, require PRs and the `verify` and `compose-smoke` checks after their first run. If you work alone, record the independent Claude review in the PR conversation or PR body. A thread using your GitHub identity may be unable to count as an approving reviewer under GitHub's branch rules.
 
 ## 2. Create the cloud project
 
@@ -25,7 +27,7 @@ Open **Project settings → Memory → Project instructions** and paste the body
 
 Send this to the project conversation:
 
-> Start one cloud implementation thread for M00 only. Branch from main. Have it read .project/milestones/M00.md, docs/marketing.md and .claude/skills/implement-milestone/SKILL.md and implement the full marketing milestone. Use synthetic preview data and only descriptive public roadmap names. Run the root and repository-path checks and open a PR with results and the head SHA. Leave the PR for me to merge and report any deployment checks that require main.
+> Start one cloud implementation thread for M00 only. Branch from dev (the default branch). Have it read .project/milestones/M00.md, docs/marketing.md and .claude/skills/implement-milestone/SKILL.md and implement the full marketing milestone. Use synthetic preview data and only descriptive public roadmap names. Run the root and repository-path checks and open a PR with results and the head SHA. Leave the PR for me to merge and report any deployment checks that require main.
 
 Use the worker card or **Overview** to open the thread. If Claude lists it under **Suggested threads**, start that thread from the card. The worker may open the PR or push a branch with a **Create PR** button. Leave later milestones queued until M00 is accepted.
 
@@ -35,8 +37,8 @@ When the PR is ready, send this to the coordinator, replacing the placeholders:
 
 > Start a fresh independent review thread for M00. Review PR <URL> at <HEAD_SHA> against .project/milestones/M00.md and docs/marketing.md. Read and follow .claude/skills/review-milestone/SKILL.md. Check the actual diff and export, including internal-ID leakage, and report blockers with file locations and evidence. Leave fixes to the implementation thread and leave merge to me.
 
-Open **Review PR** from the thread card or use GitHub. Check the diff, exact reviewed SHA, CI and the reviewer’s findings. Send blockers back to the implementation thread and re-review the updated head. Once satisfied, use **Squash and merge** on GitHub. See [GitHub Pages setup](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site).
+Open **Review PR** from the thread card or use GitHub. Check the diff, exact reviewed SHA, CI and the reviewer’s findings. Send blockers back to the implementation thread and re-review the updated head. Once satisfied, use **Squash and merge** on GitHub into `dev`. Release by merging `dev` into `main` with a merge commit (not a squash), so `dev` and `main` keep a shared history. See [GitHub Pages setup](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site).
 
-For the first deployment, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. Pushes to `main` build and deploy the site automatically, and **Actions → Marketing Pages → Run workflow** on `main` redeploys manually. For a custom domain, configure it in Pages and verify DNS before rebuilding. Pages configuration supplies the actual origin and base path to the build.
+For the first deployment, set **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. Pushes to `main`, the release branch, build and deploy the site automatically, and **Actions → Marketing Pages → Run workflow** on `main` redeploys manually. For a custom domain, configure it in Pages and verify DNS before rebuilding. Pages configuration supplies the actual origin and base path to the build.
 
 Open the deployed URL from the deployment job. Check the homepage, direct navigation to `/roadmap/` under the published base path, assets, links and preview interactions. If anything fails, fix it through a PR and re-deploy. Once it passes, record the verified deployment and acceptance in `.project/STATUS.md` and update the public Marketing Website status through a follow-up PR. Then direct the coordinator to the next eligible milestone.

@@ -1,0 +1,63 @@
+name: Publish images
+# Release branch only: a push to main builds the web and optional MCP images and publishes them to GitHub Container Registry.
+# Day-to-day work lands on dev and is verified by CI there; main is updated only from dev. No secret other than the
+# built-in GITHUB_TOKEN is used, and no third-party action runs: the build uses the Docker CLI on the runner.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Sign in to ghcr.io
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+      - name: Build and push images
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          short=${COMMIT:0:12}
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Build both images first so a failed build never leaves only one of them moved to the new commit.
+          for name in web mcp; do
+            image="ghcr.io/${owner}/tallymed-${name}"
+            docker build \
+              --file "infra/Dockerfile.${name}" \
+              --tag "${image}:sha-${short}" \
+              --tag "${image}:latest" \
+              --label "org.opencontainers.image.source=https://github.com/${REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${COMMIT}" \
+              --label "org.opencontainers.image.created=${created}" \
+              --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
+              --label "org.opencontainers.image.title=tallymed-${name}" \
+              .
+          done
+          for name in web mcp; do
+            image="ghcr.io/${owner}/tallymed-${name}"
+            docker push "${image}:sha-${short}"
+            docker push "${image}:latest"
+            digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "${image}:sha-${short}")
+            echo "Published ${digest}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done

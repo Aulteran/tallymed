@@ -15,4 +15,4 @@ Use the milestone file for scope, the human specifications for behavior, [STATUS
 
 M03 and M05 may run in parallel once M02 is accepted. Agree on attachment IDs, migration numbering and shared service contracts before dispatching both. Assign one writer per shared file or merge the relevant contract before branching. M04 can continue while M05 proceeds if their changes are isolated. Review threads can run in parallel on the same pushed commit.
 
-See [coordination](COORDINATOR.md) and [cloud instructions](CLOUD-INSTRUCTIONS.md).
+Branches: `dev` is the default branch for all work and PRs; `main` is the release branch (image publishing and the public site deploy from it). See [coordination](COORDINATOR.md) and [cloud instructions](CLOUD-INSTRUCTIONS.md).

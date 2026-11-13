@@ -159,3 +159,11 @@ Known limitations (owner-visible):
 - The review screens show the proposal, the document's metadata, a link to download the pinned version, and the record summary; they do not render the document inline (PDFs are never inline).
 - Proposals from a revoked credential cannot be approved, only rejected; the reviewer attaches the document by hand if it is right.
 - The password change and reset flow and shared-NAT lockout documentation from M01 remain required before a real deployment.
+
+## M07 Self-hosted release
+
+- **Branching and release (owner).** `dev` is the default branch and the target for work. `main` is the release branch; a push to `main` publishes the web and MCP images to ghcr.io and deploys the public site. Images are tagged `sha-<12>` and `latest`; operators pin a `sha-` tag or digest. The publish workflow uses only `GITHUB_TOKEN` and the Docker CLI.
+- **Pinning.** Operators set `TALLYMED_WEB_IMAGE` (and `TALLYMED_MCP_IMAGE` for the assistant) to a full image reference: a `sha-<12>` tag or an `@sha256:` digest. The sha tag can be re-pushed by a workflow re-run, so the digest the publish job prints is the immutable pin.
+- **`setup-role` runs from the assistant image.** The web image deliberately does not carry the listener or the MCP SDK; CI runs `setup-role` and the disabled-listener path in the built assistant image.
+- **Accepted for the first release, revisit later (security review N4, N5):** no provenance, SBOM or signature on the images; base images and actions are tag-pinned rather than digest or SHA pinned; the release Compose file drops capabilities and sets `no-new-privileges` but does not use `read_only` (the Next.js runtime has not been verified with a read-only root filesystem).
+- **Publish is not gated on CI.** A push to `main` publishes. The owner is asked to protect `main` and to merge to it only from a green `dev`; making the publish job wait for CI on the same commit is a possible later change.
