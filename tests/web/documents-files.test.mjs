@@ -7,6 +7,7 @@ import { contentDisposition, inspectUpload, sanitizeFilename, sniffMediaType } f
 import { parseDocumentsDir } from '../../apps/web/server/config.ts';
 import { FileObjectStore, newStorageKey } from '../../apps/web/server/storage.ts';
 import { deflateSync } from 'node:zlib';
+import { randomBytes } from 'node:crypto';
 import { jpeg, pdf, png, tempStore } from './document-helpers.mjs';
 
 test('valid PDF, PNG and JPEG are recognised from their bytes', () => {
@@ -146,4 +147,30 @@ test('active content hidden in compressed object streams is found, and uninspect
   assert.equal(sniffMediaType(objStmPdf('x', { extra: '/DecodeParms << /Predictor 12 >>' })), null, 'predictor changes the decoded bytes');
   assert.equal(sniffMediaType(objStmPdf('x', { data: Buffer.from('not flate data') })), null, 'corrupt stream');
   assert.equal(sniffMediaType(objStmPdf('', { data: deflateSync(Buffer.alloc(80 * 1024 * 1024)) })), null, 'expansion beyond the budget');
+});
+
+test('large scanned PDFs are not refused because compressed or binary stream data happens to contain a two-byte name', () => {
+  const scan = (bytes, dictExtra = '') => Buffer.concat([
+    Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Type /Catalog ${dictExtra} >>\nendobj\n2 0 obj\n<< /Length ${bytes.length} /Filter /DCTDecode >>\nstream\n`, 'latin1'),
+    bytes, Buffer.from('\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n', 'latin1'),
+  ]);
+  // Stream bodies that certainly contain names that would match the scan if it looked inside streams.
+  const withNames = Buffer.concat([randomBytes(2 * 1024 * 1024), Buffer.from('/JS /AA /Launch /OpenAction /Encrypt'), randomBytes(2 * 1024 * 1024)]);
+  assert.equal(sniffMediaType(scan(withNames)), 'application/pdf');
+  for (let i = 0; i < 6; i++) assert.equal(sniffMediaType(scan(randomBytes(5 * 1024 * 1024))), 'application/pdf', `random 5 MB stream ${i}`);
+  assert.equal(sniffMediaType(scan(randomBytes(10 * 1024 * 1024 - 1024))), 'application/pdf', 'random stream near the default limit');
+  // The same names in a dictionary outside any stream are still refused, even in a file with a large stream.
+  assert.equal(sniffMediaType(scan(randomBytes(1024 * 1024), '/AA << >>')), null);
+  assert.equal(sniffMediaType(scan(randomBytes(1024 * 1024), '/OpenAction << /S /JavaScript /JS (x) >>')), null);
+  assert.equal(sniffMediaType(scan(randomBytes(1024), '/JS (x)')), null);
+  // A name that only appears after the last stream is still outside every stream.
+  assert.equal(sniffMediaType(Buffer.concat([scan(randomBytes(1024)).subarray(0, -7), Buffer.from('2 0 obj << /Launch >> endobj\n%%EOF\n')])), null);
+});
+
+test('a JPEG may carry zero padding after its end marker but nothing else', () => {
+  const j = jpeg();
+  assert.equal(sniffMediaType(Buffer.concat([j, Buffer.alloc(512)])), 'image/jpeg');
+  assert.equal(sniffMediaType(Buffer.concat([j, Buffer.from('\n')])), null);
+  assert.equal(sniffMediaType(Buffer.concat([j, Buffer.alloc(8), Buffer.from('x')])), null);
+  assert.equal(sniffMediaType(Buffer.concat([j, Buffer.alloc(70_000)])), null, 'padding is bounded');
 });

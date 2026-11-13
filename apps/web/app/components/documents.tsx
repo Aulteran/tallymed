@@ -49,7 +49,7 @@ export async function AttachmentsPanel({ ctx, actor, csrf, type, id, returnTo, q
       </form>
     </li>)}</ul>}
     {past.length > 0 && <details><summary>{past.length} detached</summary><ul>{past.map((l) => <li key={l.id}>
-      {l.documentTitle} · version {l.versionNo} · attached {dateOf(l.createdAt)} by {l.createdByName ?? 'unknown'}, detached {dateOf(l.detachedAt!)} by {l.detachedByName ?? 'unknown'}: {l.detachReason}
+      {l.documentTitle}{l.documentRemoved ? ' (document removed)' : ''} · version {l.versionNo} · attached {dateOf(l.createdAt)} by {l.createdByName ?? 'unknown'}, detached {dateOf(l.detachedAt!)} by {l.detachedByName ?? 'unknown'}: {l.detachReason}
     </li>)}</ul></details>}
     {enabled ? <>
       <form method="get" className="row" role="search" aria-label="Find a document">
@@ -62,7 +62,7 @@ export async function AttachmentsPanel({ ctx, actor, csrf, type, id, returnTo, q
         <label htmlFor={`a-${field}`}>Attach an existing document (newest 50{q ? ' matching the search' : ''})</label>
         <select id={`a-${field}`} name="documentId" required defaultValue="">
           <option value="" disabled>{choices.length === 0 ? 'No documents to attach' : 'Choose a document'}</option>
-          {choices.map((d) => <option key={d.id} value={d.id}>{d.title} · {label(d.kind)} · {d.createdAt.toISOString().slice(0, 10)}</option>)}
+          {choices.map((d) => <option key={d.id} value={`${d.id}@${d.currentVersionNo}`}>{d.title} · {label(d.kind)} · {d.createdAt.toISOString().slice(0, 10)}</option>)}
         </select>
         <label htmlFor={`n-${field}`}>Note (optional)</label><input id={`n-${field}`} name="note" maxLength={300} />
         <button type="submit">Attach document</button>

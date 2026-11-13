@@ -700,3 +700,58 @@ test('uploads in flight are capped per process', { skip: skipDb }, async () => {
     await t.drop();
   }
 });
+
+test('link history keeps links to removed documents, and attach pins the version the person saw', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const r = await records(t);
+    const { id } = await t.up();
+    await docs.attachDocument(t.db.pool, t.actor, { idempotencyKey: t.key(), documentId: `${id}@1`, targetType: 'bill', targetId: r.bill.id }, 'r');
+    const link = (await docs.listAttachments(t.db.pool, t.actor, 'bill', r.bill.id))[0];
+    assert.equal(link.documentRemoved, false);
+    await docs.detachDocument(t.db.pool, t.actor, { attachmentId: link.id, reason: 'Wrong bill' }, 'r');
+    const ver = String((await docs.getDocumentDetail(t.db.pool, t.actor, id)).document.version);
+    await docs.removeDocument(t.db.pool, t.actor, { id, version: ver, reason: 'Duplicate scan' }, 'r');
+    const history = await docs.listAttachments(t.db.pool, t.actor, 'bill', r.bill.id);
+    assert.equal(history.length, 1, 'the detached link to a removed document is still shown');
+    assert.deepEqual([history[0].documentRemoved, history[0].detachReason], [true, 'Wrong bill']);
+
+    // The version in the picker is the version that gets pinned; a newer one is refused as stale.
+    const doc = await t.up();
+    await docs.addDocumentVersion(t.deps, t.actor, { idempotencyKey: t.key(), documentId: doc.id, version: '1', file: PNG_FILE() }, 'r');
+    await assert.rejects(docs.attachDocument(t.db.pool, t.actor, { idempotencyKey: t.key(), documentId: `${doc.id}@1`, targetType: 'bill', targetId: r.bill.id }, 'r'), code('stale_version'));
+    assert.equal((await docs.listAttachments(t.db.pool, t.actor, 'bill', r.bill.id)).filter((l) => l.documentId === doc.id).length, 0);
+    await docs.attachDocument(t.db.pool, t.actor, { idempotencyKey: t.key(), documentId: `${doc.id}@2`, targetType: 'bill', targetId: r.bill.id }, 'r');
+    assert.equal((await docs.listAttachments(t.db.pool, t.actor, 'bill', r.bill.id)).find((l) => l.documentId === doc.id).versionNo, 2);
+    await assert.rejects(docs.attachDocument(t.db.pool, t.actor, { idempotencyKey: t.key(), documentId: 'nonsense@1', targetType: 'bill', targetId: r.visit.id }, 'r'), code('invalid_input'));
+    await assert.rejects(docs.attachDocument(t.db.pool, t.actor, { idempotencyKey: t.key(), documentId: `${doc.id}@0`, targetType: 'visit', targetId: r.visit.id }, 'r'), code('invalid_input'));
+  } finally {
+    await t.drop();
+  }
+});
+
+test('an operator can restore a removed document only through a documented maintenance transaction', { skip: skipDb }, async () => {
+  const t = await docFixture();
+  try {
+    const { id } = await t.up();
+    const ver = String((await docs.getDocumentDetail(t.db.pool, t.actor, id)).document.version);
+    await docs.removeDocument(t.db.pool, t.actor, { id, version: ver, reason: 'Mistake' }, 'r');
+    await assert.rejects(t.db.pool.query(`update documents set removed_at = null, removed_by = null, removal_reason = null where id = $1`, [id]), /stays removed/);
+    // The documented procedure (docs/security.md): disable the trigger inside one transaction, clear the tombstone, re-enable it.
+    const c = await t.db.pool.connect();
+    try {
+      await c.query('begin');
+      await c.query('alter table documents disable trigger documents_guard_change');
+      await c.query(`update documents set removed_at = null, removed_by = null, removal_reason = null where id = $1`, [id]);
+      await c.query('set constraints all immediate');
+      await c.query('alter table documents enable trigger documents_guard_change');
+      await c.query('commit');
+    } finally {
+      c.release();
+    }
+    assert.equal((await t.get(id)).status, 200);
+    assert.equal((await docs.listDocuments(t.db.pool, t.actor, {})).items.length, 1);
+  } finally {
+    await t.drop();
+  }
+});

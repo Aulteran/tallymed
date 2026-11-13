@@ -23,7 +23,7 @@ export interface VersionRow {
 export interface AttachmentRow {
   id: string; documentId: string; documentTitle: string; documentVersionId: string; versionNo: number; currentVersionNo: number; targetType: TargetType; targetId: string;
   billId: string | null; allocationId: string | null; note: string; createdAt: Date; createdByName: string | null;
-  detachedAt: Date | null; detachedByName: string | null; detachReason: string | null; mediaType: string; sha256: string;
+  detachedAt: Date | null; detachedByName: string | null; detachReason: string | null; mediaType: string; sha256: string; documentRemoved: boolean;
 }
 
 const DOC_SELECT = `select d.id, d.title, d.kind, d.note, d.version, d.removed_at as "removedAt", d.removal_reason as "removalReason", d.created_at as "createdAt",
@@ -180,7 +180,7 @@ const ATTACHMENT_SELECT = `select a.id, a.document_id as "documentId", d.title a
     a.target_type as "targetType", a.target_id as "targetId", coalesce(a.bill_id, a.adjustment_bill_id) as "billId",
     (select x.allocation_id from hsa_eligibility_decisions x where x.id = a.hsa_decision_id) as "allocationId", a.note, a.created_at as "createdAt",
     cu.display_name as "createdByName", a.detached_at as "detachedAt", du.display_name as "detachedByName", a.detach_reason as "detachReason",
-    v.media_type as "mediaType", encode(v.sha256, 'hex') as sha256
+    v.media_type as "mediaType", encode(v.sha256, 'hex') as sha256, (d.removed_at is not null) as "documentRemoved"
   from document_attachments a
   join documents d on d.household_id = a.household_id and d.id = a.document_id
   join document_versions v on v.id = a.document_version_id
@@ -200,7 +200,7 @@ export async function attachmentsOfDocument(db: Queryable, householdId: string, 
 /** Link history of one record: active links first, then detached ones, newest first. Bounded. */
 export async function attachmentsOfTarget(db: Queryable, householdId: string, type: TargetType, targetId: string, limit = 100): Promise<AttachmentRow[]> {
   const { rows } = await db.query<AttachmentRow>(
-    `${ATTACHMENT_SELECT} where a.household_id = $1 and a.target_type = $2 and a.target_id = $3 and d.removed_at is null
+    `${ATTACHMENT_SELECT} where a.household_id = $1 and a.target_type = $2 and a.target_id = $3
      order by (a.detached_at is not null), a.created_at desc, a.id desc limit $4`, [householdId, type, targetId, limit]);
   return rows;
 }

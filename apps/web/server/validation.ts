@@ -324,8 +324,16 @@ export const documentSchemas = {
   addVersion: z.strictObject({ idempotencyKey, documentId: uuid, version: version, file: uploadedFile, confirmDuplicate: checkbox.optional(), ...csrf }),
   update: z.strictObject({ id: uuid, version, title: text(120).min(1), kind: documentKind, note: optionalText(500), ...csrf }),
   remove: z.strictObject({ id: uuid, version, reason: text(300).min(1), ...csrf }),
+  /** `documentId` may carry the version the person saw as `<uuid>@<n>` (the attach pickers do); a newer version is refused as stale. */
   attach: z.strictObject({
-    idempotencyKey, documentId: uuid, targetType: attachmentTargetType, targetId: uuid, note: optionalText(300), ...csrf,
+    idempotencyKey, documentId: z.string().regex(/^[0-9a-f-]{36}(@[1-9]\d{0,5})?$/), targetType: attachmentTargetType, targetId: uuid, note: optionalText(300), ...csrf,
+  }).transform((d, ctx) => {
+    const [id, seen] = d.documentId.split('@');
+    if (!uuid.safeParse(id).success) {
+      ctx.addIssue({ code: 'custom', message: 'invalid document' });
+      return z.NEVER;
+    }
+    return { ...d, documentId: id!, seenVersion: seen ? Number(seen) : null };
   }),
   detach: z.strictObject({ attachmentId: uuid, reason: text(300).min(1), ...csrf }),
 };

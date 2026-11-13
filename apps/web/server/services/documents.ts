@@ -254,7 +254,7 @@ export async function attachDocument(pool: Pool, actor: Actor, input: unknown, r
   const d = parse(documentSchemas.attach, input);
   const attachmentId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
-    const replayId = await idempotent(tx, actor, 'document.attach', d.idempotencyKey, { documentId: d.documentId, targetType: d.targetType, targetId: d.targetId, note: d.note }, attachmentId);
+    const replayId = await idempotent(tx, actor, 'document.attach', d.idempotencyKey, { documentId: d.documentId, seenVersion: d.seenVersion, targetType: d.targetType, targetId: d.targetId, note: d.note }, attachmentId);
     if (replayId) return { id: replayId, replayed: true };
     const target = await resolveAttachmentTarget(tx, actor, d.targetType, d.targetId);
     // Parent record first (a bill in the money lock order), then the document.
@@ -263,6 +263,7 @@ export async function attachDocument(pool: Pool, actor: Actor, input: unknown, r
     if (!locked || locked.removedAt) throw new AppError('not_found');
     const version = await repo.getVersion(tx, actor.householdId, d.documentId);
     if (!version || version.state !== 'available') throw new AppError('not_found');
+    if (d.seenVersion !== null && d.seenVersion !== version.versionNo) throw new AppError('stale_version', 'The document has a newer version than the one you saw. Reload and try again.');
     const before = await repo.activeAttachmentCount(tx, actor.householdId, d.documentId);
     const onTarget = await repo.activeTargetLinks(tx, actor.householdId, target.type, target.id, d.documentId);
     if (onTarget.hasDocument) throw new AppError('conflict', 'That document is already attached to that record');

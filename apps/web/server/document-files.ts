@@ -58,8 +58,15 @@ function validPng(b: Buffer): boolean {
   return false;
 }
 
-/** Marker segments are walked up to the scan, the frame size is bounded, and the file must end at the end-of-image marker. */
-function validJpeg(b: Buffer): boolean {
+/**
+ * Marker segments are walked up to the scan, the frame size is bounded, and the file must end at the end-of-image marker.
+ * Zero padding after it (some scanners and cameras write it) is allowed up to 64 KB; any other trailing byte is refused.
+ */
+function validJpeg(full: Buffer): boolean {
+  let end = full.length;
+  while (end > 0 && full[end - 1] === 0 && full.length - end <= 65536) end--;
+  if (full.length - end > 65536) return false;
+  const b = full.subarray(0, end);
   if (b.length < 4 || b[b.length - 2] !== 0xff || b[b.length - 1] !== 0xd9) return false;
   let i = 2;
   let sized = false;
@@ -105,8 +112,7 @@ function validPdf(b: Buffer): boolean {
   if (hasZipTrailer(b)) return false;
   const decode = (t: string) => t.replace(/#([0-9A-Fa-f]{2})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
   const text = b.toString('latin1');
-  if (PDF_ACTIVE.test(decode(text))) return false;
-  return objectStreamsAreClean(b, text, decode);
+  return structureIsClean(b, text, decode);
 }
 
 const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
@@ -116,15 +122,21 @@ const MAX_INFLATED_TOTAL = 64 * 1024 * 1024;
  * file body. A stream that cannot be inflated, uses a filter chain or predictor other than plain Flate, or would expand beyond the
  * budget makes the file refused, because its content cannot be checked.
  */
-function objectStreamsAreClean(b: Buffer, text: string, decode: (t: string) => string): boolean {
+function structureIsClean(b: Buffer, text: string, decode: (t: string) => string): boolean {
   let budget = MAX_INFLATED_TOTAL;
-  const stream = /stream(\r\n|\n)/g;
+  // Names are searched only outside stream bodies: inside compressed or binary data two-byte names such as /JS or /AA occur by
+  // chance and would refuse ordinary scans. Object streams are the exception and are inflated and searched below.
+  const outside: string[] = [];
+  let copied = 0;
+  const stream = /(?<!end)stream(\r\n|\n)/g;
   for (let m = stream.exec(text); m; m = stream.exec(text)) {
     const start = m.index + m[0].length;
     const dictFrom = Math.max(text.lastIndexOf('obj', m.index), m.index - 2000, 0);
     const dict = decode(text.slice(dictFrom, m.index));
     const end = text.indexOf('endstream', start);
     if (end < 0) return false;
+    outside.push(text.slice(copied, start));
+    copied = end;
     stream.lastIndex = end + 'endstream'.length;
     if (!/\/ObjStm(?![A-Za-z0-9])/.test(dict)) continue;
     if (!/\/Filter\s*(\/FlateDecode|\[\s*\/FlateDecode\s*\])(?![A-Za-z0-9])/.test(dict) || /\/Predictor\s+(?!1(?!\d))/.test(dict) || /\/Crypt(?![A-Za-z0-9])/.test(dict)) return false;
@@ -137,7 +149,8 @@ function objectStreamsAreClean(b: Buffer, text: string, decode: (t: string) => s
       return false;
     }
   }
-  return true;
+  outside.push(text.slice(copied));
+  return !PDF_ACTIVE.test(decode(outside.join('')));
 }
 
 /** True when an end-of-central-directory record sits within the maximum distance from the end (a ZIP polyglot). */

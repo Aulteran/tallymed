@@ -37,7 +37,7 @@ export default async function DocumentPage({ params, searchParams }: { params: P
         </tr>; })}</tbody>
       </table>}
       {enabled && <form method="post" action="/api/documents/attach">
-        <h3>Attach to a record</h3><Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} /><input type="hidden" name="documentId" value={d.id} /><input type="hidden" name="returnTo" value={here} />
+        <h3>Attach to a record</h3><Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} /><input type="hidden" name="documentId" value={`${d.id}@${d.currentVersionNo}`} /><input type="hidden" name="returnTo" value={here} />
         <label htmlFor="targetType">Record type</label>
         <select id="targetType" name="targetType" defaultValue="bill"><option value="bill">Bill</option><option value="visit">Visit</option><option value="hsa_receipt">HSA reimbursement</option><option value="hsa_eligibility_decision">HSA eligibility decision</option><option value="bill_adjustment">Bill adjustment</option></select>
         <label htmlFor="targetId">Record ID (the last part of the record page address)</label><input id="targetId" name="targetId" required pattern="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" />
