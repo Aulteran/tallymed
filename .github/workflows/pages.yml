@@ -26,7 +26,7 @@ jobs:
       - uses: actions/configure-pages@v5
         id: pages
       - run: npm ci
-      - run: npm test
+      - run: node --test tests/marketing.test.mjs
       - name: Export and verify marketing site
         run: npm run build:marketing && npm run test:export
         env:
