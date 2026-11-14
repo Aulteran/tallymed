@@ -72,7 +72,7 @@ All are plain classes or small server components; pages stay server-rendered for
 | View chips | `.tabs` for switching between filtered views of a list |
 | Icon button | `.icon-button`: a 2rem square with one icon, always with `aria-label` and `title`. Used for the theme toggle, User settings and Sign out (red, `--shell-danger`, in the sidebar) |
 | Dialog | Native `<dialog class="modal">` opened with `showModal()`: centred, focus stays inside, Escape closes, focus returns to the opener. `.modal-actions` holds the buttons; the confirming button of a destructive dialog is `button.danger` (`--danger-solid`) |
-| Account menu | `AccountMenu` at the foot of the sidebar: avatar, name and role, then User settings and Sign out icon buttons; below them the theme icon button and Change password. User settings lists Change password, Change theme (`.segmented`) and Sign out. Sign out always asks for confirmation |
+| Account menu | `AccountMenu` at the foot of the sidebar: avatar and name (no role), then User settings and Sign out icon buttons; below them the theme icon button and Change password. User settings lists Change password, Change theme (`.segmented`) and Sign out. Sign out always asks for confirmation |
 | Signed-out pages | `AuthShell` centres a card under the stacked lockup |
 
 ## Checks

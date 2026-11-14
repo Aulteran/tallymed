@@ -8,7 +8,6 @@ import { pendingProposalCount } from '../../server/services/assistant.ts';
 import { Lockup } from '../components/brand.tsx';
 import { ShellNav, type NavGroup } from '../components/ShellNav.tsx';
 import { AccountMenu } from '../components/AccountMenu.tsx';
-import { roleLabel } from '../components/ui.tsx';
 import { readTheme } from '../components/theme.ts';
 
 export const dynamic = 'force-dynamic';
@@ -46,7 +45,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
         <Link href="/" className="brand"><Lockup onDark title="TallyMed overview" /></Link>
       </div>
       <ShellNav groups={groups}>
-        <AccountMenu displayName={actor.displayName} role={roleLabel(actor.role)} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} />
+        <AccountMenu displayName={actor.displayName} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} />
       </ShellNav>
     </header>
     {children}

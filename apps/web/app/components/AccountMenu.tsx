@@ -12,7 +12,7 @@ const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => { if (e.target ===
  * Both pop-ups are native modal dialogs, so the browser centres them, traps focus, closes on Escape and returns focus
  * to the button that opened them. Sign out stays a real form post: without JavaScript the button signs out directly.
  */
-export function AccountMenu({ displayName, role, initials, csrf, initialTheme }: { displayName: string; role: string; initials: string; csrf: string; initialTheme: Theme }) {
+export function AccountMenu({ displayName, initials, csrf, initialTheme }: { displayName: string; initials: string; csrf: string; initialTheme: Theme }) {
   const settings = useRef<HTMLDialogElement>(null);
   const confirm = useRef<HTMLDialogElement>(null);
   const [theme, setTheme] = useTheme(initialTheme);
@@ -20,7 +20,7 @@ export function AccountMenu({ displayName, role, initials, csrf, initialTheme }:
   return <div className="account">
     <div className="account-id">
       <span className="avatar" aria-hidden="true">{initials}</span>
-      <span className="account-who"><span className="account-name">{displayName}</span><span className="account-role">{role}</span></span>
+      <span className="account-who"><span className="account-name">{displayName}</span></span>
       <button type="button" className="icon-button" aria-label="User settings" title="User settings" aria-haspopup="dialog" onClick={() => settings.current?.showModal()}>
         <Icon name="gear" />
       </button>
