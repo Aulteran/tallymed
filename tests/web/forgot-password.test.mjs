@@ -365,3 +365,31 @@ test('the request table holds no client address in the clear', { skip: skipDb },
     assert.ok(!JSON.stringify(rows).includes('203.0.113.50'));
   } finally { await t.close(); }
 });
+
+test('N1: after an abandoned reset a stranger\'s request cannot revive the expired temporary password', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    await t.forgot(SAM);
+    await until(() => t.server.mail.length === 1);
+    const stale = t.server.mail[0].data.match(TEMP)[0];
+    assert.equal((await t.login(SAM, stale)).data.passwordChangeRequired, true);
+    await t.q(`update sessions set revoked_at = now() where revoked_at is null`);
+    await t.q(`update password_resets set expires_at = now() - interval '1 second', created_at = now() - interval '2 hours'`);
+    await t.q('delete from password_reset_requests');
+    // The stranger asks for a reset (and the owner is not around to use the email).
+    assert.equal((await t.forgot(SAM)).status, 200);
+    await until(() => t.server.mail.length === 2);
+    const sessionsBefore = (await t.q('select count(*)::int n from sessions'))[0].n;
+    // The expired password from the first email must not work now that a new credential is open.
+    const replay = await t.login(SAM, stale);
+    assert.equal(replay.res.status, 401);
+    assert.equal(replay.cookie, null);
+    assert.equal((await t.q('select count(*)::int n from sessions'))[0].n, sessionsBefore, 'no session was created');
+    assert.equal((await t.q(`select status from password_resets where status = 'open'`)).length, 1, 'the new credential is untouched');
+    // The real owner still recovers with the new email.
+    const second = t.server.mail[1].data.match(TEMP)[0];
+    const ok = await t.login(SAM, second);
+    assert.equal(ok.res.status, 200);
+    assert.equal(ok.data.passwordChangeRequired, true);
+  } finally { await t.close(); }
+});

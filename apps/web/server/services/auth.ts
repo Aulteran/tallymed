@@ -99,7 +99,8 @@ export async function login(
       // The first successful sign-in with a temporary password consumes it. Expired or replaced credentials are refused even though
       // the password matched; a used one is refused while a session of the account is live (see below).
       const pending = await findPending(tx, current.id, true);
-      if (!pending || pending.expired) return 'expired' as const;
+      // An open emailed credential is a separate secret: it never validates the stored hash (which belongs to an earlier, expired one).
+      if (!pending || pending.expired || (pending.kind === 'email_temporary' && pending.status === 'open')) return 'expired' as const;
       if (pending.status === 'open') {
         if (!(await markUsed(tx, pending.id))) return 'expired' as const;
       } else {

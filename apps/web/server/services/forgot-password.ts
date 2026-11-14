@@ -11,6 +11,7 @@
 //    minimum gap and a daily cap, counted from the credentials actually issued, including ones whose delivery failed) and a
 //    process-wide sub-budget for reset mail so anonymous requests cannot use up the whole email allowance.
 //  * The message goes only to the address stored on the account, never to anything taken from the request, and contains no link.
+import { randomBytes } from 'node:crypto';
 import type { AppConfig } from '../config.ts';
 import { AppError } from '../errors.ts';
 import { withTransaction, type Pool, type Queryable } from '../db.ts';
@@ -22,7 +23,7 @@ import { recordAudit } from '../repositories/audit.ts';
 import {
   countRequests, emailResetHistory, findPending, insertReset, lockRequestKeys, recordRequest, supersedeOpenEmailResets, supersedePending,
 } from '../repositories/password-resets.ts';
-import { findUserByEmail, findUserInHousehold } from '../repositories/users.ts';
+import { findUserByEmail, findUserInHousehold, setTemporaryPassword } from '../repositories/users.ts';
 import { refreshRuntimeConfig } from '../settings.ts';
 import { digest } from '../tokens.ts';
 import { generateTemporaryPassword } from './credentials.ts';
@@ -120,6 +121,9 @@ export async function requestPasswordReset(
     if (locked.mustChangePassword) {
       const pending = await findPending(tx, locked.id, true);
       if (!pending || !pending.expired) return { skip: 'change_pending' as const };
+      // The expired temporary password is still the account's stored hash. Retire it now: otherwise it would sign in again once the new
+      // credential is open, and whoever typed the address could use it to reach the forced-change page and set a password.
+      await setTemporaryPassword(tx, locked.id, await hashPassword(randomBytes(32).toString('base64url')));
     }
     const history = await emailResetHistory(tx, locked.id);
     if (history.lastDay >= ACCOUNT_SENDS_PER_DAY || (history.sinceNewestSeconds !== null && history.sinceNewestSeconds < ACCOUNT_MIN_GAP_SECONDS)) {
