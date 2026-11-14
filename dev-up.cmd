@@ -4,8 +4,9 @@ rem Services from compose.yaml: db (PostgreSQL, pg_isready health check) and web
 rem First-run setup: while no administrator exists, the launcher generates a one-time setup token, hands it to the web container for this
 rem start only and prints it on screen once. It is never written to .env, a log or a temporary file. If you define TALLYMED_SETUP_TOKEN
 rem yourself (.env or environment) that value is used and not displayed.
-rem Colors use ANSI codes only when the console shows them (Windows Terminal, or VirtualTerminalLevel set to 1) and NO_COLOR is not set.
-rem Otherwise the text is plain. Output redirected to a file is not detected, so pipe with NO_COLOR=1 set to keep it plain.
+rem Colors: ANSI codes are used in Windows Terminal, or in a console where VirtualTerminalLevel is 1 (see the hint below).
+rem DEVUP_COLOR=1 forces colors on, DEVUP_COLOR=0 or NO_COLOR=1 turns them off. Classic Command Prompt, one-time setup:
+rem   reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f   (then open a new Command Prompt window)
 setlocal EnableExtensions
 cd /d "%~dp0"
 title TallyMed dev-up
@@ -16,6 +17,9 @@ for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1)
 set "USECOLOR="
 if not defined ESC goto :colorsdone
 if defined NO_COLOR goto :colorsdone
+if "%DEVUP_COLOR%"=="0" goto :colorsdone
+if "%DEVUP_COLOR%"=="1" set "USECOLOR=1"
+if defined USECOLOR goto :colorsdone
 if defined WT_SESSION set "USECOLOR=1"
 if defined USECOLOR goto :colorsdone
 for /f "tokens=3" %%v in ('reg query HKCU\Console /v VirtualTerminalLevel 2^>nul') do if "%%v"=="0x1" set "USECOLOR=1"
