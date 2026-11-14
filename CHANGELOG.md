@@ -27,7 +27,7 @@ TallyMed is a self-hosted medical expense ledger for one household. Use fabricat
 
 ### Known limitations — read before a real deployment
 
-1. **No password change or reset** (unless a later entry here says otherwise). A forgotten administrator password has no supported recovery short of editing the database. Keep it in a password manager and keep encrypted backups.
+1. **Password recovery needs an administrator, or SMTP.** An administrator can reset another account, and, once SMTP is configured, people can request an emailed temporary password from the sign-in page (Reset password). If the only administrator forgets their password and email is not configured, another administrator must reset it; keep at least two. Keep it in a password manager and keep encrypted backups.
 2. **Shared-address sign-in lockout.** After 20 failed sign-ins from one client address, sign-in is blocked for everyone behind that address for 15 minutes (a household behind one NAT shares an address). Anyone who knows an account email can lock that account for 15 minutes. It clears by itself and nothing is lost.
 3. **Assistant database role.** The assistant needs a restricted database role created with `setup-role`, again after upgrades that add tables, and again after a restore. See [docs/mcp.md](docs/mcp.md).
 4. **PDF scanning is best effort.** Uploads are checked by content, but this is not a malware scanner. Downloads are attachment-only with `nosniff`, which are the real controls.

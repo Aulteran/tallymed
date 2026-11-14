@@ -74,6 +74,7 @@ export const schemas = {
   }),
   reverseAdjustment: z.strictObject({ idempotencyKey, billId: uuid, adjustmentId: uuid, reason: text(500).min(1), ...csrf }),
   login: z.strictObject({ email, password: z.string().min(1).max(MAX_PASSWORD_LENGTH) }),
+  forgotPassword: z.strictObject({ email }),
   logout: z.strictObject({ csrf: z.string().optional() }),
   invite: z.strictObject({ email, role, csrf: z.string().optional() }),
   revokeInvitation: z.strictObject({ invitationId: uuid, csrf: z.string().optional() }),

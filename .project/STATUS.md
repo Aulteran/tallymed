@@ -156,7 +156,7 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 
 - Branch: `admin-password-reset-forced-change`, PR against `dev` (number and tested head are on the PR). Independent security review pending.
 - Changed: migration 0009 (`must_change_password`, `password_resets`), `server/services/credentials.ts`, `repositories/password-resets.ts`, the closed-by-default gate in `server/http.ts`, sign-in re-check under a row lock, `/account/password`, `/password/change`, Operators reset flow, login copy, `docs/security.md`, `docs/operations.md`, `docs/development.md`, DECISIONS.md, `tests/web/password-reset.test.mjs`.
-- Still open: phase 2 (forgot-password email, needs SMTP), see DECISIONS.md for the model constraint it must respect.
+- Phase 2 (forgot-password email) is built in the "Forgot password by email" handoff below.
 
 ## Admin settings, SMTP and trusted proxy handoff
 
@@ -164,3 +164,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Changed: Server settings pages (General, Documents, Reverse proxy, Email), SMTP helper `server/email.ts`, encrypted SMTP password (`TALLYMED_SECRETS_KEY`), trusted proxy address/CIDR list with the signed peer address, audit entries, docs and decisions.
 - Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test` (201), build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`, a real SMTP server with STARTTLS/TLS, a real reverse proxy.
 - Next: owner test on the homelab proxy; independent security review of spoofed `X-Forwarded-For` handling.
+
+## Forgot password by email handoff
+
+- Branch: `feature/forgot-password-email-reset` (PR against `dev`; head SHA is on the PR). Migration `0011_forgot_password.sql`. Independent security review pending.
+- Changed: `services/forgot-password.ts`, login handling in `services/auth.ts`, `repositories/password-resets.ts`, `handleForgotPassword` and `/api/auth/forgot-password`, `/password/forgot` page, Reset password button on sign-in, docs, decisions, `tests/web/forgot-password.test.mjs` (12 tests).
+- Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test`. See the PR for build, export and browser results. Not run: Node 24, Docker/Compose, a real SMTP server with STARTTLS/TLS.
+- Reviewer focus: no enumeration (response and timing), no lockout or takeover by requests, limits, audit, secret handling, interaction with the admin reset and forced-change gate.

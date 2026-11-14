@@ -103,6 +103,14 @@ try {
 
   await page.goto(`${origin}/login`);
   await a11y('sign in');
+  // Reset password: without SMTP the page explains that an administrator must do it, and shows no form.
+  await page.click('a:has-text("Reset password")');
+  await page.waitForURL(`${origin}/password/forgot`);
+  assert.match(await text(), /not set up to send email/);
+  assert.equal(await page.locator('form').count(), 0);
+  await a11y('reset password without email');
+  ok('sign-in offers Reset password, which asks the person to contact an administrator while SMTP is not configured');
+  await page.goto(`${origin}/login`);
   await page.fill('#email', 'admin@example.test');
   await page.fill('#password', password);
   await page.click('button[type=submit]');

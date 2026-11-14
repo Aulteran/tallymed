@@ -9,6 +9,7 @@ import { flashSetCookie } from './flash.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
+import { requestPasswordReset } from './services/forgot-password.ts';
 import { changePassword, resetOperatorPassword } from './services/credentials.ts';
 import * as expenses from './services/expenses.ts';
 import * as assistant from './services/assistant.ts';
@@ -322,6 +323,23 @@ export const handleLogin = route({
       json: { ok: true, csrfToken: csrfFor(result.token), ...(result.passwordChangeRequired ? { passwordChangeRequired: true } : {}) },
       headers: { 'Set-Cookie': cookie },
     };
+  },
+});
+
+/**
+ * "Forgot password": always the same answer for a well-formed address, whether or not an account exists. The email, if any, is sent after
+ * the response. The only address-independent refusals are email not being set up and the caller's own request budget.
+ */
+export const handleForgotPassword = route({
+  name: 'forgot-password',
+  session: false,
+  errorPath: () => '/password/forgot',
+  async run({ ctx, body, client, requestId, req }) {
+    const data = parse(schemas.forgotPassword, body);
+    const { delivery } = await requestPasswordReset(ctx.pool, ctx.config, { email: data.email, ip: client.ip, requestId });
+    delivery.catch(() => undefined);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/password/forgot?notice=sent', BASE_HEADERS) };
+    return { json: { ok: true } };
   },
 });
 

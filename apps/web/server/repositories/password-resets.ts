@@ -24,11 +24,12 @@ export async function supersedePending(db: Queryable, userId: string): Promise<n
 }
 
 export async function insertReset(
-  db: Queryable, r: { householdId: string; userId: string; kind: ResetKind; issuedBy: string | null; expiresAt: Date },
+  db: Queryable,
+  r: { householdId: string; userId: string; kind: ResetKind; issuedBy: string | null; expiresAt: Date; secretHash?: string | null },
 ): Promise<string> {
   const x = await db.query<{ id: string }>(
-    `insert into password_resets (household_id, user_id, kind, issued_by, expires_at) values ($1, $2, $3, $4, $5) returning id`,
-    [r.householdId, r.userId, r.kind, r.issuedBy, r.expiresAt],
+    `insert into password_resets (household_id, user_id, kind, issued_by, expires_at, secret_hash) values ($1, $2, $3, $4, $5, $6) returning id`,
+    [r.householdId, r.userId, r.kind, r.issuedBy, r.expiresAt, r.secretHash ?? null],
   );
   return x.rows[0]!.id;
 }
@@ -68,4 +69,57 @@ export async function listPending(db: Queryable, householdId: string): Promise<P
     [householdId],
   );
   return r.rows.map((x) => ({ userId: x.userId, expiresAt: x.expiresAt, state: x.status === 'used' ? 'used' : x.expired ? 'expired' : 'open' }));
+}
+
+export interface EmailResetSecret { id: string; secretHash: string; expired: boolean }
+
+/** The emailed temporary credential that has not been used yet (its hash is held here, not in users.password_hash). */
+export async function findOpenEmailReset(db: Queryable, userId: string, lock = false): Promise<EmailResetSecret | null> {
+  const r = await db.query<EmailResetSecret>(
+    `select id, secret_hash as "secretHash", (expires_at <= now()) as expired from password_resets
+      where user_id = $1 and kind = 'email_temporary' and status = 'open'${lock ? ' for update' : ''}`,
+    [userId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** Retires an unused emailed credential (the person signed in with their password, or delivery failed). Returns how many were retired. */
+export async function supersedeOpenEmailResets(db: Queryable, userId: string, onlyId?: string): Promise<number> {
+  const r = await db.query(
+    `update password_resets set status = 'superseded'
+      where user_id = $1 and kind = 'email_temporary' and status = 'open' and ($2::uuid is null or id = $2)`,
+    [userId, onlyId ?? null],
+  );
+  return r.rowCount ?? 0;
+}
+
+/** Emailed credentials created for the account: how many in the last day and how many seconds since the newest. */
+export async function emailResetHistory(db: Queryable, userId: string): Promise<{ lastDay: number; sinceNewestSeconds: number | null }> {
+  const r = await db.query<{ n: string; since: string | null }>(
+    `select count(*) as n, extract(epoch from now() - max(created_at)) as since from password_resets
+      where user_id = $1 and kind = 'email_temporary' and created_at > now() - interval '24 hours'`,
+    [userId],
+  );
+  return { lastDay: Number(r.rows[0]!.n), sinceNewestSeconds: r.rows[0]!.since === null ? null : Number(r.rows[0]!.since) };
+}
+
+/** Request log for the self-service limits. Keyed by digests, written for known and unknown addresses alike. */
+export async function lockRequestKeys(db: Queryable, emailHash: Buffer, ip: string): Promise<void> {
+  await db.query('select pg_advisory_xact_lock(7203601, hashtext($1))', [emailHash.toString('hex')]);
+  await db.query('select pg_advisory_xact_lock(7203602, hashtext($1))', [ip]);
+}
+
+export async function countRequests(db: Queryable, emailHash: Buffer, ip: string, windowSeconds: number): Promise<{ address: number; ip: number }> {
+  await db.query(`delete from password_reset_requests where requested_at < now() - interval '24 hours'`);
+  const r = await db.query<{ address: string; ip: string }>(
+    `select count(*) filter (where email_hash = $1) as address, count(*) filter (where client_ip = $2) as ip
+       from password_reset_requests
+      where requested_at > now() - make_interval(secs => $3) and (email_hash = $1 or client_ip = $2)`,
+    [emailHash, ip, windowSeconds],
+  );
+  return { address: Number(r.rows[0]!.address), ip: Number(r.rows[0]!.ip) };
+}
+
+export async function recordRequest(db: Queryable, emailHash: Buffer, ip: string): Promise<void> {
+  await db.query('insert into password_reset_requests (email_hash, client_ip) values ($1, $2)', [emailHash, ip]);
 }

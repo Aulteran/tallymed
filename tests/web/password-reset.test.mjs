@@ -8,7 +8,7 @@ import { setLogSink } from '../../apps/web/server/log.ts';
 import { hashPassword } from '../../apps/web/server/passwords.ts';
 import { insertUser } from '../../apps/web/server/repositories/users.ts';
 import { authenticate } from '../../apps/web/server/services/auth.ts';
-import { generateTemporaryPassword, issueTemporaryCredential, resetOperatorPassword } from '../../apps/web/server/services/credentials.ts';
+import { generateTemporaryPassword, resetOperatorPassword } from '../../apps/web/server/services/credentials.ts';
 import {
   freshDatabase, loginJson, PASSWORD, post, seedHousehold, skipDb, testConfig,
 } from './helpers.mjs';
@@ -73,7 +73,9 @@ test('admin reset: secret shown once, hashed at rest, never logged or audited; o
     assert.match(row.password_hash, /^\$argon2id\$/);
     assert.equal(row.must_change_password, true);
     const cols = (await db.pool.query(`select column_name from information_schema.columns where table_name = 'password_resets'`)).rows.map((r) => r.column_name);
-    assert.ok(!cols.some((c) => /pass|secret|hash|token/.test(c)), cols.join());
+    // The only secret-bearing column belongs to the emailed (forgot-password) credential; administrator credentials never use it.
+    assert.deepEqual(cols.filter((c) => /pass|secret|hash|token/.test(c)), ['secret_hash']);
+    assert.equal((await db.pool.query('select secret_hash from password_resets'))[0]?.secret_hash ?? null, null);
     // Nothing the server wrote, in any table or log, contains the secret.
     const dump = JSON.stringify([
       (await db.pool.query('select * from audit_events')).rows, (await db.pool.query('select * from password_resets')).rows,
@@ -291,7 +293,7 @@ function routeFiles(dir = routeDir, base = '') {
 
 // Every API route and what the password-change gate does to it. A new route fails the inventory test until it is classified here.
 const CLASSIFIED = {
-  '/auth/login': 'public', '/invitations/accept': 'public', '/setup': 'public',
+  '/auth/login': 'public', '/auth/forgot-password': 'public', '/invitations/accept': 'public', '/setup': 'public',
   '/auth/logout': 'allowed', '/auth/change-password': 'allowed',
   '/operators/invite': 'gated', '/operators/update': 'gated', '/operators/reset-password': 'gated', '/operators/invitations/revoke': 'gated',
   '/expenses/[...action]': 'gated', '/documents/[...action]': 'gated', '/assistant/[...action]': 'gated', '/settings/[...action]': 'gated',
@@ -401,30 +403,6 @@ test('change password needs a session and a CSRF token', { skip: skipDb }, async
 
 // ---- model reuse ----
 
-test('the credential model is reusable by a later delivery channel', { skip: skipDb }, async () => {
-  const { db, ctx, add, login } = await setup();
-  try {
-    await add('sam@example.test');
-    const { rows: [target] } = await db.pool.query(`select id, household_id as "householdId", email, version from users where email = 'sam@example.test'`);
-    const hash = await hashPassword('delivered by another channel 1');
-    const issued = await (async () => {
-      const c = await db.pool.connect();
-      try {
-        await c.query('begin');
-        const r = await issueTemporaryCredential(c, ctx.config, { target, kind: 'email_temporary', issuedBy: null, passwordHash: hash, revokeReason: 'self_service_reset' });
-        await c.query('commit');
-        return r;
-      } finally { c.release(); }
-    })();
-    assert.ok(issued.expiresAt > new Date());
-    const t = await login('sam@example.test', 'delivered by another channel 1');
-    assert.equal(t.data.passwordChangeRequired, true);
-    assert.equal((await db.pool.query(`select kind, issued_by from password_resets`)).rows[0].kind, 'email_temporary');
-  } finally {
-    await db.drop();
-  }
-});
-
 test('migration 0009 upgrades existing accounts: nobody is forced to change a password and open sessions keep working', { skip: skipDb }, async () => {
   const db = await freshDatabase({ migrateAll: false });
   try {
@@ -433,7 +411,7 @@ test('migration 0009 upgrades existing accounts: nobody is forced to change a pa
     await seedHousehold(db.pool);
     await db.pool.query(`insert into sessions (user_id, household_id, token_hash, expires_at)
       select id, household_id, decode(repeat('ab', 32), 'hex'), now() + interval '1 hour' from users`);
-    assert.deepEqual(await migrate(db.pool), ['0009', '0010']);
+    assert.deepEqual(await migrate(db.pool), ['0009', '0010', '0011']);
     const u = (await db.pool.query('select must_change_password, password_changed_at from users')).rows[0];
     assert.deepEqual(u, { must_change_password: false, password_changed_at: null });
     assert.equal((await db.pool.query('select count(*)::int n from sessions where revoked_at is null')).rows[0].n, 1);

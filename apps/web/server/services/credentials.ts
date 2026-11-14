@@ -46,15 +46,14 @@ export interface IssuedTemporaryPassword {
 }
 
 /**
- * The one place a temporary credential is created. Callers (today the administrator reset; later a self-service delivery
- * channel) supply the kind and issuer, run it inside their own transaction, and decide how the secret is delivered. It
- * replaces the password hash (the old password stops working immediately), requires a change at the next sign-in, retires
+ * The one place an administrator-issued temporary credential is created. It replaces the password hash (the old password stops working immediately), requires a change at the next sign-in, retires
  * any earlier pending credential, signs every session out, clears the sign-in lockout, and records the credential without
- * its secret.
+ * its secret. Self-service (emailed) credentials deliberately do not use this: replacing the password on request would let a
+ * stranger lock an account out, so they stay beside the password until used (see forgot-password.ts and login in auth.ts).
  */
 export async function issueTemporaryCredential(
   tx: Queryable, config: Pick<AppConfig, 'temporaryPasswordSeconds'>,
-  args: { target: UserRow; kind: ResetKind; issuedBy: string | null; passwordHash: string; revokeReason: string },
+  args: { target: UserRow; kind: Extract<ResetKind, 'admin_temporary'>; issuedBy: string | null; passwordHash: string; revokeReason: string },
 ): Promise<{ resetId: string; expiresAt: Date; sessionsRevoked: number }> {
   await supersedePending(tx, args.target.id);
   await setTemporaryPassword(tx, args.target.id, args.passwordHash);
