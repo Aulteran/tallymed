@@ -1,11 +1,9 @@
 'use client';
 import Link from 'next/link';
-import { useRef, type MouseEvent } from 'react';
+import { useRef } from 'react';
+import { closeOnBackdrop } from './AddDialog.tsx';
 import { Icon } from './icons.tsx';
 import { THEMES, THEME_ICON, THEME_LABEL, ThemeToggle, useTheme, type Theme } from './ThemeToggle.tsx';
-
-/** Closes a modal dialog when the click lands on its backdrop (the dialog element itself), not on its content. */
-const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => { if (e.target === e.currentTarget) e.currentTarget.close(); };
 
 /**
  * The signed-in person's corner of the sidebar: who they are, a settings button, a sign-out button, and quick links.

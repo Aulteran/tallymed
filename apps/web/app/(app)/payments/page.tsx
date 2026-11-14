@@ -2,8 +2,9 @@ import Link from 'next/link';
 import { formatCents } from '../../../server/money.ts';
 import { pickParties } from '../../../server/services/expenses.ts';
 import { cashSummary, listPayments, pickPayableBills } from '../../../server/services/payments.ts';
+import { AddDialog } from '../../components/AddDialog.tsx';
 import {
-  Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, PAYMENT_METHODS, q80, requireSession, todayUtc, Truncated, type SearchParams,
+  Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, PAYMENT_METHODS, pick, q80, requireSession, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -19,9 +20,33 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
   const filters = Object.fromEntries(['q', 'memberId', 'providerId', 'from', 'to', 'unapplied'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listPayments(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
+  const open = !!p.error || p.add === '1' || !!p.billId;
   return <main id="main" className="wide">
-    <h1>Payments</h1>
-    <Banner code={p.error} invalid={invalid} />
+    <div className="page-head">
+      <h1>Payments</h1>
+      <AddDialog label="Record payment" title="Record a payment" open={open} keep={pick(p, ['q', 'memberId', 'providerId', 'from', 'to', 'unapplied', 'billId', 'billQ', 'memberQ', 'providerQ'])}>
+        {p.error && <Banner code={p.error} />}
+        {(bills.truncated || p.billQ) && <>
+          {bills.truncated && <Truncated what="bills" />}
+          <NarrowForm inDialog fields={[{ name: 'billQ', label: 'Find a bill to apply to' }]} values={p} />
+        </>}
+        <form method="post" action="/api/expenses/payments/create">
+          <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
+          <p className="muted">Record cash the household actually paid. A payment is a posted event: it cannot be edited, only corrected with linked entries.</p>
+          <label htmlFor="paidOn">Date paid</label><input id="paidOn" name="paidOn" type="date" required defaultValue={p.paidOn ?? todayUtc()} />
+          <label htmlFor="amount">Amount (USD)</label><input id="amount" name="amount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" placeholder="125.00" defaultValue={p.amount} />
+          <label htmlFor="method">Method</label><select id="method" name="method" defaultValue={p.method ?? 'card'}>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{label(m)}</option>)}</select>
+          <label htmlFor="reference">Reference (optional)</label><input id="reference" name="reference" maxLength={80} defaultValue={p.reference} />
+          <label htmlFor="note">Note (optional)</label><input id="note" name="note" maxLength={500} defaultValue={p.note} />
+          <label htmlFor="billId">Apply to a bill (optional)</label>
+          <select id="billId" name="billId" defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Leave unapplied for now" /></select>
+          <label htmlFor="allocateAmount">Amount to apply (blank applies the whole payment)</label><input id="allocateAmount" name="allocateAmount" inputMode="decimal" pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.allocateAmount} />
+          <button type="submit">Record payment</button>
+          <p className="muted">Only bills with confirmed amounts and an open balance are listed. You can apply the rest to other bills from the payment page.</p>
+        </form>
+      </AddDialog>
+    </div>
+    <Banner invalid={invalid} />
     <section className="metrics" aria-label="Cash">
       <Link href="/payments"><div className="card"><span>Net cash paid</span><strong><Money cents={cash.netCashCents} /></strong><span className="muted">{cash.paymentCount} payments, after refunds</span></div></Link>
       <Link href="/payments?unapplied=yes"><div className="card"><span>Unapplied cash</span><strong><Money cents={cash.unappliedCents} /></strong><span className="muted">Paid but not applied to a bill yet</span></div></Link>
@@ -45,23 +70,9 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
       </tr>)}</tbody>
     </table>}
     <Pager base="/payments" params={filters} next={data.nextCursor} />
-    {(bills.truncated || members.truncated || providers.truncated || p.billQ || p.memberQ || p.providerQ) && <>
-      {bills.truncated && <Truncated what="bills" />}{members.truncated && <Truncated what="family members" />}{providers.truncated && <Truncated what="providers" />}
-      <NarrowForm fields={[{ name: 'billQ', label: 'Find a bill to apply to' }, { name: 'memberQ', label: 'Find a family member' }, { name: 'providerQ', label: 'Find a provider' }]} values={p} />
+    {(members.truncated || providers.truncated || p.memberQ || p.providerQ) && <>
+      {members.truncated && <Truncated what="family members" />}{providers.truncated && <Truncated what="providers" />}
+      <NarrowForm fields={[{ name: 'memberQ', label: 'Find a family member' }, { name: 'providerQ', label: 'Find a provider' }]} values={p} />
     </>}
-    <form className="card" method="post" action="/api/expenses/payments/create">
-      <h2>Record a payment</h2><Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
-      <p className="muted">Record cash the household actually paid. A payment is a posted event: it cannot be edited, only corrected with linked entries.</p>
-      <label htmlFor="paidOn">Date paid</label><input id="paidOn" name="paidOn" type="date" required defaultValue={p.paidOn ?? todayUtc()} />
-      <label htmlFor="amount">Amount (USD)</label><input id="amount" name="amount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" placeholder="125.00" defaultValue={p.amount} />
-      <label htmlFor="method">Method</label><select id="method" name="method" defaultValue={p.method ?? 'card'}>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{label(m)}</option>)}</select>
-      <label htmlFor="reference">Reference (optional)</label><input id="reference" name="reference" maxLength={80} defaultValue={p.reference} />
-      <label htmlFor="note">Note (optional)</label><input id="note" name="note" maxLength={500} defaultValue={p.note} />
-      <label htmlFor="billId">Apply to a bill (optional)</label>
-      <select id="billId" name="billId" defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Leave unapplied for now" /></select>
-      <label htmlFor="allocateAmount">Amount to apply (blank applies the whole payment)</label><input id="allocateAmount" name="allocateAmount" inputMode="decimal" pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.allocateAmount} />
-      <button type="submit">Record payment</button>
-      <p className="muted">Only bills with confirmed amounts and an open balance are listed. You can apply the rest to other bills from the payment page.</p>
-    </form>
   </main>;
 }

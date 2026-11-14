@@ -2,8 +2,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { can } from '../../../server/authz.ts';
 import { listInvitations, listOperators } from '../../../server/services/operators.ts';
+import { AddDialog } from '../../components/AddDialog.tsx';
 import { errorMessage } from '../../components/messages.ts';
-import { dateOf, roleLabel, requireSession } from '../../components/ui.tsx';
+import { dateOf, flat, roleLabel, requireSession } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Users · TallyMed' };
@@ -13,11 +14,27 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
   if (!can(session.actor, 'operators:manage')) notFound();
   const users = await listOperators(ctx.pool, session.actor);
   const invitations = await listInvitations(ctx.pool, session.actor);
-  const error = errorMessage((await searchParams).error);
+  const q = await flat(searchParams);
+  const error = errorMessage(q.error);
+  // A failed invitation comes back with `add=1`, so its message shows in the reopened dialog; other errors stay on the page.
+  const adding = q.add === '1';
   return <main id="main" className="wide">
-    <h1>Users</h1>
+    <div className="page-head">
+      <h1>Users</h1>
+      <AddDialog label="Invite user" title="Invite a user" open={adding}>
+        {adding && error && <p className="error" role="alert">{error}</p>}
+        <form method="post" action="/api/operators/invite">
+          <input type="hidden" name="csrf" value={session.csrf} />
+          <label htmlFor="email">Email</label>
+          <input id="email" name="email" type="email" required maxLength={254} />
+          <label htmlFor="role">Role</label>
+          <select id="role" name="role" defaultValue="operator"><option value="operator">{roleLabel('operator')}</option><option value="admin">{roleLabel('admin')}</option></select>
+          <button type="submit">Create one-time link</button>
+        </form>
+      </AddDialog>
+    </div>
     <p>Accounts that can sign in to this household. Invite someone with a one-time link.</p>
-    {error && <p className="error" role="alert">{error}</p>}
+    {!adding && error && <p className="error" role="alert">{error}</p>}
     <div className="card">
       <h2>People with access</h2>
       <table className="stack users">
@@ -71,14 +88,5 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
       </table>
       <p className="muted">To re-issue a link, revoke the invitation and invite the address again.</p>
     </div>}
-    <form className="card" method="post" action="/api/operators/invite">
-      <h2>Invite a user</h2>
-      <input type="hidden" name="csrf" value={session.csrf} />
-      <label htmlFor="email">Email</label>
-      <input id="email" name="email" type="email" required maxLength={254} />
-      <label htmlFor="role">Role</label>
-      <select id="role" name="role" defaultValue="operator"><option value="operator">{roleLabel('operator')}</option><option value="admin">{roleLabel('admin')}</option></select>
-      <button type="submit">Create one-time link</button>
-    </form>
   </main>;
 }

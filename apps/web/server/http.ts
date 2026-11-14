@@ -360,7 +360,8 @@ export const handleLogout = route({
 export const handleInvite = route({
   name: 'invite',
   session: true,
-  errorPath: () => '/users',
+  // `add=1` reopens the invite dialog on the Users page, so the message appears next to the form it belongs to.
+  errorPath: () => '/users?add=1',
   async run({ ctx, actor, body, requestId, req }) {
     const invitation = await inviteOperator(ctx.pool, ctx.config, actor!, body, requestId);
     const link = new URL(`/invite/${invitation.token}`, ctx.config.canonicalOrigin).href;

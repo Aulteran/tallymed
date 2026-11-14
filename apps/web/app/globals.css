@@ -150,6 +150,15 @@ dialog.modal .icon-button:hover { background: var(--surface-2); }
 dialog.modal .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-3); margin: var(--space-5) 0 0; }
 .modal-actions button { margin: 0; }
 .modal-actions button.danger { background: var(--danger-solid); border-color: var(--danger-solid); color: #FFFFFF; }
+/* A form in a dialog (the add forms of the list pages). Required fields carry a red asterisk; the `required` attribute tells screen readers. */
+dialog.form-modal { width: min(34rem, calc(100vw - 2rem)); }
+.form-modal .modal-body :is(input, select, textarea) { max-width: none; }
+.form-modal .modal-body input[type="checkbox"] { width: 1.125rem; }
+.form-modal .modal-body > .error { margin: var(--space-3) 0 0; }
+.form-modal form.row { margin-top: var(--space-3); }
+.required-note { margin-top: var(--space-1); }
+.required-mark, .form-modal label:has(+ :required)::after { color: var(--danger-fg); font-weight: 700; }
+.form-modal label:has(+ :required)::after { content: " *"; content: " *" / ""; }
 .modal-actions button.danger:hover { background: var(--danger-solid-hover); border-color: var(--danger-solid-hover); }
 .settings-list { list-style: none; margin: var(--space-4) 0 0; padding: 0; display: grid; gap: var(--space-2); }
 .settings-item, button.settings-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); width: 100%; min-height: 0; margin: 0; padding: var(--space-3); background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: var(--radius-md); font: inherit; font-weight: 400; text-align: left; text-decoration: none; justify-content: flex-start; }
@@ -179,9 +188,14 @@ a.settings-item:hover, button.settings-item:hover { background: var(--surface-2)
 main { width: 100%; max-width: 50rem; margin: 0 auto; padding: var(--space-5) var(--space-4) var(--space-6); }
 main.wide { max-width: 76rem; }
 @media (min-width: 64rem) { main { padding: var(--space-6) var(--space-6) var(--space-7); } }
-main > h1 { margin-bottom: var(--space-2); }
-main > h1 + p, .page-meta { color: var(--fg-muted); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
-main > h1 ~ .card:first-of-type, main > h1 + :not(p) { margin-top: var(--space-5); }
+main > h1, main > .page-head { margin-bottom: var(--space-2); }
+/* A page header with its main action (for example "Add provider") at the top right. */
+.page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.page-action { margin: 0; }
+.page-action button, a.page-action { margin-top: 0; white-space: nowrap; }
+.page-action svg { width: 1.125rem; height: 1.125rem; flex: none; }
+main > :is(h1, .page-head) + p, .page-meta { color: var(--fg-muted); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+main > :is(h1, .page-head) ~ .card:first-of-type, main > :is(h1, .page-head) + :not(p) { margin-top: var(--space-5); }
 main > p { max-width: 62rem; }
 .muted { color: var(--fg-muted); font-size: var(--text-sm); }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
