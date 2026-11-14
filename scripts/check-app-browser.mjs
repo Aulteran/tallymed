@@ -589,7 +589,7 @@ try {
   await confirmDialog.waitFor({ state: 'hidden' });
   await page.goto(`${origin}/users`);
   assert.equal(new URL(page.url()).pathname, '/users', 'cancelling keeps the session');
-  assert.equal(await page.locator('.account a, .account-id a').count(), 0, 'the sidebar has no standalone password or theme buttons');
+  assert.equal(await page.locator('.account-id a, .account > a').count(), 0, 'the sidebar has no standalone password or theme buttons');
   await page.click('a:has-text("Reset password")');
   await page.waitForURL(/\/users\/[0-9a-f-]{36}\/reset-password$/);
   await a11y('reset password confirmation');
