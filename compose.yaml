@@ -27,7 +27,7 @@ services:
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
       # Optional: addresses or CIDR ranges of your reverse proxy (also editable by an administrator in Settings > Reverse proxy).
       TALLYMED_TRUSTED_PROXIES: ${TALLYMED_TRUSTED_PROXIES:-}
-      # Optional: key that encrypts the SMTP password stored by Settings > Email. `openssl rand -base64 32`; keep it with your backups.
+      # Optional: key that encrypts the SMTP password stored by Settings > Email. `openssl rand -base64 32`; keep a copy in a password manager, apart from your backups.
       TALLYMED_SECRETS_KEY: ${TALLYMED_SECRETS_KEY:-}
       # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
       TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
