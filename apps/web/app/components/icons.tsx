@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-/** Small line icons drawn for TallyMed (24x24 grid, 1.75 stroke). Decorative: always paired with a text label. */
+/** Small line icons drawn for TallyMed (24x24 grid, 1.75 stroke). Decorative: paired with a text label, or with an aria-label on icon-only buttons. */
 const PATHS: Record<string, ReactNode> = {
   overview: <><rect x="3.5" y="3.5" width="7" height="8" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="5" rx="1.5" /><rect x="13.5" y="12.5" width="7" height="8" rx="1.5" /><rect x="3.5" y="15.5" width="7" height="5" rx="1.5" /></>,
   visits: <><rect x="3.5" y="5" width="17" height="15.5" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4M12 13v4M10 15h4" /></>,
@@ -12,10 +12,15 @@ const PATHS: Record<string, ReactNode> = {
   proposals: <><path d="M4 5.5h16v11H9.5L5.5 20v-3.5H4z" /><path d="M9 11l2 2 4-4" /></>,
   family: <><circle cx="9" cy="8" r="3.25" /><path d="M3 19.5c.6-3.3 2.9-5 6-5s5.4 1.7 6 5" /><circle cx="17" cy="9" r="2.5" /><path d="M16.5 14.6c2.4.2 4 1.8 4.5 4.4" /></>,
   providers: <><path d="M4 20.5V6l8-2.5L20 6v14.5" /><path d="M2.5 20.5h19M12 8v5M9.5 10.5h5M10 20.5v-4h4v4" /></>,
-  operators: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20c.7-3.7 3.4-5.5 7-5.5s6.3 1.8 7 5.5" /></>,
+  users: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20c.7-3.7 3.4-5.5 7-5.5s6.3 1.8 7 5.5" /></>,
   assistant: <><path d="M12 3.5l1.8 4.7 4.7 1.8-4.7 1.8L12 16.5l-1.8-4.7L5.5 10l4.7-1.8z" /><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>,
+  settings: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></>,
+  gear: <><circle cx="12" cy="12" r="6.5" /><circle cx="12" cy="12" r="2.5" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M16.6 7.4l1.76-1.76M7.4 7.4L5.64 5.64M7.4 16.6l-1.76 1.76M16.6 16.6l1.76 1.76" /></>,
+  logout: <><path d="M10 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H10" /><path d="M10 12h10M16.5 8.5L20 12l-3.5 3.5" /></>,
+  key: <><circle cx="8" cy="15.5" r="4" /><path d="M11 12.5l8.5-8.5M16 7.5l3 3M13.5 10l2 2" /></>,
   empty: <><path d="M4 13.5l2.5-8h11l2.5 8v5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z" /><path d="M4 13.5h4.5l1 2.5h5l1-2.5H20" /></>,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  plus: <path d="M12 5v14M5 12h14" />,
   close: <path d="M6 6l12 12M18 6L6 18" />,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3L7 7M17 17l1.7 1.7M5.3 18.7L7 17M17 7l1.7-1.7" /></>,
   moon: <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />,

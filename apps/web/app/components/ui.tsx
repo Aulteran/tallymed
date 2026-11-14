@@ -6,7 +6,7 @@ import { cookies, headers } from 'next/headers';
 import { appContext } from '../../server/context.ts';
 import { flashCookieName, readFlash } from '../../server/flash.ts';
 import { AppError } from '../../server/errors.ts';
-import { pageActor } from '../../server/http.ts';
+import { pageSession } from '../../server/http.ts';
 import { formatCents } from '../../server/money.ts';
 import { Icon } from './icons.tsx';
 import { errorMessage } from './messages.ts';
@@ -15,8 +15,10 @@ export type SearchParams = Promise<Record<string, string | string[] | undefined>
 
 export async function requireSession() {
   const ctx = appContext();
-  const session = await pageActor(ctx, await headers());
+  const session = await pageSession(ctx, await headers());
   if (!session) redirect('/login');
+  // An account holding a temporary password reaches nothing but the change-password page.
+  if (session.actor.mustChangePassword) redirect('/password/change');
   return { ctx, ...session };
 }
 
@@ -79,18 +81,23 @@ export function Options({ items, blank }: { items: Array<{ id: string; name: str
 
 export const AMOUNT_SOURCES = ['statement', 'portal', 'eob', 'phone', 'manual'] as const;
 export const ADJUSTMENT_CATEGORIES = ['insurer_adjustment', 'insurer_payment', 'provider_discount', 'financial_assistance', 'correction'] as const;
+/** Account roles as shown to people. The stored value `operator` is the standard (non-administrator) role. */
+export const roleLabel = (role: string) => (role === 'admin' ? 'Admin' : 'Standard');
 export const label = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 /** Shown when a select list was cut at the page limit, so the person knows to search instead of assuming the list is complete. */
 export const Truncated = ({ what }: { what: string }) => <p className="muted" role="note">Only the first 100 {what} are listed. Use the search below to narrow the list. The current choice is always kept.</p>;
 
 /** A GET search that narrows select lists without touching the saved record. Values are plain text and bounded. */
-export function NarrowForm({ fields, values }: { fields: Array<{ name: string; label: string }>; values: Record<string, string> }) {
-  return <form method="get" className="card row" role="search" aria-label="Narrow the lists">
+export function NarrowForm({ fields, values, inDialog }: { fields: Array<{ name: string; label: string }>; values: Record<string, string>; /** Inside the add dialog: no card, and the result reopens the dialog. */ inDialog?: boolean }) {
+  return <form method="get" className={inDialog ? 'row' : 'card row'} role="search" aria-label="Narrow the lists">
+    {inDialog && <input type="hidden" name="add" value="1" />}
     {fields.map((f) => <div key={f.name}><label htmlFor={`n-${f.name}`}>{f.label}</label><input id={`n-${f.name}`} name={f.name} maxLength={80} defaultValue={values[f.name]} /></div>)}
     <div><button type="submit" className="secondary">Search</button></div>
   </form>;
 }
+/** The non-empty values of the named query parameters, for links and forms that must keep the current filters. */
+export const pick = (values: Record<string, string>, keys: string[]): Record<string, string> => Object.fromEntries(keys.filter((k) => values[k]).map((k) => [k, values[k]!]));
 export const q80 = (v: string | undefined) => (v ? v.slice(0, 80) : undefined);
 
 export const PAYMENT_METHODS = ['card', 'bank_transfer', 'check', 'cash', 'portal', 'other'] as const;

@@ -1,10 +1,10 @@
 import { AppError } from './errors.ts';
 
 export type Role = 'admin' | 'operator';
-export type Capability = 'household:read' | 'operators:manage' | 'audit:read' | 'expenses:read' | 'expenses:write' | 'assistant:manage';
+export type Capability = 'household:read' | 'operators:manage' | 'audit:read' | 'expenses:read' | 'expenses:write' | 'assistant:manage' | 'settings:manage';
 
 const CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
-  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read', 'expenses:read', 'expenses:write', 'assistant:manage']),
+  admin: new Set<Capability>(['household:read', 'operators:manage', 'audit:read', 'expenses:read', 'expenses:write', 'assistant:manage', 'settings:manage']),
   operator: new Set<Capability>(['household:read', 'expenses:read', 'expenses:write']),
 };
 
@@ -15,6 +15,8 @@ export interface Actor {
   role: Role;
   displayName: string;
   sessionId: string;
+  /** True until the person replaces an administrator-issued temporary password. Such an actor may only change the password or sign out. */
+  mustChangePassword: boolean;
 }
 
 export function can(actor: Actor, capability: Capability): boolean {

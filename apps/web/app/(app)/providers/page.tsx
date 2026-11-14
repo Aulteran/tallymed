@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { listProviders } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, Empty, flat, label, flatWithFlash, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { AddDialog } from '../../components/AddDialog.tsx';
+import { Banner, Csrf, Empty, label, flatWithFlash, load, Pager, pick, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Providers · TallyMed' };
@@ -10,9 +11,23 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
   const { ctx, actor, csrf } = await requireSession();
   const params = await flatWithFlash(searchParams, '/providers');
   const { data, invalid } = await load(() => listProviders(ctx.pool, actor, { q: params.q, archived: params.archived, cursor: params.cursor }), { items: [], nextCursor: null });
+  const keep = pick(params, ['q', 'archived']);
+  const open = !!params.error || params.add === '1';
   return <main id="main">
-    <h1>Providers</h1>
-    <Banner code={params.error} invalid={invalid} />
+    <div className="page-head">
+      <h1>Providers</h1>
+      <AddDialog label="Add provider" open={open} keep={keep}>
+        {params.error && <Banner code={params.error} />}
+        <form method="post" action="/api/expenses/providers/create">
+          <Csrf token={csrf} />
+          <label htmlFor="name">Name</label><input id="name" name="name" required maxLength={120} defaultValue={params.name} />
+          <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={params.kind ?? "clinician"}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select>
+          <label htmlFor="notes">Notes</label><textarea id="notes" name="notes" maxLength={2000} defaultValue={params.notes} />
+          <button type="submit">Add provider</button>
+        </form>
+      </AddDialog>
+    </div>
+    <Banner invalid={invalid} />
     <form method="get" className="card row" role="search">
       <div><label htmlFor="q">Search by name</label><input id="q" name="q" defaultValue={params.q} /></div>
       <div><label className="checkbox"><input type="checkbox" name="archived" value="yes" defaultChecked={params.archived === 'yes'} /> Include archived</label></div>
@@ -26,14 +41,6 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
         <td data-label="Status">{i.archivedAt ? <span className="pill warn">Archived</span> : <span className="pill">Active</span>}</td>
       </tr>)}</tbody>
     </table>}
-    <Pager base="/providers" params={Object.fromEntries(Object.entries({ q: params.q, archived: params.archived }).filter(([, v]) => v) as Array<[string, string]>)} next={data.nextCursor} />
-    <form className="card" method="post" action="/api/expenses/providers/create">
-      <h2>Add provider</h2>
-      <Csrf token={csrf} />
-      <label htmlFor="name">Name</label><input id="name" name="name" required maxLength={120} defaultValue={params.name} />
-      <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={params.kind ?? "clinician"}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select>
-      <label htmlFor="notes">Notes</label><textarea id="notes" name="notes" maxLength={2000} defaultValue={params.notes} />
-      <button type="submit">Add provider</button>
-    </form>
+    <Pager base="/providers" params={keep} next={data.nextCursor} />
   </main>;
 }

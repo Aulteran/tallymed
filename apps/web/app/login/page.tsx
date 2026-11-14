@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { appContext } from '../../server/context.ts';
-import { pageActor } from '../../server/http.ts';
+import { pageSession } from '../../server/http.ts';
 import { isBootstrapped } from '../../server/services/bootstrap.ts';
 import { AuthShell } from '../components/AuthShell.tsx';
 import { errorMessage } from '../components/messages.ts';
@@ -11,7 +11,8 @@ export const metadata = { title: 'Sign in · TallyMed' };
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = appContext();
-  if (await pageActor(ctx, await headers())) redirect('/');
+  const existing = await pageSession(ctx, await headers());
+  if (existing) redirect(existing.actor.mustChangePassword ? '/password/change' : '/');
   const params = await searchParams;
   const ready = await isBootstrapped(ctx.pool);
   const error = errorMessage(params.error);
@@ -30,6 +31,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <label htmlFor="password">Password</label>
         <input id="password" name="password" type="password" autoComplete="current-password" required maxLength={128} />
         <button type="submit">Sign in</button>
+        <p className="muted">Forgot your password?</p>
+        <a className="button secondary" href="/password/forgot">Reset password</a>
       </form>}
   </AuthShell>;
 }

@@ -68,14 +68,14 @@ export async function AttachmentsPanel({ ctx, actor, csrf, type, id, returnTo, q
         <button type="submit">Attach document</button>
       </form>
       <UploadForm csrf={csrf} returnTo={returnTo} target={{ type, id }} idPrefix={field} />
-    </> : <p className="muted" role="note">Document storage is not configured, so documents cannot be uploaded or opened. See the operator guide.</p>}
+    </> : <p className="muted" role="note">Document storage is not configured, so documents cannot be uploaded or opened. See the operations guide.</p>}
   </div>;
 }
 
-export function UploadForm({ csrf, returnTo, target, idPrefix = 'u', max = 10, level = 3 }: { csrf: string; returnTo?: string; target?: { type: string; id: string }; idPrefix?: string; max?: number; level?: 2 | 3 }) {
-  const Heading = level === 2 ? 'h2' : 'h3';
+/** `heading={false}` leaves the heading out for a form shown inside a dialog that already has a title. */
+export function UploadForm({ csrf, returnTo, target, idPrefix = 'u', max = 10, heading = true }: { csrf: string; returnTo?: string; target?: { type: string; id: string }; idPrefix?: string; max?: number; heading?: boolean }) {
   return <form method="post" action="/api/documents/upload" encType="multipart/form-data">
-    <Heading>Upload a new document{target ? ' and attach it here' : ''}</Heading>
+    {heading && <h3>Upload a new document{target ? ' and attach it here' : ''}</h3>}
     <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
     {target && <><input type="hidden" name="targetType" value={target.type} /><input type="hidden" name="targetId" value={target.id} /></>}
     {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}

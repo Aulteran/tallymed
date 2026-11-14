@@ -10,11 +10,19 @@ export type ErrorCode =
   | 'bootstrap_closed'
   | 'invalid_setup_token'
   | 'rate_limited'
+  | 'password_change_required'
+  | 'temporary_password_expired'
+  | 'self_reset_blocked'
+  | 'reset_not_allowed'
   | 'payload_too_large'
   | 'unsupported_media_type'
   | 'duplicate_document'
   | 'storage_unavailable'
   | 'busy'
+  | 'reauth_failed'
+  | 'secrets_key_missing'
+  | 'confirmation_required'
+  | 'email_not_configured'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -29,11 +37,19 @@ const STATUS: Record<ErrorCode, number> = {
   bootstrap_closed: 409,
   invalid_setup_token: 403,
   rate_limited: 429,
+  password_change_required: 403,
+  temporary_password_expired: 401,
+  self_reset_blocked: 403,
+  reset_not_allowed: 409,
   payload_too_large: 413,
   unsupported_media_type: 415,
   duplicate_document: 409,
   storage_unavailable: 503,
   busy: 429,
+  reauth_failed: 403,
+  secrets_key_missing: 409,
+  confirmation_required: 400,
+  email_not_configured: 409,
   internal: 500,
 };
 

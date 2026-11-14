@@ -669,16 +669,16 @@ test('upgrade over payment data from the prior schema: existing allocations star
     await migrate(db.pool, { upTo: '0005' });
     const config = testConfig({}, db.url);
     const ctx = { config, pool: db.pool };
-    await seedHousehold(db.pool);
-    const { cookie } = await loginJson(handlers, ctx, 'admin@example.test');
-    const actor = await authenticate(db.pool, config, cookie.split('=')[1]);
+    const { householdId, adminUserId } = await seedHousehold(db.pool);
+    // Sign-in reads columns that a later migration adds, so the actor is built directly while the schema is still the old one.
+    const actor = { userId: adminUserId, householdId, role: 'admin', displayName: 'Alex Example', sessionId: randomUUID(), mustChangePassword: false };
     const m = (await svc.createMember(db.pool, actor, { name: 'Pat Example' }, 'r')).id;
     const p = (await svc.createProvider(db.pool, actor, { name: 'Example Clinic', kind: 'clinician' }, 'r')).id;
     const b = await svc.createBill(db.pool, actor, { idempotencyKey: randomUUID(), memberId: m, providerId: p, statementDate: '2026-01-05', originalAmount: '120.00', amountStatus: 'confirmed', amountSource: 'statement' }, 'r');
     const pm = await pay.recordPayment(db.pool, actor, { idempotencyKey: randomUUID(), paidOn: '2026-04-01', amount: '75.00', method: 'card', billId: b.id }, 'r');
     const refundable = (await pay.getPaymentDetail(db.pool, actor, pm.id)).allocations[0];
     await pay.recordRefund(db.pool, actor, { idempotencyKey: randomUUID(), paymentId: pm.id, allocationId: refundable.allocationId, amount: '15.00', effectiveDate: '2026-05-01', reason: 'Provider refund' }, 'r');
-    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008']);
+    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011']);
     const a = await hsaRepo.getAllocation(db.pool, actor.householdId, refundable.allocationId);
     assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '0', '0', '0', '0', '0']);
     await hsa.recordDecision(db.pool, actor, { idempotencyKey: randomUUID(), allocationId: a.allocationId, version: '0', status: 'eligible', eligibleAmount: '60.00', rationale: 'Qualified', evidenceType: 'eob', evidenceNote: 'EOB', decidedOn: '2026-05-02' }, 'r');

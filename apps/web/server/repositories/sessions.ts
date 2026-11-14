@@ -15,7 +15,7 @@ export async function insertSession(
 export async function findActiveSession(db: Queryable, tokenHash: Buffer, idleSeconds: number): Promise<(Actor & { lastSeenAt: Date }) | null> {
   const r = await db.query<Actor & { lastSeenAt: Date }>(
     `select s.id as "sessionId", u.id as "userId", s.household_id as "householdId", u.role,
-            u.display_name as "displayName", s.last_seen_at as "lastSeenAt"
+            u.display_name as "displayName", u.must_change_password as "mustChangePassword", s.last_seen_at as "lastSeenAt"
        from sessions s join users u on u.id = s.user_id
       where s.token_hash = $1 and s.revoked_at is null and s.expires_at > now()
         and s.last_seen_at > now() - make_interval(secs => $2) and u.status = 'active'`,

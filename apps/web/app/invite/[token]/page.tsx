@@ -2,7 +2,7 @@ import { AuthShell } from '../../components/AuthShell.tsx';
 import { errorMessage } from '../../components/messages.ts';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Accept invitation · TallyMed', referrer: 'no-referrer' };
+export const metadata = { title: 'Accept invitation · TallyMed', referrer: 'strict-origin' };
 
 export default async function InvitePage({ params, searchParams }: {
   params: Promise<{ token: string }>; searchParams: Promise<Record<string, string | string[] | undefined>>;

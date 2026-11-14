@@ -3,8 +3,9 @@ import { formatCents } from '../../../server/money.ts';
 import { pickParties } from '../../../server/services/expenses.ts';
 import { pickPayableBills } from '../../../server/services/payments.ts';
 import { listInstallmentQueue, listPlans } from '../../../server/services/plans.ts';
+import { AddDialog } from '../../components/AddDialog.tsx';
 import {
-  Banner, CADENCES, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
+  Banner, CADENCES, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, pick, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -20,9 +21,34 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
   const filters = Object.fromEntries(['q', 'status', 'providerId'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listPlans(ctx.pool, actor, { ...filters, cursor: p.cursor }, asOf), { items: [], nextCursor: null });
   const queue = await load(() => listInstallmentQueue(ctx.pool, actor, { state: p.state, asOf, limit: 25 }), { items: [], nextCursor: null });
+  const open = !!p.error || p.add === '1';
   return <main id="main" className="wide">
-    <h1>Payment Plans</h1>
-    <Banner code={p.error} invalid={invalid} />
+    <div className="page-head">
+      <h1>Payment Plans</h1>
+      <AddDialog label="Create plan" title="Create a payment plan" open={open} keep={pick(p, ['q', 'status', 'providerId', 'state', 'billId', 'providerQ', 'billQ'])}>
+        {p.error && <Banner code={p.error} />}
+        {(providers.truncated || bills.truncated || p.providerQ || p.billQ) && <>
+          {providers.truncated && <Truncated what="providers" />}{bills.truncated && <Truncated what="bills" />}
+          <NarrowForm inDialog fields={[{ name: 'providerQ', label: 'Find a provider' }, { name: 'billQ', label: 'Find a bill' }]} values={p} />
+        </>}
+        <form method="post" action="/api/expenses/plans/create">
+          <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
+          <p className="muted">A plan is an obligation: its installments schedule amounts to pay, and creating one moves no cash. Record the actual payments on the Payments page, then match them to installments.</p>
+          <label htmlFor="name">Plan name</label><input id="name" name="name" required maxLength={120} defaultValue={p.name} />
+          <label htmlFor="providerId">Provider</label><select id="providerId" name="providerId" required defaultValue={p.providerId ?? ''}><Options items={providers.items.map((x) => ({ id: x.id, name: x.name }))} blank="Choose…" /></select>
+          <label htmlFor="billId">Bill covered by the plan</label>
+          <select id="billId" name="billId" required defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Choose…" /></select>
+          <p className="muted">The bill must be from the chosen provider and have confirmed amounts.</p>
+          <label htmlFor="totalAmount">Total to pay (USD)</label><input id="totalAmount" name="totalAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.totalAmount} />
+          <label htmlFor="installmentCount">Number of installments</label><input id="installmentCount" name="installmentCount" type="number" min={1} max={120} required defaultValue={p.installmentCount} />
+          <label htmlFor="firstDueDate">First due date</label><input id="firstDueDate" name="firstDueDate" type="date" required defaultValue={p.firstDueDate} />
+          <label htmlFor="cadence">Cadence</label><select id="cadence" name="cadence" defaultValue={p.cadence ?? 'monthly'}>{CADENCES.map((c) => <option key={c} value={c}>{label(c)}</option>)}</select>
+          <button type="submit">Create plan</button>
+          <p className="muted">Installments split the total exactly; any extra cents go to the earliest installments.</p>
+        </form>
+      </AddDialog>
+    </div>
+    <Banner invalid={invalid} />
     <div className="card"><h2>Installments due</h2>
       <p className="tabs"><Link href="/plans?state=overdue">Overdue</Link><Link href="/plans?state=upcoming">Upcoming</Link><Link href="/plans">All unpaid</Link></p>
       {queue.data.items.length === 0 ? <p>Nothing is due in this view.</p> : <table className="stack">
@@ -50,24 +76,5 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
       </tr>)}</tbody>
     </table>}
     <Pager base="/plans" params={filters} next={data.nextCursor} />
-    {(providers.truncated || bills.truncated || p.providerQ || p.billQ) && <>
-      {providers.truncated && <Truncated what="providers" />}{bills.truncated && <Truncated what="bills" />}
-      <NarrowForm fields={[{ name: 'providerQ', label: 'Find a provider' }, { name: 'billQ', label: 'Find a bill' }]} values={p} />
-    </>}
-    <form className="card" method="post" action="/api/expenses/plans/create">
-      <h2>Create a payment plan</h2><Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
-      <p className="muted">A plan is an obligation: its installments schedule amounts to pay, and creating one moves no cash. Record the actual payments on the Payments page, then match them to installments.</p>
-      <label htmlFor="name">Plan name</label><input id="name" name="name" required maxLength={120} defaultValue={p.name} />
-      <label htmlFor="providerId">Provider</label><select id="providerId" name="providerId" required defaultValue={p.providerId ?? ''}><Options items={providers.items.map((x) => ({ id: x.id, name: x.name }))} blank="Choose…" /></select>
-      <label htmlFor="billId">Bill covered by the plan</label>
-      <select id="billId" name="billId" required defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Choose…" /></select>
-      <p className="muted">The bill must be from the chosen provider and have confirmed amounts.</p>
-      <label htmlFor="totalAmount">Total to pay (USD)</label><input id="totalAmount" name="totalAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.totalAmount} />
-      <label htmlFor="installmentCount">Number of installments</label><input id="installmentCount" name="installmentCount" type="number" min={1} max={120} required defaultValue={p.installmentCount} />
-      <label htmlFor="firstDueDate">First due date</label><input id="firstDueDate" name="firstDueDate" type="date" required defaultValue={p.firstDueDate} />
-      <label htmlFor="cadence">Cadence</label><select id="cadence" name="cadence" defaultValue={p.cadence ?? 'monthly'}>{CADENCES.map((c) => <option key={c} value={c}>{label(c)}</option>)}</select>
-      <button type="submit">Create plan</button>
-      <p className="muted">Installments split the total exactly; any extra cents go to the earliest installments.</p>
-    </form>
   </main>;
 }

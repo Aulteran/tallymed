@@ -25,6 +25,10 @@ services:
       TALLYMED_CANONICAL_ORIGIN: ${TALLYMED_CANONICAL_ORIGIN:-http://127.0.0.1:3001}
       TALLYMED_PROXY_SECRET: ${TALLYMED_PROXY_SECRET:-}
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
+      # Optional: addresses or CIDR ranges of your reverse proxy (also editable by an administrator in Settings > Reverse proxy).
+      TALLYMED_TRUSTED_PROXIES: ${TALLYMED_TRUSTED_PROXIES:-}
+      # Optional: key that encrypts the SMTP password stored by Settings > Email. `openssl rand -base64 32`; keep a copy in a password manager, apart from your backups.
+      TALLYMED_SECRETS_KEY: ${TALLYMED_SECRETS_KEY:-}
       # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
       TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
       # Private document volume (outside the web root). Backed up together with PostgreSQL.

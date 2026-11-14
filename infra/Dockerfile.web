@@ -8,8 +8,11 @@ COPY packages/brand/package.json packages/brand/
 RUN npm ci
 COPY apps/web apps/web
 COPY packages/brand packages/brand
+COPY scripts/generate-third-party-licenses.mjs scripts/
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build -w @tallymed/web
+# Licence texts of the production dependencies; the standalone output drops the packages' own LICENSE files.
+RUN node scripts/generate-third-party-licenses.mjs @tallymed/web > /repo/THIRD-PARTY-LICENSES.txt
 
 FROM node:24-bookworm-slim
 WORKDIR /app
@@ -20,6 +23,9 @@ COPY --from=build --chown=node:node /repo/apps/web/.next/static ./apps/web/.next
 COPY --from=build --chown=node:node /repo/apps/web/cli ./apps/web/cli
 COPY --from=build --chown=node:node /repo/apps/web/server ./apps/web/server
 COPY --from=build --chown=node:node /repo/apps/web/db ./apps/web/db
+# AGPL-3.0 licence, project notices and the dependency licence texts travel with the image.
+COPY --chown=node:node LICENSE THIRD-PARTY-NOTICES.md /app/licenses/
+COPY --from=build --chown=node:node /repo/THIRD-PARTY-LICENSES.txt /app/licenses/
 # The document volume mount point is created owned by the runtime user, mode 0700, so a new named volume is writable and private.
 RUN mkdir -p /var/lib/tallymed/documents && chown node:node /var/lib/tallymed/documents && chmod 700 /var/lib/tallymed/documents
 USER node

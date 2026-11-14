@@ -37,6 +37,13 @@ jobs:
       - run: npm run test:export
       - name: Verify HTTPS proxy and network boundary (disposable PostgreSQL)
         run: npm run test:proxy
+      - name: Verify backup and restore reconciliation with a PostgreSQL 17 client (disposable PostgreSQL)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          PATH=/usr/lib/postgresql/17/bin:$PATH npm run test:restore
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: npm run test:performance
