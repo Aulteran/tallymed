@@ -43,7 +43,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
       <Link href={link('available')}><div className="card accent"><span>Available</span><strong><Money cents={t.availableCents} /></strong><span className="muted">Eligible less pending and received</span></div></Link>
       <Link href={link('pending')}><div className="card"><span>Pending</span><strong><Money cents={t.pendingCents} /></strong><span className="muted">Reserved by claims not yet paid</span></div></Link>
       <Link href={link('received')}><div className="card"><span>Received</span><strong><Money cents={t.receivedCents} /></strong><span className="muted">Reimbursements, less reversals</span></div></Link>
-      <Link href={link('needs_review')}><div className={BigInt(t.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>Needs review</span><strong><Money cents={t.needsReviewCents} /></strong><span className="muted">{t.needsReviewCount} payments above their ceiling</span></div></Link>
+      <Link href={link('needs_review')}><div className={BigInt(t.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>Needs review</span><strong><Money cents={t.needsReviewCents} /></strong><span className="muted">{t.needsReviewCount} {Number(t.needsReviewCount) === 1 ? 'payment above its ceiling' : 'payments above their ceiling'}</span></div></Link>
       <Link href={link('undecided')}><div className="card"><span>Not decided yet</span><strong>{t.undecidedCount}</strong><span className="muted">Payments with no eligibility decision</span></div></Link>
     </section>}
     {list.data.items.length === 0 ? <Empty>No payments match. Record a payment and apply it to a bill first, then decide its eligibility here.</Empty> : <table className="stack">

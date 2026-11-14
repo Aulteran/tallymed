@@ -43,7 +43,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <h2 className="section-title" id="sec-resp">Household responsibility</h2>
       <section className="metrics" aria-labelledby="sec-resp">
         <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Confirmed responsibility</span><strong><Money cents={t.confirmedResponsibilityCents} /></strong><span className="muted">{t.confirmedCount} bills, after adjustments</span></div></Link>
-        <Link href={filter({ status: 'estimate' })}><div className="card"><span>Estimated, not confirmed</span><strong><Money cents={t.estimatedResponsibilityCents} /></strong><span className="muted">{t.estimateCount} estimates, kept separate</span></div></Link>
+        <Link href={filter({ status: 'estimate' })}><div className="card"><span>Estimated, not confirmed</span><strong><Money cents={t.estimatedResponsibilityCents} /></strong><span className="muted">{t.estimateCount} {Number(t.estimateCount) === 1 ? 'estimate' : 'estimates'}, kept separate</span></div></Link>
         <Link href={filter({ status: 'confirmed' })}><div className="card accent"><span>Confirmed open balance</span><strong><Money cents={t.confirmedOpenBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div></Link>
         {BigInt(t.confirmedCreditCents) > 0n && <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Provider credits</span><strong><Money cents={t.confirmedCreditCents} /></strong><span className="muted">Payments applied above responsibility</span></div></Link>}
         <Link href="/payments?unapplied=yes"><div className="card"><span>Unapplied cash</span><strong><Money cents={cash.unappliedCents} /></strong><span className="muted">Paid but not applied to a bill (all family)</span></div></Link>
@@ -56,7 +56,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <Link href={hsaLink('available')}><div className="card accent"><span>HSA available</span><strong><Money cents={hsaTotals.availableCents} /></strong><span className="muted">Eligible and not yet claimed (statement dates do not filter this)</span></div></Link>
         <Link href={hsaLink('pending')}><div className="card"><span>HSA pending</span><strong><Money cents={hsaTotals.pendingCents} /></strong><span className="muted">Reserved by open claims</span></div></Link>
         <Link href={hsaLink('received')}><div className="card"><span>HSA received</span><strong><Money cents={hsaTotals.receivedCents} /></strong><span className="muted">Not household cash; provider balances unchanged</span></div></Link>
-        <Link href={hsaLink('needs_review')}><div className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>HSA needs review</span><strong><Money cents={hsaTotals.needsReviewCents} /></strong><span className="muted">{hsaTotals.needsReviewCount} payments above their ceiling</span></div></Link>
+        <Link href={hsaLink('needs_review')}><div className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>HSA needs review</span><strong><Money cents={hsaTotals.needsReviewCents} /></strong><span className="muted">{hsaTotals.needsReviewCount} {Number(hsaTotals.needsReviewCount) === 1 ? 'payment above its ceiling' : 'payments above their ceiling'}</span></div></Link>
       </section>
       <h2 className="section-title">Needs attention</h2>
       <div className="grid-2">

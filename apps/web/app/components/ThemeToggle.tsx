@@ -18,12 +18,13 @@ export function ThemeToggle({ initial }: { initial: Theme }) {
     const next = NEXT[theme];
     setTheme(next);
     const root = document.documentElement;
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
     if (next === 'system') {
       delete root.dataset.theme;
-      document.cookie = `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`;
+      document.cookie = `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
     } else {
       root.dataset.theme = next;
-      document.cookie = `${THEME_COOKIE}=${next}; Path=/; Max-Age=31536000; SameSite=Lax`;
+      document.cookie = `${THEME_COOKIE}=${next}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
     }
   };
   return <button type="button" className="theme-toggle" onClick={choose} aria-label={`Theme: ${LABEL[theme]}. Change theme`}>
