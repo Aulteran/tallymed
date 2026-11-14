@@ -20,7 +20,7 @@ import { hashPassword } from '../passwords.ts';
 import { SlidingWindowLimiter } from '../rate-limit.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import {
-  countRequests, emailResetHistory, insertReset, lockRequestKeys, recordRequest, supersedeOpenEmailResets, supersedePending,
+  countRequests, emailResetHistory, findPending, insertReset, lockRequestKeys, recordRequest, supersedeOpenEmailResets, supersedePending,
 } from '../repositories/password-resets.ts';
 import { findUserByEmail, findUserInHousehold } from '../repositories/users.ts';
 import { refreshRuntimeConfig } from '../settings.ts';
@@ -61,6 +61,8 @@ function emailText(displayName: string, temporaryPassword: string, minutes: numb
     '',
     `It works once and expires in ${minutes} minutes. Sign in with it at the usual TallyMed sign-in page and you will be asked to choose a new password.`,
     '',
+    'If you asked more than once, use the newest message: a newer request cancels an older temporary password.',
+    '',
     'If you did not ask for this, ignore this message. Nothing has changed: your current password still works, and the temporary password',
     'above is cancelled the next time you sign in with your current password. Tell an administrator if these emails keep arriving.',
     '',
@@ -78,7 +80,8 @@ export async function requestPasswordReset(
   await refreshRuntimeConfig(config, pool);
   if (!(await isEmailConfigured(pool, config))) throw new AppError('email_not_configured');
   const emailHash = requestKey(input.email);
-  const ipKey = input.ip ?? 'untrusted';
+  // Stored and locked as a digest, like the address, so the request table holds no client address in the clear.
+  const ipKey = digest(`forgot-ip:${input.ip ?? 'untrusted'}`).toString('hex');
   const ipLimit = input.ip ? IP_REQUESTS_PER_HOUR : UNTRUSTED_REQUESTS_PER_HOUR;
 
   // Count and record under per-address and per-client locks. Limited requests are not recorded, so the window cannot be extended
@@ -112,8 +115,12 @@ export async function requestPasswordReset(
     // Re-read under the row lock: concurrent requests for one account serialize here, so the gap and daily cap cannot be raced.
     const locked = await findUserInHousehold(tx, user.householdId, user.id, true);
     if (!locked || locked.status !== 'active') return { skip: 'inactive' as const };
-    // An administrator-issued credential, or one already used and awaiting a new password, is never replaced by a stranger's request.
-    if (locked.mustChangePassword) return { skip: 'change_pending' as const };
+    // A live administrator-issued credential, or one already used and still awaiting a new password, is never replaced by a stranger's
+    // request. Once it has expired, though, the person is locked out of both passwords, so a new emailed credential is the way back.
+    if (locked.mustChangePassword) {
+      const pending = await findPending(tx, locked.id, true);
+      if (!pending || !pending.expired) return { skip: 'change_pending' as const };
+    }
     const history = await emailResetHistory(tx, locked.id);
     if (history.lastDay >= ACCOUNT_SENDS_PER_DAY || (history.sinceNewestSeconds !== null && history.sinceNewestSeconds < ACCOUNT_MIN_GAP_SECONDS)) {
       if (history.lastDay >= ACCOUNT_SENDS_PER_DAY) await recordAuditOnce(tx, locked, input.requestId, 'account');

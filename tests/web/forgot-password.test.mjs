@@ -321,3 +321,47 @@ test('the endpoint is origin protected, JSON and form capable, and needs no sess
     assert.equal((await t.q('select count(*)::int n from password_reset_requests'))[0].n, 1, 'forged-origin and malformed requests are not counted');
   } finally { await t.close(); }
 });
+
+test('an abandoned emailed reset can be recovered from: once it expires a new request issues a new credential', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    await t.forgot(SAM);
+    await until(() => t.server.mail.length === 1);
+    const first = t.server.mail[0].data.match(TEMP)[0];
+    const restricted = await t.login(SAM, first);
+    assert.equal(restricted.data.passwordChangeRequired, true);
+    // While the used credential is still live a request changes nothing, even after the gap (nobody can displace it).
+    await t.q(`update password_resets set created_at = now() - interval '11 minutes'`);
+    await t.q('delete from password_reset_requests');
+    await t.forgot(SAM);
+    await sleep(300);
+    assert.equal(t.server.mail.length, 1);
+    // The person walks away: the session ends and the credential expires. Both the old password and the first temporary one are dead.
+    await t.q(`update sessions set revoked_at = now() where revoked_at is null`);
+    await t.q(`update password_resets set expires_at = now() - interval '1 second', created_at = now() - interval '2 hours'`);
+    await t.q('delete from password_reset_requests');
+    assert.equal((await t.login(SAM, SAM_PASSWORD)).res.status, 401);
+    assert.equal(await code((await t.login(SAM, first)).res), 'temporary_password_expired');
+    // A new request now issues a new credential, and it works.
+    assert.equal((await t.forgot(SAM)).status, 200);
+    await until(() => t.server.mail.length === 2);
+    const second = t.server.mail[1].data.match(TEMP)[0];
+    assert.notEqual(second, first);
+    const again = await t.login(SAM, second);
+    assert.equal(again.data.passwordChangeRequired, true);
+    const change = await handlers.handleChangePassword(post('/api/auth/change-password', { newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD, page: 'required' }, { type: 'json', cookie: again.cookie, headers: { 'x-csrf-token': again.csrf } }), t.ctx);
+    assert.equal(change.status, 200);
+    assert.equal((await t.login(SAM, NEW_PASSWORD)).res.status, 200);
+  } finally { await t.close(); }
+});
+
+test('the request table holds no client address in the clear', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    await t.forgot(SAM, { headers: { 'x-tallymed-proxy-secret': PROXY_SECRET, 'x-forwarded-for': '203.0.113.50', 'x-forwarded-proto': 'https' } });
+    await t.forgot('ghost@example.test');
+    const rows = await t.q('select client_ip from password_reset_requests');
+    assert.ok(rows.every((r) => /^[0-9a-f]{64}$/.test(r.client_ip)), JSON.stringify(rows));
+    assert.ok(!JSON.stringify(rows).includes('203.0.113.50'));
+  } finally { await t.close(); }
+});

@@ -53,8 +53,9 @@ export async function login(
   const ok = await verifyPassword(user?.passwordHash ?? null, input.password);
   // An emailed temporary password (forgot-password) is held beside the account's real password, which keeps working until it is used.
   // The second verification runs for every attempt, so timing does not reveal whether a reset is pending.
-  const emailReset = user ? await findOpenEmailReset(pool, user.id) : null;
-  const emailOk = await verifyPassword(emailReset?.secretHash ?? null, input.password);
+  // The second check runs for every failed attempt (known or not), so timing does not reveal a pending reset; a correct password skips it.
+  const emailReset = !ok && user ? await findOpenEmailReset(pool, user.id) : null;
+  const emailOk = ok ? false : await verifyPassword(emailReset?.secretHash ?? null, input.password);
   const viaEmail = !ok && emailOk && emailReset && !emailReset.expired ? emailReset : null;
   if (!user || (!ok && !viaEmail) || user.status !== 'active') {
     // Audit is append-only, so failed-login rows are bounded: only for existing accounts, and only the first
@@ -84,9 +85,10 @@ export async function login(
     if (!current || current.status !== 'active' || current.passwordHash !== user.passwordHash) return 'stale' as const;
     let resetId: string | null = null;
     if (viaEmail) {
-      // First use of an emailed credential: it must still be the open one, and the account must not have entered another reset state.
+      // First use of an emailed credential: it must still be the open one. A newer administrator reset supersedes it, so an open row proves nothing newer exists. The account may still be flagged
+      // from an abandoned earlier reset: that is exactly the case this credential recovers from.
       const open = await findOpenEmailReset(tx, current.id, true);
-      if (current.mustChangePassword || !open || open.id !== viaEmail.id || open.secretHash !== viaEmail.secretHash || open.expired) return 'expired' as const;
+      if (!open || open.id !== viaEmail.id || open.secretHash !== viaEmail.secretHash || open.expired) return 'expired' as const;
       if (!(await markUsed(tx, open.id))) return 'expired' as const;
       // Only now does the credential replace the password, with the same restricted state as an administrator reset. Every other
       // session is signed out: whoever holds the mailbox owns the account's recovery, and a lingering session must not outlive it.
