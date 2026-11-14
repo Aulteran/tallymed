@@ -526,10 +526,11 @@ const MONEY_ACTIONS: Record<string, {
   'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
-  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'billId', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
+  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
+  'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },
   'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },
 };
 
