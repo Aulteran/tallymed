@@ -10,7 +10,7 @@ import {
 } from '../repositories/invitations.ts';
 import { revokeUserSessions } from '../repositories/sessions.ts';
 import {
-  countActiveAdmins, findUserByEmail, findUserInHousehold, insertUser, listUsers, updateUserRoleStatus,
+  countUsableAdminsExcluding, findUserByEmail, findUserInHousehold, insertUser, listUsers, updateUserRoleStatus,
 } from '../repositories/users.ts';
 import { listPending } from '../repositories/password-resets.ts';
 import { digest, newToken } from '../tokens.ts';
@@ -124,7 +124,8 @@ export async function updateOperator(pool: Pool, actor: Actor, input: unknown, r
     const changed = target.role !== data.role || target.status !== data.status;
     if (!changed) return;
     const losesAdmin = target.role === 'admin' && target.status === 'active' && !(data.role === 'admin' && data.status === 'active');
-    if (losesAdmin && (await countActiveAdmins(tx, actor.householdId)) <= 1) {
+    // Count only administrators who can actually sign in: an account waiting to change a temporary password does not count.
+    if (losesAdmin && (await countUsableAdminsExcluding(tx, actor.householdId, target.id)) < 1) {
       throw new AppError('conflict', 'The household must keep at least one active administrator');
     }
     if (!(await updateUserRoleStatus(tx, actor.householdId, target.id, data.version, data.role as Role, data.status))) {

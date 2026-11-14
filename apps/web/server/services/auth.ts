@@ -77,10 +77,20 @@ export async function login(
     if (!current || current.status !== 'active' || current.passwordHash !== user.passwordHash) return 'stale' as const;
     let resetId: string | null = null;
     if (current.mustChangePassword) {
-      // Single use: the first successful sign-in with a temporary password consumes it. Expired, replaced or
-      // already-used credentials are refused even though the password itself matched.
+      // The first successful sign-in with a temporary password consumes it. Expired or replaced credentials are refused even though
+      // the password matched; a used one is refused while a session of the account is live (see below).
       const pending = await findPending(tx, current.id, true);
-      if (!pending || pending.status !== 'open' || pending.expired || !(await markUsed(tx, pending.id))) return 'expired' as const;
+      if (!pending || pending.expired) return 'expired' as const;
+      if (pending.status === 'open') {
+        if (!(await markUsed(tx, pending.id))) return 'expired' as const;
+      } else {
+        // Already used to sign in but no new password chosen yet (the restricted session lapsed or was lost). It may be used again
+        // within its own expiry, but only while no session of the account is live, so a leaked copy cannot join a session in progress.
+        // The user row lock held here serializes concurrent attempts.
+        const live = await tx.query(
+          'select 1 from sessions where user_id = $1 and revoked_at is null and expires_at > now() limit 1', [current.id]);
+        if (live.rowCount) return 'expired' as const;
+      }
       resetId = pending.id;
     }
     if (input.previousToken) {

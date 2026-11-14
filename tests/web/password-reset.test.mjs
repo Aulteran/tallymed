@@ -446,3 +446,55 @@ test('migration 0009 upgrades existing accounts: nobody is forced to change a pa
     await db.drop();
   }
 });
+
+test('an administrator waiting on a temporary password does not count as a usable administrator (B1)', { skip: skipDb }, async () => {
+  const { db, admin, add, login, reset, api, userId } = await setup();
+  try {
+    await add('boss@example.test', 'admin');
+    const bossId = await userId('boss@example.test');
+    const adminId = await userId('admin@example.test');
+    assert.equal((await reset(admin, 'boss@example.test')).status, 201);
+    const update = async (id, role, status) => api(handlers.handleUpdateOperator, '/api/operators/update', {
+      userId: id, version: (await db.pool.query('select version from users where id = $1', [id])).rows[0].version, role, status }, admin);
+    // The only usable administrator cannot demote or disable themselves while the other administrator has not chosen a password.
+    assert.equal(await code(await update(adminId, 'operator', 'active')), 'conflict');
+    assert.equal(await code(await update(adminId, 'admin', 'disabled')), 'conflict');
+    assert.equal((await db.pool.query(`select role, status from users where id = $1`, [adminId])).rows[0].role, 'admin');
+    // Once the other administrator has chosen a password the same change is allowed.
+    const t = await (await reset(admin, 'boss@example.test')).json();
+    const b = await login('boss@example.test', t.temporaryPassword);
+    const ok = await api(handlers.handleChangePassword, '/api/auth/change-password', { newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD }, b);
+    assert.equal(ok.status, 200);
+    assert.equal((await update(adminId, 'operator', 'active')).status, 200);
+    void bossId;
+  } finally {
+    await db.drop();
+  }
+});
+
+test('a used temporary password can be used again only after its restricted session is gone, and never past its expiry', { skip: skipDb }, async () => {
+  const { db, admin, add, login, reset } = await setup();
+  try {
+    await add('sam@example.test');
+    const { temporaryPassword } = await (await reset(admin, 'sam@example.test')).json();
+    const first = await login('sam@example.test', temporaryPassword);
+    assert.equal(first.res.status, 200);
+    // While the restricted session is live the temporary password is refused (a leaked copy cannot join).
+    assert.equal((await login('sam@example.test', temporaryPassword)).data.error.code, 'temporary_password_expired');
+    // The restricted session lapses before a new password is chosen: the person can sign in again within the credential's own expiry.
+    await db.pool.query(`update sessions set expires_at = now() - interval '1 second' where revoked_at is null and user_id = (select id from users where email='sam@example.test')`);
+    const again = await login('sam@example.test', temporaryPassword);
+    assert.equal(again.res.status, 200);
+    assert.equal(again.data.passwordChangeRequired, true);
+    // Racing retries after another lapse still produce one session.
+    await db.pool.query(`update sessions set expires_at = now() - interval '1 second' where revoked_at is null and user_id = (select id from users where email='sam@example.test')`);
+    const race = await Promise.all([1, 2, 3].map(() => login('sam@example.test', temporaryPassword)));
+    assert.equal(race.filter((r) => r.res.status === 200).length, 1);
+    // Past the credential's own expiry it is dead.
+    await db.pool.query(`update sessions set expires_at = now() - interval '1 second' where revoked_at is null`);
+    await db.pool.query(`update password_resets set created_at = now() - interval '2 hours', expires_at = now() - interval '1 minute'`);
+    assert.equal((await login('sam@example.test', temporaryPassword)).data.error.code, 'temporary_password_expired');
+  } finally {
+    await db.drop();
+  }
+});
