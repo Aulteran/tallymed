@@ -31,7 +31,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <label htmlFor="password">Password</label>
         <input id="password" name="password" type="password" autoComplete="current-password" required maxLength={128} />
         <button type="submit">Sign in</button>
-        <p className="muted">Forgot your password? Ask an administrator to reset it. They will give you a temporary password, and you will be asked to choose a new one the first time you sign in with it.</p>
+        <p className="muted">Forgot your password?</p>
+        <a className="button secondary" href="/password/forgot">Reset password</a>
       </form>}
   </AuthShell>;
 }

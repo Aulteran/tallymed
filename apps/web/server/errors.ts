@@ -22,6 +22,7 @@ export type ErrorCode =
   | 'reauth_failed'
   | 'secrets_key_missing'
   | 'confirmation_required'
+  | 'email_not_configured'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -48,6 +49,7 @@ const STATUS: Record<ErrorCode, number> = {
   reauth_failed: 403,
   secrets_key_missing: 409,
   confirmation_required: 400,
+  email_not_configured: 409,
   internal: 500,
 };
 

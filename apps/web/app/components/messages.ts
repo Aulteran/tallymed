@@ -22,6 +22,7 @@ const MESSAGES: Record<string, string> = {
   self_reset_blocked: 'You cannot reset your own password here. Use Password in the menu to change it.',
   reset_not_allowed: 'That account cannot be reset right now. It must be active, and the household must keep an administrator who can sign in.',
   confirmation_required: 'That range is very broad: every machine in it that can reach the app directly could forge client addresses. Tick the confirmation box if you are sure, or list only your proxy\'s own address.',
+  email_not_configured: 'Password reset by email is not set up on this server. Ask an administrator to reset your password.',
   internal: 'Something went wrong. Try again.',
 };
 

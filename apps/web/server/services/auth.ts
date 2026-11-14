@@ -5,10 +5,10 @@ import type { Actor } from '../authz.ts';
 import { verifyPassword } from '../passwords.ts';
 import { log } from '../log.ts';
 import { recordAudit } from '../repositories/audit.ts';
-import { findActiveSession, insertSession, revokeSession, touchSession } from '../repositories/sessions.ts';
+import { findActiveSession, insertSession, revokeSession, revokeUserSessions, touchSession } from '../repositories/sessions.ts';
 import { clearAccountFailures, countRecentFailures, lockThrottleKeys, pruneAttempts, pruneKeys, recordAttempt } from '../repositories/throttle.ts';
-import { findPending, markUsed } from '../repositories/password-resets.ts';
-import { findUserByEmail, findUserInHousehold } from '../repositories/users.ts';
+import { findOpenEmailReset, findPending, markUsed, supersedeOpenEmailResets } from '../repositories/password-resets.ts';
+import { findUserByEmail, findUserInHousehold, setTemporaryPassword } from '../repositories/users.ts';
 import { refreshRuntimeConfig } from '../settings.ts';
 import { digest, emailKey, newToken } from '../tokens.ts';
 
@@ -51,7 +51,12 @@ export async function login(
   if (Math.random() < 0.01) await pruneAttempts(pool, THROTTLE_WINDOW_SECONDS * 4).catch(() => undefined);
   const user = await findUserByEmail(pool, input.email);
   const ok = await verifyPassword(user?.passwordHash ?? null, input.password);
-  if (!user || !ok || user.status !== 'active') {
+  // An emailed temporary password (forgot-password) is held beside the account's real password, which keeps working until it is used.
+  // The second verification runs for every attempt, so timing does not reveal whether a reset is pending.
+  const emailReset = user ? await findOpenEmailReset(pool, user.id) : null;
+  const emailOk = await verifyPassword(emailReset?.secretHash ?? null, input.password);
+  const viaEmail = !ok && emailOk && emailReset && !emailReset.expired ? emailReset : null;
+  if (!user || (!ok && !viaEmail) || user.status !== 'active') {
     // Audit is append-only, so failed-login rows are bounded: only for existing accounts, and only the first
     // failure and the lockout in a window. Unknown addresses are logged without the address instead.
     if (user && accountFailuresBefore === 0) {
@@ -69,7 +74,7 @@ export async function login(
   }
   const token = newToken();
   // A temporary-password session lives only long enough to choose a new password.
-  const lifetimeSeconds = user.mustChangePassword
+  const lifetimeSeconds = user.mustChangePassword || viaEmail
     ? Math.min(config.sessionAbsoluteSeconds, config.passwordChangeSessionSeconds) : config.sessionAbsoluteSeconds;
   const expiresAt = new Date(Date.now() + lifetimeSeconds * 1000);
   const outcome = await withTransaction(pool, async (tx) => {
@@ -78,7 +83,17 @@ export async function login(
     const current = await findUserInHousehold(tx, user.householdId, user.id, true);
     if (!current || current.status !== 'active' || current.passwordHash !== user.passwordHash) return 'stale' as const;
     let resetId: string | null = null;
-    if (current.mustChangePassword) {
+    if (viaEmail) {
+      // First use of an emailed credential: it must still be the open one, and the account must not have entered another reset state.
+      const open = await findOpenEmailReset(tx, current.id, true);
+      if (current.mustChangePassword || !open || open.id !== viaEmail.id || open.secretHash !== viaEmail.secretHash || open.expired) return 'expired' as const;
+      if (!(await markUsed(tx, open.id))) return 'expired' as const;
+      // Only now does the credential replace the password, with the same restricted state as an administrator reset. Every other
+      // session is signed out: whoever holds the mailbox owns the account's recovery, and a lingering session must not outlive it.
+      await setTemporaryPassword(tx, current.id, open.secretHash);
+      await revokeUserSessions(tx, current.id, 'password_reset');
+      resetId = open.id;
+    } else if (current.mustChangePassword) {
       // The first successful sign-in with a temporary password consumes it. Expired or replaced credentials are refused even though
       // the password matched; a used one is refused while a session of the account is live (see below).
       const pending = await findPending(tx, current.id, true);
@@ -98,6 +113,13 @@ export async function login(
     if (input.previousToken) {
       const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds);
       if (prev) await revokeSession(tx, prev.sessionId, 'rotated_at_login');
+    }
+    if (!resetId && !current.mustChangePassword && (await supersedeOpenEmailResets(tx, current.id)) > 0) {
+      // Signing in with the real password cancels a pending emailed credential: it was not needed, and a leaked copy stops working.
+      await recordAudit(tx, {
+        householdId: user.householdId, actorUserId: user.id, action: 'auth.password_reset_cancelled', entityType: 'user', entityId: user.id,
+        requestId: input.requestId, detail: { reason: 'signed_in_with_password' },
+      });
     }
     const sessionId = await insertSession(tx, {
       userId: user.id, householdId: user.householdId, tokenHash: digest(token), expiresAt,
@@ -128,7 +150,7 @@ export async function login(
     throw new AppError('temporary_password_expired');
   }
   return {
-    token, expiresAt, actor: { userId: user.id, householdId: user.householdId, role: user.role }, passwordChangeRequired: user.mustChangePassword,
+    token, expiresAt, actor: { userId: user.id, householdId: user.householdId, role: user.role }, passwordChangeRequired: user.mustChangePassword || !!viaEmail,
   };
 }
 
