@@ -10,10 +10,11 @@ export interface UserRow {
   status: 'active' | 'disabled';
   passwordHash: string;
   version: number;
+  mustChangePassword: boolean;
 }
 
 const COLUMNS = `id, household_id as "householdId", email, display_name as "displayName", role, status,
-  password_hash as "passwordHash", version`;
+  password_hash as "passwordHash", version, must_change_password as "mustChangePassword"`;
 
 export async function findUserByEmail(db: Queryable, email: string): Promise<UserRow | null> {
   const r = await db.query<UserRow>(`select ${COLUMNS} from users where lower(email) = lower($1)`, [email]);
@@ -65,4 +66,31 @@ export async function updateUserRoleStatus(
 
 export async function updatePasswordHash(db: Queryable, id: string, passwordHash: string): Promise<void> {
   await db.query(`update users set password_hash = $2, version = version + 1, updated_at = now() where id = $1`, [id, passwordHash]);
+}
+
+/** Replaces the password with an administrator-issued temporary one that must be changed at the next sign-in. */
+export async function setTemporaryPassword(db: Queryable, id: string, passwordHash: string): Promise<void> {
+  await db.query(
+    `update users set password_hash = $2, must_change_password = true, version = version + 1, updated_at = now() where id = $1`,
+    [id, passwordHash],
+  );
+}
+
+/** Stores a password the person chose themselves and lifts the forced-change restriction. */
+export async function setChosenPassword(db: Queryable, id: string, passwordHash: string): Promise<void> {
+  await db.query(
+    `update users set password_hash = $2, must_change_password = false, password_changed_at = now(), version = version + 1, updated_at = now()
+      where id = $1`,
+    [id, passwordHash],
+  );
+}
+
+/** Active administrators other than `excludeId` who are not themselves waiting to change a temporary password. */
+export async function countUsableAdminsExcluding(db: Queryable, householdId: string, excludeId: string): Promise<number> {
+  const r = await db.query<{ n: string }>(
+    `select count(*) as n from users
+      where household_id = $1 and id <> $2 and role = 'admin' and status = 'active' and not must_change_password`,
+    [householdId, excludeId],
+  );
+  return Number(r.rows[0]!.n);
 }

@@ -10,16 +10,29 @@ import {
 } from '../repositories/invitations.ts';
 import { revokeUserSessions } from '../repositories/sessions.ts';
 import {
-  countActiveAdmins, findUserByEmail, findUserInHousehold, insertUser, listUsers, updateUserRoleStatus,
+  countUsableAdminsExcluding, findUserByEmail, findUserInHousehold, insertUser, listUsers, updateUserRoleStatus,
 } from '../repositories/users.ts';
+import { listPending } from '../repositories/password-resets.ts';
 import { digest, newToken } from '../tokens.ts';
+import { ADMIN_LOCK } from './credentials.ts';
 import { parse, schemas } from '../validation.ts';
 
-const ADMIN_LOCK = 7_203_403;
 
+/** Accounts with their pending temporary-password state (never any secret) for the operator list. */
 export async function listOperators(pool: Pool, actor: Actor) {
   authorize(actor, 'operators:manage');
-  return listUsers(pool, actor.householdId);
+  const [users, pending] = await Promise.all([listUsers(pool, actor.householdId), listPending(pool, actor.householdId)]);
+  const byUser = new Map(pending.map((p) => [p.userId, p]));
+  return users.map((u) => ({ ...u, pendingReset: byUser.get(u.id) ?? null }));
+}
+
+/** One account for the reset confirmation page. A missing account and one in another household look the same. */
+export async function getOperatorForReset(pool: Pool, actor: Actor, id: string) {
+  authorize(actor, 'operators:manage');
+  const u = await findUserInHousehold(pool, actor.householdId, id);
+  if (!u) throw new AppError('not_found');
+  const { passwordHash: _omit, ...rest } = u;
+  return rest;
 }
 
 export async function listInvitations(pool: Pool, actor: Actor) {
@@ -111,7 +124,8 @@ export async function updateOperator(pool: Pool, actor: Actor, input: unknown, r
     const changed = target.role !== data.role || target.status !== data.status;
     if (!changed) return;
     const losesAdmin = target.role === 'admin' && target.status === 'active' && !(data.role === 'admin' && data.status === 'active');
-    if (losesAdmin && (await countActiveAdmins(tx, actor.householdId)) <= 1) {
+    // Count only administrators who can actually sign in: an account waiting to change a temporary password does not count.
+    if (losesAdmin && (await countUsableAdminsExcluding(tx, actor.householdId, target.id)) < 1) {
       throw new AppError('conflict', 'The household must keep at least one active administrator');
     }
     if (!(await updateUserRoleStatus(tx, actor.householdId, target.id, data.version, data.role as Role, data.status))) {

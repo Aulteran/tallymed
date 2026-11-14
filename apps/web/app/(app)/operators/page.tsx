@@ -1,19 +1,15 @@
-import { headers } from 'next/headers';
-import { notFound, redirect } from 'next/navigation';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { can } from '../../../server/authz.ts';
-import { appContext } from '../../../server/context.ts';
-import { pageActor } from '../../../server/http.ts';
 import { listInvitations, listOperators } from '../../../server/services/operators.ts';
 import { errorMessage } from '../../components/messages.ts';
-import { dateOf, label } from '../../components/ui.tsx';
+import { dateOf, label, requireSession } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Operators · TallyMed' };
 
 export default async function OperatorsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const ctx = appContext();
-  const session = await pageActor(ctx, await headers());
-  if (!session) redirect('/login');
+  const { ctx, ...session } = await requireSession();
   if (!can(session.actor, 'operators:manage')) notFound();
   const users = await listOperators(ctx.pool, session.actor);
   const invitations = await listInvitations(ctx.pool, session.actor);
@@ -25,7 +21,7 @@ export default async function OperatorsPage({ searchParams }: { searchParams: Pr
     <div className="card">
       <h2>People with access</h2>
       <table className="stack">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Change</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Change</th><th>Password</th></tr></thead>
         <tbody>{users.map((u) => <tr key={u.id}>
           <td data-label="Name">{u.displayName}</td><td data-label="Email">{u.email}</td><td data-label="Role">{label(u.role)}</td>
           <td data-label="Status"><span className={u.status === 'active' ? 'pill' : 'pill neutral'}>{label(u.status)}</span></td>
@@ -37,6 +33,13 @@ export default async function OperatorsPage({ searchParams }: { searchParams: Pr
             <select name="status" defaultValue={u.status} aria-label={`Status for ${u.displayName}`}><option>active</option><option>disabled</option></select>
             <button type="submit" className="secondary">Save</button>
           </form></td>
+          <td data-label="Password">
+            {u.pendingReset && <p className="muted">{u.pendingReset.state === 'open' ? `Temporary password pending, expires ${dateOf(u.pendingReset.expiresAt)}`
+              : u.pendingReset.state === 'used' ? 'Temporary password used, new password not chosen yet' : 'Temporary password expired'}</p>}
+            {u.id === session.actor.userId ? <span className="muted">Use Password in the menu</span>
+              : u.status === 'active' ? <Link className="button secondary" href={`/operators/${u.id}/reset-password`}>Reset password</Link>
+                : <span className="muted">Enable the account first</span>}
+          </td>
         </tr>)}</tbody>
       </table>
     </div>

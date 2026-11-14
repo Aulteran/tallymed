@@ -10,6 +10,10 @@ export interface AppConfig {
   sessionAbsoluteSeconds: number;
   sessionIdleSeconds: number;
   invitationSeconds: number;
+  /** How long an administrator-issued temporary password can still be used to sign in. */
+  temporaryPasswordSeconds: number;
+  /** Lifetime of the restricted session that a temporary-password sign-in receives, just long enough to choose a new password. */
+  passwordChangeSessionSeconds: number;
   sourceUrl: string | null;
   /** Absolute directory on a private volume for document bytes. Null disables document upload and download. */
   documentsDir: string | null;
@@ -168,6 +172,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionAbsoluteSeconds: intEnv(env, 'TALLYMED_SESSION_ABSOLUTE_SECONDS', 12 * 3600, 60, 30 * 86400),
     sessionIdleSeconds: intEnv(env, 'TALLYMED_SESSION_IDLE_SECONDS', 2 * 3600, 60, 7 * 86400),
     invitationSeconds: intEnv(env, 'TALLYMED_INVITATION_SECONDS', 72 * 3600, 60, 14 * 86400),
+    temporaryPasswordSeconds: intEnv(env, 'TALLYMED_TEMP_PASSWORD_SECONDS', 4 * 3600, 300, 7 * 86400),
+    passwordChangeSessionSeconds: intEnv(env, 'TALLYMED_PASSWORD_CHANGE_SESSION_SECONDS', 15 * 60, 120, 3600),
     sourceUrl: sourceUrl(env.TALLYMED_SOURCE_URL),
     documentsDir: parseDocumentsDir(env.TALLYMED_DOCUMENTS_DIR),
     documentMaxBytes: intEnv(env, 'TALLYMED_DOCUMENT_MAX_MB', 10, 1, 25) * 1024 * 1024,

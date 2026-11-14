@@ -85,6 +85,11 @@ export const schemas = {
     status: z.enum(['active', 'disabled']),
     csrf: z.string().optional(),
   }),
+  resetPassword: z.strictObject({ userId: uuid, version, ...csrf }),
+  changePassword: z.strictObject({
+    currentPassword: z.preprocess((v) => (v === '' ? undefined : v), password.optional()), newPassword: password, confirmPassword: password,
+    page: z.enum(['required', 'account']).optional(), ...csrf,
+  }),
   setup: z.strictObject({ setupToken: z.string().trim().min(1).max(200), householdName: z.string().trim().min(1).max(120), email, displayName, password }),
   bootstrap: z.strictObject({ householdName: z.string().trim().min(1).max(120), email, displayName, password }),
 };

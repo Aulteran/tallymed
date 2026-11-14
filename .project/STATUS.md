@@ -151,3 +151,9 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Not changed: business logic, data handling, authentication, authorization, headers and the public roadmap data.
 - Checks run locally and results: see the PR description.
 - Next: independent review, owner merge. The public site changes only when `dev` is next merged into `main`.
+
+## Password change and administrator reset (owner request 2026-11-14, phase 1)
+
+- Branch: `admin-password-reset-forced-change`, PR against `dev` (number and tested head are on the PR). Independent security review pending.
+- Changed: migration 0009 (`must_change_password`, `password_resets`), `server/services/credentials.ts`, `repositories/password-resets.ts`, the closed-by-default gate in `server/http.ts`, sign-in re-check under a row lock, `/account/password`, `/password/change`, Operators reset flow, login copy, `docs/security.md`, `docs/operations.md`, `docs/development.md`, DECISIONS.md, `tests/web/password-reset.test.mjs`.
+- Still open: phase 2 (forgot-password email, needs SMTP), see DECISIONS.md for the model constraint it must respect.

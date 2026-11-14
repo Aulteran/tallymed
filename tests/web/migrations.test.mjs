@@ -106,7 +106,7 @@ test('upgrading over documents keeps them, and the MCP role grants apply when th
     const { householdId, adminUserId } = await seedHousehold(db.pool);
     const doc = (await db.pool.query(`insert into documents (id, household_id, title, kind, created_by) values (gen_random_uuid(), $1, 'Example', 'receipt', $2) returning id`, [householdId, adminUserId])).rows[0].id;
     assert.ok(!(await tables(db.pool)).includes('mcp_clients'));
-    assert.deepEqual(await migrate(db.pool), ['0008']);
+    assert.deepEqual(await migrate(db.pool), ['0008', '0009']);
     assert.equal((await db.pool.query(`select count(*)::int n from documents where id = $1`, [doc])).rows[0].n, 1);
     // The function is the only way grants are applied; it can be run again and leaves the role narrow.
     await db.pool.query(`create role ${role} login password 'x-test-password'`);
