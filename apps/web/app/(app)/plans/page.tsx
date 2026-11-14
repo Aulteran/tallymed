@@ -36,9 +36,16 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
           <p className="muted">A plan is an obligation: its installments schedule amounts to pay, and creating one moves no cash. Record the actual payments on the Payments page, then match them to installments.</p>
           <label htmlFor="name">Plan name</label><input id="name" name="name" required maxLength={120} defaultValue={p.name} />
           <label htmlFor="providerId">Provider</label><select id="providerId" name="providerId" required defaultValue={p.providerId ?? ''}><Options items={providers.items.map((x) => ({ id: x.id, name: x.name }))} blank="Choose…" /></select>
-          <label htmlFor="billId">Bill covered by the plan</label>
-          <select id="billId" name="billId" required defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Choose…" /></select>
-          <p className="muted">The bill must be from the chosen provider and have confirmed amounts.</p>
+          <fieldset>
+            <legend>Bills covered by the plan</legend>
+            {bills.items.length === 0 ? <p className="muted">No bills with an open balance. Enter and confirm a bill first.</p> : bills.items.map((b) => <p key={b.id}>
+              <input id={`bill_${b.id}`} type="checkbox" name={`bill_${b.id}`} value="on" defaultChecked={p.billId === b.id} />{' '}
+              <label htmlFor={`bill_${b.id}`}>{b.label} · {b.statementDate} · open {formatCents(b.openBalanceCents)}</label></p>)}
+            <p className="muted">Tick every bill the plan covers. All of them must be from the chosen provider and have confirmed amounts; a plan cannot mix providers.</p>
+          </fieldset>
+          <p><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error ? p.matchExisting !== undefined : true} />{' '}
+            <label htmlFor="matchExisting">Match payments already recorded on these bills</label></p>
+          <p className="muted">Payments already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
           <label htmlFor="totalAmount">Total to pay (USD)</label><input id="totalAmount" name="totalAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.totalAmount} />
           <label htmlFor="installmentCount">Number of installments</label><input id="installmentCount" name="installmentCount" type="number" min={1} max={120} required defaultValue={p.installmentCount} />
           <label htmlFor="firstDueDate">First due date</label><input id="firstDueDate" name="firstDueDate" type="date" required defaultValue={p.firstDueDate} />

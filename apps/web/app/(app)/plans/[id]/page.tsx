@@ -29,6 +29,8 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   }
   const matchedPairs = [...pairs.values()].filter((x) => x.cents > 0n);
   const open = installments.filter((i) => i.state !== 'paid');
+  const unmatched = allocations.filter((a) => BigInt(a.netCents) > BigInt(a.matchedCents));
+  const unmatchedCents = unmatched.reduce((t, a) => t + BigInt(a.netCents) - BigInt(a.matchedCents), 0n);
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/plans">← Payment plans</Link></p>
     <h1>{plan.name}</h1>
@@ -53,6 +55,12 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
           <td data-label="Status"><StatePill state={i.state} overdue={i.overdue && active} /></td></tr>)}</tbody></table>
       <p className="muted">Status as of {data!.asOf} (UTC).</p>
     </div>
+    {active && open.length > 0 && unmatched.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match-existing">
+      <h2>Match all existing payments</h2>{base}{key()}<input type="hidden" name="version" value={plan.version} />
+      <p>{unmatched.length}{allocationsTruncated ? '+' : ''} payment{unmatched.length === 1 ? '' : 's'} applied to this plan's bills ({formatCents(unmatchedCents.toString())}{allocationsTruncated ? '+' : ''}) not yet matched to any installment.</p>
+      <p className="muted">Matches them to the earliest installments that still owe, oldest payment first. It only links to cash already recorded: no cash is added and no bill balance changes. You can remove a match afterwards.</p>
+      <button type="submit">Match all existing payments</button>
+    </form>}
     {active && open.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match">
       <h2>Match a payment to an installment</h2>{base}{key()}
       <p className="muted">Pick a payment already applied to one of this plan's bills. A match records that the money covers the installment; it never adds cash or changes the bill balance. You can match part of an installment.</p>

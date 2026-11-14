@@ -357,3 +357,131 @@ test('plan access boundaries, form posts and the overview and bill figures', { s
     await t.db.drop();
   }
 });
+
+test('fillInstallments pairs the oldest cash with the earliest installments and never over-matches', () => {
+  const src = (allocationId, free) => ({ allocationId, paymentId: `p-${allocationId}`, billId: 'b', free });
+  const slots = [{ id: 'i1', left: 100n }, { id: 'i2', left: 100n }, { id: 'i3', left: 0n }, { id: 'i4', left: 50n }];
+  const out = plans.fillInstallments([src('a', 120n), src('b', 100n), src('c', 0n)], slots);
+  assert.deepEqual(out.map((m) => [m.installmentId, m.source.allocationId, m.amount]), [['i1', 'a', 100n], ['i2', 'a', 20n], ['i2', 'b', 80n], ['i4', 'b', 20n]]);
+  assert.deepEqual(plans.fillInstallments([src('a', 500n)], slots).map((m) => m.amount), [100n, 100n, 50n]);
+  assert.deepEqual(plans.fillInstallments([], slots), []);
+  assert.deepEqual(plans.fillInstallments([src('a', 10n)], []), []);
+});
+
+test('creating a plan can match payments already made on several bills, as references only', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member();
+    const p = await t.provider('Example Hospital');
+    const b1 = await t.bill({ memberId: m, providerId: p, originalAmount: '300.00' });
+    const b2 = await t.bill({ memberId: m, providerId: p, originalAmount: '100.00' });
+    const outsideBill = await t.bill({ memberId: m, providerId: p, originalAmount: '100.00' });
+    // Past cash: $120 and $100 on the first bill, $50 on the second, and $30 on a bill the plan will not cover.
+    await t.pay1({ paidOn: '2026-04-20', amount: '100.00', billId: b1.id });
+    await t.pay1({ paidOn: '2026-03-01', amount: '120.00', billId: b1.id });
+    await t.pay1({ paidOn: '2026-03-15', amount: '50.00', billId: b2.id });
+    await t.pay1({ paidOn: '2026-03-20', amount: '30.00', billId: outsideBill.id });
+    const snapshot = async () => JSON.stringify([
+      (await t.db.pool.query(`select id, amount_cents::text from payments order by id`)).rows,
+      (await t.db.pool.query(`select id, kind, amount_cents::text from payment_entries order by seq`)).rows,
+      (await t.detail(b1.id)).openBalanceCents, (await t.detail(b2.id)).openBalanceCents,
+    ]);
+    const before = await snapshot();
+    const key = t.key();
+    const input = { idempotencyKey: key, name: 'ER visit plan', providerId: p, [`bill_${b1.id}`]: 'on', [`bill_${b2.id}`]: 'on', matchExisting: 'on', totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-04-01', cadence: 'monthly' };
+    const plan = await plans.createPlan(t.db.pool, t.actor, input, 'r');
+    assert.equal(await snapshot(), before, 'matching existing cash creates no cash and changes no balance');
+    const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
+    assert.equal(d.bills.length, 2);
+    // Oldest payment first: $120 pays #1 and part of #2, $50 and then $100 finish #2 and start #3. The unrelated bill is untouched.
+    assert.deepEqual(d.installments.map((i) => [i.matchedCents, i.state]), [['10000', 'paid'], ['10000', 'paid'], ['7000', 'partial'], ['0', 'unpaid']]);
+    assert.equal(d.plan.matchedCents, '27000');
+    assert.equal(d.matches.every((x) => x.kind === 'match' && !x.carried), true);
+    assert.equal(d.allocations.length, 0, 'every allocation on the plan bills is fully matched');
+    const created = (await t.audit('plan.created'))[0].detail;
+    assert.deepEqual([created.matchExisting, created.matchedExistingCents, created.matchedExistingAllocations], [true, '27000', 3]);
+    // A retry replays the same plan and adds nothing.
+    const again = await plans.createPlan(t.db.pool, t.actor, input, 'r');
+    assert.deepEqual([again.id, again.replayed], [plan.id, true]);
+    assert.equal(await t.count('installment_matches'), 5);
+    // Without the option nothing is matched, and cash that is already matched is not offered to a second plan.
+    const plain = await plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), name: 'Plain plan', matchExisting: undefined }, 'r');
+    assert.equal((await plans.getPlanDetail(t.db.pool, t.actor, plain.id, { asOf: AS_OF })).plan.matchedCents, '0');
+    const second = await plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), name: 'Second plan' }, 'r');
+    assert.equal((await plans.getPlanDetail(t.db.pool, t.actor, second.id, { asOf: AS_OF })).plan.matchedCents, '0', 'cash matched to one plan is not counted again');
+    assert.equal(await t.count('installment_matches'), 5);
+    // Cash larger than the plan: the surplus stays unmatched.
+    const big = await t.bill({ memberId: m, providerId: p, originalAmount: '500.00' });
+    await t.pay1({ paidOn: '2026-05-01', amount: '500.00', billId: big.id });
+    const small = await plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), name: 'Small plan', billId: undefined, [`bill_${b1.id}`]: undefined, [`bill_${b2.id}`]: undefined, [`bill_${big.id}`]: 'on', totalAmount: '200.00', installmentCount: '2' }, 'r');
+    const ds = await plans.getPlanDetail(t.db.pool, t.actor, small.id, { asOf: AS_OF });
+    assert.deepEqual([ds.plan.matchedCents, ds.installments.map((i) => i.state)], ['20000', ['paid', 'paid']]);
+    assert.equal(ds.allocations[0].netCents, '50000');
+    assert.equal(BigInt(ds.allocations[0].netCents) - BigInt(ds.allocations[0].matchedCents), 30000n);
+    // A bill from another provider is still refused, and a refused request leaves no plan or match behind.
+    const p2 = await t.provider('Example Physicians');
+    const phys = await t.bill({ memberId: m, providerId: p2, originalAmount: '80.00' });
+    const plansBefore = await t.count('payment_plans');
+    await assert.rejects(plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), [`bill_${phys.id}`]: 'on' }, 'r'), code('invalid_input'));
+    assert.equal(await t.count('payment_plans'), plansBefore);
+    assert.equal(await t.count('installment_matches'), 7);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('matching all existing payments on a plan is bounded, idempotent and safe under concurrency', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t, { bill: '300.00', installments: 3, total: '300.00', first: '2026-06-01' });
+    const run = (o = {}) => plans.matchExistingPayments(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s.plan.id, version: 1, ...o }, 'r');
+    await assert.rejects(run(), code('conflict'), 'nothing to match yet');
+    await t.pay1({ paidOn: '2026-05-01', amount: '150.00', billId: s.b.id });
+    await t.pay1({ paidOn: '2026-05-20', amount: '90.00', billId: s.b.id });
+    const before = await s.ledgerSnapshot();
+    await assert.rejects(run({ version: 7 }), code('stale_version'));
+    const key = t.key();
+    const first = await run({ idempotencyKey: key });
+    assert.equal(first.replayed, false);
+    assert.equal((await run({ idempotencyKey: key })).replayed, true);
+    assert.equal(await s.ledgerSnapshot(), before, 'references only');
+    const d = await s.detail();
+    assert.deepEqual(d.installments.map((i) => [i.matchedCents, i.state]), [['10000', 'paid'], ['10000', 'paid'], ['4000', 'partial']]);
+    assert.equal(await t.count('installment_matches'), 4);
+    const audit = (await t.audit('plan.existing_payments_matched'))[0].detail;
+    assert.deepEqual([audit.matchCount, audit.allocationCount, audit.matchedCents], [4, 2, '24000']);
+    // Nothing is left to match until more cash is applied. Then only the new cash is used, up to what the schedule still owes.
+    await assert.rejects(run(), code('conflict'));
+    await t.pay1({ paidOn: '2026-06-10', amount: '50.00', billId: s.b.id });
+    await run();
+    assert.equal((await s.detail()).plan.matchedCents, '29000');
+    // A removed match frees its cash again, and the bulk action offers it once more (a correction, never an edit).
+    const alloc = d.matches[0].allocationId;
+    await plans.unmatchInstallment(t.db.pool, t.actor, { idempotencyKey: t.key(), installmentId: d.installments[0].id, allocationId: alloc, amount: '40.00', reason: 'Wrong plan' }, 'r');
+    await run();
+    assert.equal((await s.detail()).plan.matchedCents, '29000');
+    // Concurrent runs never count cash twice.
+    const s2 = await planSetup(t, { bill: '1000.00', installments: 10, total: '1000.00', first: '2026-06-01' });
+    for (const n of [1, 2, 3]) await t.pay1({ paidOn: `2026-05-0${n}`, amount: '70.00', billId: s2.b.id });
+    const race = await Promise.allSettled(Array.from({ length: 5 }, () => plans.matchExistingPayments(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s2.plan.id, version: 1 }, 'r')));
+    assert.equal(race.filter((x) => x.status === 'fulfilled').length, 1);
+    for (const x of race.filter((y) => y.status === 'rejected')) assert.equal(x.reason.code, 'conflict');
+    assert.equal((await s2.detail()).plan.matchedCents, '21000');
+    const over = await t.db.pool.query(`select n.allocation_id from allocation_net n where n.net_cents < (select coalesce(sum(m.amount_cents), 0) from installment_matches m where m.allocation_id = n.allocation_id)`);
+    assert.equal(over.rowCount, 0);
+    // A cancelled plan takes no new matches, and another household cannot use the action.
+    await plans.cancelPlan(t.db.pool, t.actor, { planId: s.plan.id, version: (await s.detail()).plan.version, reason: 'Paid off elsewhere' }, 'r');
+    await t.pay1({ paidOn: '2026-06-11', amount: '10.00', billId: s.b.id });
+    await assert.rejects(run({ version: (await s.detail()).plan.version }), code('conflict'));
+    const h2 = (await t.db.pool.query(`insert into households (name) values ('Other Family') returning id`)).rows[0].id;
+    const u2 = (await t.db.pool.query(`insert into users (household_id, email, display_name, role, password_hash) values ($1, 'other@example.test', 'Other Admin', 'admin', 'x') returning id`, [h2])).rows[0].id;
+    const outsider = { userId: u2, householdId: h2, role: 'admin', displayName: 'Other Admin', sessionId: randomUUID() };
+    await assert.rejects(plans.matchExistingPayments(t.db.pool, outsider, { idempotencyKey: t.key(), planId: s2.plan.id, version: 1 }, 'r'), code('not_found'));
+    // The form route redirects back to the plan.
+    const token = t.cookie.split('=')[1];
+    const res = await handlers.handleExpenseAction(post('/api/expenses/plans/match-existing', { idempotencyKey: t.key(), planId: s2.plan.id, version: 1, csrf: csrfFor(token) }, { cookie: t.cookie, html: true }), t.ctx, 'plans/match-existing');
+    assert.equal(new URL(res.headers.get('location')).pathname, `/plans/${s2.plan.id}`);
+  } finally {
+    await t.db.drop();
+  }
+});
