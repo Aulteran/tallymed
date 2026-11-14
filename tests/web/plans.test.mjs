@@ -18,7 +18,7 @@ async function planSetup(t, { bill = '300.00', installments = 3, total = '300.00
   const p = await t.provider();
   const b = await t.bill({ memberId: m, providerId: p, originalAmount: bill });
   const create = (o = {}) => plans.createPlan(t.db.pool, t.actor, {
-    idempotencyKey: t.key(), name: 'Clinic plan', providerId: p, billId: b.id, totalAmount: total, installmentCount: String(installments), firstDueDate: first, cadence, ...o,
+    idempotencyKey: t.key(), name: 'Clinic plan', providerId: p, billId: b.id, totalAmount: total, installmentCount: String(installments), firstDueDate: first, cadence, startedOn: '2026-01-01', ...o,
   }, 'r');
   const plan = await create();
   const detail = (id = plan.id, o = {}) => plans.getPlanDetail(t.db.pool, t.actor, id, { asOf: AS_OF, ...o });
@@ -388,7 +388,7 @@ test('creating a plan can match payments already made on several bills, as refer
     ]);
     const before = await snapshot();
     const key = t.key();
-    const input = { idempotencyKey: key, name: 'ER visit plan', providerId: p, [`bill_${b1.id}`]: 'on', [`bill_${b2.id}`]: 'on', matchExisting: 'on', totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-04-01', cadence: 'monthly' };
+    const input = { idempotencyKey: key, name: 'ER visit plan', providerId: p, [`bill_${b1.id}`]: 'on', [`bill_${b2.id}`]: 'on', matchExisting: 'on', startedOn: '2026-01-01', totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-04-01', cadence: 'monthly' };
     const plan = await plans.createPlan(t.db.pool, t.actor, input, 'r');
     assert.equal(await snapshot(), before, 'matching existing cash creates no cash and changes no balance');
     const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
@@ -481,6 +481,42 @@ test('matching all existing payments on a plan is bounded, idempotent and safe u
     const token = t.cookie.split('=')[1];
     const res = await handlers.handleExpenseAction(post('/api/expenses/plans/match-existing', { idempotencyKey: t.key(), planId: s2.plan.id, version: 1, csrf: csrfFor(token) }, { cookie: t.cookie, html: true }), t.ctx, 'plans/match-existing');
     assert.equal(new URL(res.headers.get('location')).pathname, `/plans/${s2.plan.id}`);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('a plan can carry its own start date, and only payments made since then are matched', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member();
+    const p = await t.provider();
+    const b = await t.bill({ memberId: m, providerId: p, originalAmount: '300.00' });
+    await t.pay1({ paidOn: '2026-01-10', amount: '100.00', billId: b.id });
+    await t.pay1({ paidOn: '2026-03-05', amount: '60.00', billId: b.id });
+    await t.pay1({ paidOn: '2026-03-05', amount: '40.00', billId: b.id });
+    const base = { name: 'Dated plan', providerId: p, billId: b.id, totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-03-01', cadence: 'monthly', matchExisting: 'on' };
+    const plan = await plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, startedOn: '2026-03-01' }, 'r');
+    const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
+    // The January payment predates the plan and stays out; the two March payments are matched.
+    assert.deepEqual([d.plan.startedOn, d.plan.matchedCents], ['2026-03-01', '10000']);
+    assert.equal(d.allocations.length, 1, 'the January payment is still unmatched cash');
+    assert.equal(d.allocations[0].paidOn, '2026-01-10');
+    // The start date is a label: the real entry time is kept, and the audit trail records both.
+    const row = (await t.db.pool.query(`select created_at::date::text as created, started_on::text as started from payment_plans where id = $1`, [plan.id])).rows[0];
+    assert.notEqual(row.created, row.started);
+    assert.equal((await t.audit('plan.created'))[0].detail.startedOn, '2026-03-01');
+    // The bulk action uses the plan's start date too, so the January payment is still not offered.
+    await assert.rejects(plans.matchExistingPayments(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: plan.id, version: 1 }, 'r'), code('conflict'));
+    // Without a date the plan starts today (UTC) and earlier payments are not matched.
+    const today = await plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, name: 'Today plan' }, 'r');
+    const dt = await plans.getPlanDetail(t.db.pool, t.actor, today.id, { asOf: AS_OF });
+    assert.deepEqual([dt.plan.startedOn, dt.plan.matchedCents], [new Date().toISOString().slice(0, 10), '0']);
+    // Dates must be real, not in the future and not absurd.
+    for (const bad of ['2999-01-01', '1800-01-01', '2026-02-30', 'soon']) await assert.rejects(plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, startedOn: bad }, 'r'), code('invalid_input'));
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    await assert.rejects(plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, startedOn: tomorrow }, 'r'), code('invalid_input'));
+    assert.equal(await t.count('payment_plans'), 2);
   } finally {
     await t.db.drop();
   }

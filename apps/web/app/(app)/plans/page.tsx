@@ -43,9 +43,11 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
               <label htmlFor={`bill_${b.id}`}>{b.label} · {b.statementDate} · open {formatCents(b.openBalanceCents)}</label></p>)}
             <p className="muted">Tick every bill the plan covers. All of them must be from the chosen provider and have confirmed amounts; a plan cannot mix providers.</p>
           </fieldset>
+          <label htmlFor="startedOn">Plan start date (optional)</label><input id="startedOn" name="startedOn" type="date" max={asOf} defaultValue={p.startedOn} />
+          <p className="muted">When the plan began, if that was before today. Leave empty for today. It is a label only; the real time of entry is kept in the history.</p>
           <p><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error ? p.matchExisting !== undefined : true} />{' '}
-            <label htmlFor="matchExisting">Match payments already recorded on these bills</label></p>
-          <p className="muted">Payments already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
+            <label htmlFor="matchExisting">Match payments made since the start date</label></p>
+          <p className="muted">Payments made on or after the start date and already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
           <label htmlFor="totalAmount">Total to pay (USD)</label><input id="totalAmount" name="totalAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.totalAmount} />
           <label htmlFor="installmentCount">Number of installments</label><input id="installmentCount" name="installmentCount" type="number" min={1} max={120} required defaultValue={p.installmentCount} />
           <label htmlFor="firstDueDate">First due date</label><input id="firstDueDate" name="firstDueDate" type="date" required defaultValue={p.firstDueDate} />

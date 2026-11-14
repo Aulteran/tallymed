@@ -169,11 +169,11 @@ async function lockBillPayments(tx: Queryable, actor: Actor, billIds: string[]):
   return new Set(ids.length > 0 ? await payments.lockPayments(tx, actor.householdId, ids) : []);
 }
 
-/** Reads the unmatched allocations; a payment that appeared after the locks were taken restarts the transaction. */
-async function unmatchedCash(tx: Queryable, actor: Actor, billIds: string[], locked: Set<string>): Promise<FillSource[]> {
+/** Reads the unmatched allocations of payments made on or after `since` (UTC date); a payment that appeared after the locks were taken restarts the transaction. */
+async function unmatchedCash(tx: Queryable, actor: Actor, billIds: string[], locked: Set<string>, since: string): Promise<FillSource[]> {
   const rows = await payments.listUnmatchedAllocations(tx, actor.householdId, billIds);
   if (rows.some((r) => !locked.has(r.paymentId))) throw new RetryTransaction();
-  return rows.map((r) => ({ allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, free: BigInt(r.netCents) - BigInt(r.matchedCents) }));
+  return rows.filter((r) => r.paidOn >= since).map((r) => ({ allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, free: BigInt(r.netCents) - BigInt(r.matchedCents) }));
 }
 
 async function insertFill(tx: Queryable, actor: Actor, planId: string, revisionId: string, fill: FillMatch[], reason: string): Promise<void> {
@@ -204,6 +204,9 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
   authorize(actor, 'expenses:write');
   const { csrf: _csrf, idempotencyKey, ...d } = parse(paymentSchemas.createPlan, withBillChecks(input));
   const schedule = buildSchedule(d);
+  // The start date is the household's own label (UTC calendar date, never in the future). The real entry time stays in created_at and the audit trail.
+  const startedOn = d.startedOn ?? todayUtc();
+  if (startedOn > todayUtc()) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
   const id = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'plan.create', idempotencyKey, { ...d, lines: schedule.lines, idempotencyKey: undefined }, id);
@@ -216,7 +219,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
       if (b.providerId !== d.providerId) throw new AppError('invalid_input', 'Every bill in a plan must belong to the plan\'s provider');
       if (b.amountStatus !== 'confirmed') throw new AppError('conflict', 'A plan can only cover bills with confirmed amounts');
     }
-    await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, providerId: d.providerId, name: d.name });
+    await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, providerId: d.providerId, name: d.name, startedOn });
     for (const b of [...d.billIds].sort()) await repo.insertPlanBill(tx, actor.householdId, id, b);
     const revisionId = randomUUID();
     const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
@@ -226,7 +229,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
     });
     // Optionally reference cash that was already applied to these bills. Nothing is created or moved: only match rows are added.
     const fill = d.matchExisting
-      ? fillInstallments(await unmatchedCash(tx, actor, d.billIds, lockedPayments), installments.map((i) => ({ id: i.id, left: i.amountCents })))
+      ? fillInstallments(await unmatchedCash(tx, actor, d.billIds, lockedPayments, startedOn), installments.map((i) => ({ id: i.id, left: i.amountCents })))
       : [];
     await insertFill(tx, actor, id, revisionId, fill, 'Matched an existing payment when the plan was created');
     await recordAudit(tx, {
@@ -235,7 +238,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
         planId: id, providerId: d.providerId, billCount: d.billIds.length, totalCents: cents(schedule.totalCents), cadence: schedule.cadence,
         installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
         scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
-        matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
+        startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
       },
     });
     return { id, replayed: false };
@@ -380,17 +383,18 @@ export async function matchExistingPayments(pool: Pool, actor: Actor, input: unk
     const locked = await lockBillPayments(tx, actor, billIds);
     const [plan] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
     if (!plan) throw new AppError('not_found');
+    const plan0 = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
     if (plan.version !== d.version) throw new AppError('stale_version');
     if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
     const cur = (await repo.currentRevision(tx, actor.householdId, d.planId))!;
     const open = (await repo.listInstallments(tx, actor.householdId, cur.id, todayUtc())).filter((i) => BigInt(i.unpaidCents) > 0n);
-    const fill = fillInstallments(await unmatchedCash(tx, actor, billIds, locked), open.map((i) => ({ id: i.id, left: BigInt(i.unpaidCents) })));
+    const fill = fillInstallments(await unmatchedCash(tx, actor, billIds, locked, plan0.startedOn), open.map((i) => ({ id: i.id, left: BigInt(i.unpaidCents) })));
     if (fill.length === 0) throw new AppError('conflict', 'There is no unmatched payment cash, or nothing left owed on the schedule');
     await insertFill(tx, actor, d.planId, cur.id, fill, 'Matched an existing payment in bulk');
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.existing_payments_matched', entityType: 'payment_plan', entityId: d.planId, requestId,
       detail: {
-        planId: d.planId, revisionNo: cur.revisionNo, matchCount: fill.length, allocationCount: new Set(fill.map((f) => f.source.allocationId)).size,
+        planId: d.planId, startedOn: plan0.startedOn, revisionNo: cur.revisionNo, matchCount: fill.length, allocationCount: new Set(fill.map((f) => f.source.allocationId)).size,
         installmentCount: new Set(fill.map((f) => f.installmentId)).size, matchedCents: cents(sum(fill.map((f) => f.amount))),
       },
     });

@@ -34,7 +34,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/plans">← Payment plans</Link></p>
     <h1>{plan.name}</h1>
-    <p>{plan.providerName} · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
+    <p>{plan.providerName} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
     <Banner code={q.error} />
     {!active && <div className="card" role="note"><strong>Cancelled {plan.cancelledAt ? dateOf(plan.cancelledAt) : ''}.</strong> {plan.cancelReason}. History is kept; no new matches or revisions.</div>}
     <section className="metrics" aria-label="Plan totals">
@@ -58,7 +58,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
     {active && open.length > 0 && unmatched.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match-existing">
       <h2>Match all existing payments</h2>{base}{key()}<input type="hidden" name="version" value={plan.version} />
       <p>{unmatched.length}{allocationsTruncated ? '+' : ''} payment{unmatched.length === 1 ? '' : 's'} applied to this plan's bills ({formatCents(unmatchedCents.toString())}{allocationsTruncated ? '+' : ''}) not yet matched to any installment.</p>
-      <p className="muted">Matches them to the earliest installments that still owe, oldest payment first. It only links to cash already recorded: no cash is added and no bill balance changes. You can remove a match afterwards.</p>
+      <p className="muted">Only payments made on or after the plan's start date ({plan.startedOn}) are used. Matches them to the earliest installments that still owe, oldest payment first. It only links to cash already recorded: no cash is added and no bill balance changes. You can remove a match afterwards.</p>
       <button type="submit">Match all existing payments</button>
     </form>}
     {active && open.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match">

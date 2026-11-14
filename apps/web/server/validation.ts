@@ -194,7 +194,7 @@ export const paymentSchemas = {
   reverseRefund: z.strictObject({ idempotencyKey, paymentId: uuid.optional(), eventId: uuid, effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
   voidPayment: z.strictObject({ idempotencyKey, paymentId: uuid, voidedOn: isoDate, reason: text(500).min(1), ...csrf }),
   createPlan: z.strictObject({
-    idempotencyKey, name: text(120).min(1), providerId: uuid, billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), matchExisting: checkbox.optional(), ...scheduleInput, ...csrf,
+    idempotencyKey, name: text(120).min(1), providerId: uuid, billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), matchExisting: checkbox.optional(), startedOn: optional(isoDate), ...scheduleInput, ...csrf,
   }).transform((d, ctx) => {
     const billIds = d.billIds && d.billIds.length > 0 ? d.billIds : d.billId ? [d.billId] : [];
     if ((d.billIds?.length && d.billId) || billIds.length === 0 || new Set(billIds).size !== billIds.length) {
