@@ -4,7 +4,7 @@ import { pickParties } from '../../../server/services/expenses.ts';
 import { pickPayableBills } from '../../../server/services/payments.ts';
 import { listInstallmentQueue, listPlans } from '../../../server/services/plans.ts';
 import {
-  Banner, CADENCES, Csrf, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
+  Banner, CADENCES, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -20,11 +20,11 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
   const filters = Object.fromEntries(['q', 'status', 'providerId'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listPlans(ctx.pool, actor, { ...filters, cursor: p.cursor }, asOf), { items: [], nextCursor: null });
   const queue = await load(() => listInstallmentQueue(ctx.pool, actor, { state: p.state, asOf, limit: 25 }), { items: [], nextCursor: null });
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Payment Plans</h1>
     <Banner code={p.error} invalid={invalid} />
     <div className="card"><h2>Installments due</h2>
-      <p className="row"><Link href="/plans?state=overdue">Overdue</Link> <Link href="/plans?state=upcoming">Upcoming</Link> <Link href="/plans">All unpaid</Link></p>
+      <p className="tabs"><Link href="/plans?state=overdue">Overdue</Link><Link href="/plans?state=upcoming">Upcoming</Link><Link href="/plans">All unpaid</Link></p>
       {queue.data.items.length === 0 ? <p>Nothing is due in this view.</p> : <table className="stack">
         <thead><tr><th>Due</th><th>Plan</th><th>Provider</th><th>Family</th><th className="num">Installment</th><th className="num">Still owed</th><th>Status</th></tr></thead>
         <tbody>{queue.data.items.map((i) => <tr key={i.installmentId}>
@@ -40,7 +40,7 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
       <div><label htmlFor="status">Status</label><select id="status" name="status" defaultValue={p.status ?? ''}><option value="">All</option><option value="active">Active</option><option value="cancelled">Cancelled</option></select></div>
       <div><button type="submit">Filter</button> <Link href="/plans">Clear</Link></div>
     </form>
-    {data.items.length === 0 ? <p>No payment plans yet.</p> : <table className="stack">
+    {data.items.length === 0 ? <Empty>No payment plans yet.</Empty> : <table className="stack">
       <thead><tr><th>Plan</th><th>Provider</th><th className="num">Total</th><th className="num">Matched</th><th>Installments</th><th>Next due</th><th>Status</th></tr></thead>
       <tbody>{data.items.map((x) => <tr key={x.id}>
         <td data-label="Plan"><Link href={`/plans/${x.id}`}>{x.name}</Link></td><td data-label="Provider">{x.providerName}</td>

@@ -12,7 +12,8 @@ export default async function MemberPage({ params, searchParams }: { params: Pro
   const { data: m } = await load(() => getMember(ctx.pool, actor, id), null);
   const visits = await listVisits(ctx.pool, actor, { memberId: id, limit: 10 });
   const bills = await listBills(ctx.pool, actor, { memberId: id, limit: 10 });
-  return <main>
+  return <main id="main">
+    <p className="crumb"><Link href="/members">← Family members</Link></p>
     <h1>{m!.name} {m!.archivedAt && <span className="pill warn">Archived</span>}</h1>
     <Banner code={q.error} />
     <form className="card" method="post" action="/api/expenses/members/update">
@@ -30,10 +31,10 @@ export default async function MemberPage({ params, searchParams }: { params: Pro
           <input type="hidden" name="archived" value="yes" /><button type="submit" className="secondary">Archive member</button></>}
     </form>
     <div className="card"><h2>Recent visits</h2>
-      {visits.items.length === 0 ? <p>No visits.</p> : <ul>{visits.items.map((v) => <li key={v.id}><Link href={`/visits/${v.id}`}>{v.serviceDate} · {v.providerName}</Link></li>)}</ul>}
+      {visits.items.length === 0 ? <p>No visits.</p> : <ul className="rows">{visits.items.map((v) => <li key={v.id}><Link href={`/visits/${v.id}`}>{v.serviceDate} · {v.providerName}</Link></li>)}</ul>}
       <Link href={`/visits?memberId=${m!.id}`}>All visits</Link></div>
     <div className="card"><h2>Recent bills</h2>
-      {bills.items.length === 0 ? <p>No bills.</p> : <ul>{bills.items.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.statementDate} · {b.providerName}</Link> <Money cents={b.responsibilityCents} /></li>)}</ul>}
+      {bills.items.length === 0 ? <p>No bills.</p> : <ul className="rows">{bills.items.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.statementDate} · {b.providerName}</Link> <Money cents={b.responsibilityCents} /></li>)}</ul>}
       <Link href={`/bills?memberId=${m!.id}`}>All bills</Link></div>
   </main>;
 }

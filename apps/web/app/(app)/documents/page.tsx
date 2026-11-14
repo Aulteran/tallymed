@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { listDocuments } from '../../../server/services/documents.ts';
 import { formatBytes, KindOptions, mediaLabel, UploadForm } from '../../components/documents.tsx';
-import { Banner, dateOf, flat, label, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, dateOf, Empty, flat, label, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Documents · TallyMed' };
@@ -13,7 +13,7 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Se
   const { data, invalid } = await load(() => listDocuments(ctx.pool, actor, filter), { items: [], nextCursor: null });
   const base: Record<string, string> = {};
   for (const k of ['q', 'kind', 'unmatched'] as const) if (q[k]) base[k] = q[k]!;
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Documents</h1>
     <Banner code={q.error} invalid={invalid} />
     <p className="muted">Bills, EOBs, receipts and reimbursement evidence. Files are private, checked by content and open only to signed-in members of this household. An unmatched document is not attached to any record yet.</p>
@@ -24,7 +24,7 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Se
       <div><button type="submit">Apply</button> <Link href="/documents">Clear</Link></div>
     </form>
     <div className="card">
-      {data.items.length === 0 ? <p>{q.unmatched ? 'No unmatched documents.' : 'No documents yet.'}</p> : <table className="stack">
+      {data.items.length === 0 ? <Empty>{q.unmatched ? 'No unmatched documents.' : 'No documents yet.'}</Empty> : <table className="stack">
         <thead><tr><th>Title</th><th>Kind</th><th>Type and size</th><th>Version</th><th>Records</th><th>Added</th></tr></thead>
         <tbody>{data.items.map((d) => <tr key={d.id}>
           <td data-label="Title"><Link href={`/documents/${d.id}`}>{d.title}</Link></td><td data-label="Kind">{label(d.kind)}</td>

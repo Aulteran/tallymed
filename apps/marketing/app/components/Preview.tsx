@@ -31,12 +31,12 @@ function Plans() {
       <caption className="sr-only">Fictional installment schedule</caption>
       <thead><tr><th scope="col">Due</th><th scope="col">Amount</th><th scope="col">State</th></tr></thead>
       <tbody>
-        <tr><th scope="row">Jan 15</th><td>$75.00</td><td>Paid</td></tr>
-        <tr><th scope="row">Feb 15</th><td>$75.00</td><td>Paid</td></tr>
-        <tr><th scope="row">Mar 15</th><td>$75.00</td><td>Partial · $50.00</td></tr>
-        <tr><th scope="row">Apr 15</th><td>$75.00</td><td>Overdue</td></tr>
-        <tr><th scope="row">May 15</th><td>$75.00</td><td>Upcoming</td></tr>
-        <tr><th scope="row">Jun 15</th><td>$75.00</td><td>Upcoming</td></tr>
+        <tr><th scope="row">Jan 15</th><td>$75.00</td><td><span className="badge" data-tone="ok">Paid</span></td></tr>
+        <tr><th scope="row">Feb 15</th><td>$75.00</td><td><span className="badge" data-tone="ok">Paid</span></td></tr>
+        <tr><th scope="row">Mar 15</th><td>$75.00</td><td><span className="badge" data-tone="warn">Partial · $50.00</span></td></tr>
+        <tr><th scope="row">Apr 15</th><td>$75.00</td><td><span className="badge" data-tone="warn">Overdue</span></td></tr>
+        <tr><th scope="row">May 15</th><td>$75.00</td><td><span className="badge" data-tone="neutral">Upcoming</span></td></tr>
+        <tr><th scope="row">Jun 15</th><td>$75.00</td><td><span className="badge" data-tone="neutral">Upcoming</span></td></tr>
       </tbody>
     </table>
   </>;

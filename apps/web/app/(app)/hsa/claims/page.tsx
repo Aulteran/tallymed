@@ -11,9 +11,10 @@ export default async function HsaClaimsPage({ searchParams }: { searchParams: Se
   const filters: Record<string, string> = p.status ? { status: p.status } : {};
   const claims = await load(() => listHsaClaims(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const receipts = await load(() => listHsaReceipts(ctx.pool, actor, { cursor: p.rcursor, limit: '10' }), { items: [], nextCursor: null });
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/hsa">← HSA reimbursements</Link></p>
     <h1>HSA claims and reimbursements</h1>
-    <p><Link href="/hsa">HSA payments</Link> · <Link href="/hsa/claims">All claims</Link> · <Link href="/hsa/claims?status=open">Open claims</Link> · <Link href="/hsa/claims?status=closed">Closed claims</Link></p>
+    <p className="tabs"><Link href="/hsa/claims" aria-current={!p.status ? 'true' : undefined}>All claims</Link><Link href="/hsa/claims?status=open" aria-current={p.status === 'open' ? 'true' : undefined}>Open claims</Link><Link href="/hsa/claims?status=closed" aria-current={p.status === 'closed' ? 'true' : undefined}>Closed claims</Link></p>
     <Banner invalid={claims.invalid || receipts.invalid} />
     <div className="card"><h2>Claims</h2>
       {claims.data.items.length === 0 ? <p>No claims. Submit one from a payment's HSA page.</p> : <table className="stack">
@@ -22,7 +23,7 @@ export default async function HsaClaimsPage({ searchParams }: { searchParams: Se
           <td data-label="Submitted"><Link href={`/hsa/claims/${c.id}`}>{c.submittedOn}</Link></td><td data-label="Administrator and reference">{c.administrator} {c.reference ?? ''}</td>
           <td data-label="Lines" className="num">{c.lineCount}</td><td data-label="Reserved" className="num"><Money cents={c.reservedCents} /></td>
           <td data-label="Pending" className="num"><Money cents={c.pendingCents} /></td><td data-label="Received" className="num"><Money cents={c.receivedCents} /></td>
-          <td data-label="Status"><span className={c.open ? 'pill warn' : 'pill'}>{c.open ? 'Open' : 'Closed'}</span></td>
+          <td data-label="Status"><span className={c.open ? 'pill warn' : 'pill neutral'}>{c.open ? 'Open' : 'Closed'}</span></td>
         </tr>)}</tbody></table>}
       <Pager base="/hsa/claims" params={filters} next={claims.data.nextCursor} />
     </div>

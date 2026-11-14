@@ -3,7 +3,7 @@ import { formatCents } from '../../../server/money.ts';
 import { pickParties } from '../../../server/services/expenses.ts';
 import { cashSummary, listPayments, pickPayableBills } from '../../../server/services/payments.ts';
 import {
-  Banner, Csrf, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, PAYMENT_METHODS, q80, requireSession, todayUtc, Truncated, type SearchParams,
+  Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, PAYMENT_METHODS, q80, requireSession, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
   const filters = Object.fromEntries(['q', 'memberId', 'providerId', 'from', 'to', 'unapplied'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listPayments(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Payments</h1>
     <Banner code={p.error} invalid={invalid} />
     <section className="metrics" aria-label="Cash">
@@ -35,7 +35,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
       <div><label className="checkbox"><input type="checkbox" name="unapplied" value="yes" defaultChecked={p.unapplied === 'yes'} /> Has unapplied cash</label></div>
       <div><button type="submit">Filter</button> <Link href="/payments">Clear</Link></div>
     </form>
-    {data.items.length === 0 ? <p>No payments match.</p> : <table className="stack">
+    {data.items.length === 0 ? <Empty>No payments match.</Empty> : <table className="stack">
       <thead><tr><th>Paid</th><th>Method and reference</th><th className="num">Amount</th><th className="num">Applied to bills</th><th className="num">Refunded</th><th className="num">Unapplied</th></tr></thead>
       <tbody>{data.items.map((x) => <tr key={x.id}>
         <td data-label="Paid"><Link href={`/payments/${x.id}`}>{x.paidOn}</Link> {x.voided && <span className="pill warn">Voided</span>}</td>

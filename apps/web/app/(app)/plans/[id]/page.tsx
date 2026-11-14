@@ -29,9 +29,10 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   }
   const matchedPairs = [...pairs.values()].filter((x) => x.cents > 0n);
   const open = installments.filter((i) => i.state !== 'paid');
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/plans">← Payment plans</Link></p>
     <h1>{plan.name}</h1>
-    <p><Link href="/plans">All plans</Link> · {plan.providerName} · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
+    <p>{plan.providerName} · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
     <Banner code={q.error} />
     {!active && <div className="card" role="note"><strong>Cancelled {plan.cancelledAt ? dateOf(plan.cancelledAt) : ''}.</strong> {plan.cancelReason}. History is kept; no new matches or revisions.</div>}
     <section className="metrics" aria-label="Plan totals">
