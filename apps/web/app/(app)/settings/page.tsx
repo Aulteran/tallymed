@@ -32,12 +32,12 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
       <label htmlFor="sourceUrl">Corresponding-source link (https)</label>
       <input id="sourceUrl" name="sourceUrl" type="url" maxLength={300} defaultValue={q.sourceUrl ?? g.sourceUrl ?? ''} placeholder={def.sourceUrl ?? 'https://'} />
       <p className="muted">Shown in the footer of every page, as the AGPL requires for a running build.</p>
-      <label htmlFor="sessionAbsoluteMinutes">Maximum session length (minutes)</label>
-      <input id="sessionAbsoluteMinutes" name="sessionAbsoluteMinutes" type="number" min={1} max={43200} defaultValue={q.sessionAbsoluteMinutes ?? m(g.sessionAbsoluteSeconds)} placeholder={m(def.sessionAbsoluteSeconds)} />
+      <label htmlFor="sessionAbsoluteMinutes">Maximum session length (minutes, at least 5)</label>
+      <input id="sessionAbsoluteMinutes" name="sessionAbsoluteMinutes" type="number" min={5} max={43200} defaultValue={q.sessionAbsoluteMinutes ?? m(g.sessionAbsoluteSeconds)} placeholder={m(def.sessionAbsoluteSeconds)} />
       <label htmlFor="sessionIdleMinutes">Sign out after inactivity (minutes)</label>
-      <input id="sessionIdleMinutes" name="sessionIdleMinutes" type="number" min={1} max={10080} defaultValue={q.sessionIdleMinutes ?? m(g.sessionIdleSeconds)} placeholder={m(def.sessionIdleSeconds)} />
+      <input id="sessionIdleMinutes" name="sessionIdleMinutes" type="number" min={5} max={10080} defaultValue={q.sessionIdleMinutes ?? m(g.sessionIdleSeconds)} placeholder={m(def.sessionIdleSeconds)} />
       <label htmlFor="invitationMinutes">Invitation links expire after (minutes)</label>
-      <input id="invitationMinutes" name="invitationMinutes" type="number" min={1} max={20160} defaultValue={q.invitationMinutes ?? m(g.invitationSeconds)} placeholder={m(def.invitationSeconds)} />
+      <input id="invitationMinutes" name="invitationMinutes" type="number" min={5} max={20160} defaultValue={q.invitationMinutes ?? m(g.invitationSeconds)} placeholder={m(def.invitationSeconds)} />
       <p className="muted">Current: sessions {m(c.sessionAbsoluteSeconds)} minutes at most, {m(c.sessionIdleSeconds)} minutes idle; invitations {m(c.invitationSeconds)} minutes. Existing sessions keep the length they were issued with; the inactivity limit applies at once.</p>
       <ConfirmPassword id="general-pw" />
       <button type="submit">Save general settings</button>

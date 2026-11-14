@@ -18,6 +18,14 @@ export interface ClientInfo {
   peer: string | null;
 }
 
+/** Some proxies add a port (`203.0.113.9:443`, `[2001:db8::1]:443`); the address is what counts. */
+export function stripPort(entry: string): string {
+  const v6 = /^\[([0-9a-fA-F:.]+)\](?::\d{1,5})?$/.exec(entry);
+  if (v6) return v6[1]!;
+  const v4 = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(entry);
+  return v4 ? v4[1]! : entry;
+}
+
 const matchers = new Map<string, IpMatcher>();
 /** Compiled matcher for a trusted list. Cached by content; invalid entries are skipped (they cannot be saved, only come from a bad edit). */
 export function trustedMatcher(entries: string[]): IpMatcher {
@@ -49,7 +57,7 @@ export function clientInfo(headers: Headers, config: AppConfig): ClientInfo {
   const entries = (headers.get('x-forwarded-for') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   let client: string | null = null;
   for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
+    const e = stripPort(entries[i]!);
     if (isIP(e) === 0) { client = null; break; } // anything unparseable means the chain cannot be believed
     client = normalizeIp(e);
     if (!trusted.has(e)) break;

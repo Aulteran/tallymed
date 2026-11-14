@@ -6,7 +6,7 @@ import { cookies, headers } from 'next/headers';
 import { appContext } from '../../server/context.ts';
 import { flashCookieName, readFlash } from '../../server/flash.ts';
 import { AppError } from '../../server/errors.ts';
-import { pageActor } from '../../server/http.ts';
+import { pageSession } from '../../server/http.ts';
 import { formatCents } from '../../server/money.ts';
 import { Icon } from './icons.tsx';
 import { errorMessage } from './messages.ts';
@@ -15,8 +15,10 @@ export type SearchParams = Promise<Record<string, string | string[] | undefined>
 
 export async function requireSession() {
   const ctx = appContext();
-  const session = await pageActor(ctx, await headers());
+  const session = await pageSession(ctx, await headers());
   if (!session) redirect('/login');
+  // An account holding a temporary password reaches nothing but the change-password page.
+  if (session.actor.mustChangePassword) redirect('/password/change');
   return { ctx, ...session };
 }
 

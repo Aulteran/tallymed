@@ -9,7 +9,7 @@ import { AppError } from '../errors.ts';
 import { withTransaction, type Pool } from '../db.ts';
 import { authorize, type Actor } from '../authz.ts';
 import { isMailAddress, loadSmtpSettings, sendEmail, EMAIL_SECRET_PURPOSE, type EmailResult } from '../email.ts';
-import { parseTrustedList } from '../ip.ts';
+import { isBroadEntry, parseTrustedList } from '../ip.ts';
 import { verifyPassword } from '../passwords.ts';
 import { SlidingWindowLimiter } from '../rate-limit.ts';
 import { recordAudit } from '../repositories/audit.ts';
@@ -29,12 +29,19 @@ const testLimiter = new SlidingWindowLimiter(TEST_EMAILS_PER_WINDOW, 5 * 60_000)
 export const resetSettingsLimitersForTests = () => { reauth.reset(); testLimiter.reset(); };
 
 /** Verifies the acting administrator's own password. Five wrong answers in 15 minutes lock this check for that administrator. */
-async function confirmPassword(pool: Pool, actor: Actor, password: string): Promise<void> {
+async function confirmPassword(pool: Pool, actor: Actor, password: string, requestId: string): Promise<void> {
   const wait = reauth.blockedFor(actor.userId);
   if (wait !== null) throw new AppError('rate_limited', 'Too many incorrect passwords', wait);
   const user = await findUserInHousehold(pool, actor.householdId, actor.userId);
   if (!user || user.status !== 'active' || !(await verifyPassword(user.passwordHash, password))) {
-    reauth.record(actor.userId);
+    // Audit is append-only, so only the first failure and the lockout in a window are recorded.
+    const failures = reauth.record(actor.userId);
+    if (failures === 1 || failures === REAUTH_FAILURES) {
+      await recordAudit(pool, {
+        householdId: actor.householdId, actorUserId: actor.userId, action: failures === 1 ? 'settings.reauth_failed' : 'settings.reauth_locked',
+        entityType: 'server_settings', requestId,
+      });
+    }
     throw new AppError('reauth_failed');
   }
   reauth.reset(actor.userId);
@@ -58,7 +65,7 @@ export const settingsSchemas = {
   general: z.strictObject({
     version, currentPassword, ...csrf,
     sourceUrl: z.preprocess(blank, z.string().trim().max(300).refine((u) => sourceUrl(u) !== null, 'https URL required').nullable().default(null)),
-    sessionAbsoluteMinutes: optInt(1, 43_200), sessionIdleMinutes: optInt(1, 10_080), invitationMinutes: optInt(1, 20_160),
+    sessionAbsoluteMinutes: optInt(5, 43_200), sessionIdleMinutes: optInt(5, 10_080), invitationMinutes: optInt(5, 20_160),
   }),
   documents: z.strictObject({ version, currentPassword, ...csrf, documentMaxMb: optInt(1, 25), documentQuotaMb: optInt(10, 1_048_576), documentRetentionDays: optInt(0, 3650) }),
   email: z.strictObject({
@@ -75,7 +82,7 @@ export const settingsSchemas = {
   proxy: z.strictObject({
     version, currentPassword, ...csrf,
     trustedProxies: z.preprocess((v) => (v === undefined ? '' : v), z.string().max(2000)),
-    useEnvironment: checkbox.optional(),
+    useEnvironment: checkbox.optional(), confirmBroad: checkbox.optional(),
   }),
   test: z.strictObject({ ...csrf }),
 };
@@ -129,7 +136,7 @@ const minutes = (m: number | null) => (m === null ? undefined : m * 60);
 export async function saveGeneral(pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string): Promise<void> {
   authorize(actor, 'settings:manage');
   const d = parse(settingsSchemas.general, input);
-  await confirmPassword(pool, actor, d.currentPassword);
+  await confirmPassword(pool, actor, d.currentPassword, requestId);
   const defaults = environmentDefaults(config);
   const absolute = minutes(d.sessionAbsoluteMinutes) ?? defaults.sessionAbsoluteSeconds;
   const idle = minutes(d.sessionIdleMinutes) ?? defaults.sessionIdleSeconds;
@@ -145,7 +152,7 @@ export async function saveGeneral(pool: Pool, config: AppConfig, actor: Actor, i
 export async function saveDocuments(pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string): Promise<void> {
   authorize(actor, 'settings:manage');
   const d = parse(settingsSchemas.documents, input);
-  await confirmPassword(pool, actor, d.currentPassword);
+  await confirmPassword(pool, actor, d.currentPassword, requestId);
   const defaults = environmentDefaults(config);
   const max = d.documentMaxMb ?? defaults.documentMaxBytes / 1048576;
   const quota = d.documentQuotaMb ?? defaults.documentQuotaBytes / 1048576;
@@ -164,16 +171,19 @@ export async function saveProxy(pool: Pool, config: AppConfig, actor: Actor, inp
   authorize(actor, 'settings:manage');
   const d = parse(settingsSchemas.proxy, input);
   let list: string[] | null = null;
+  let broad = false;
   if (!d.useEnvironment) {
     const entries = splitEntries(d.trustedProxies);
     if (entries.length > 20) throw new AppError('invalid_input', 'At most 20 entries');
     const parsed = parseTrustedList(entries);
     if (parsed.errors.length) throw new AppError('invalid_input', parsed.errors[0]);
     list = parsed.ok.map((e) => e.entry);
+    if (parsed.ok.some(isBroadEntry) && !d.confirmBroad) throw new AppError('confirmation_required');
+    broad = parsed.ok.some(isBroadEntry);
   }
-  await confirmPassword(pool, actor, d.currentPassword);
+  await confirmPassword(pool, actor, d.currentPassword, requestId);
   const value: ProxyValue = { trustedProxies: list };
-  await commit(pool, config, actor, requestId, 'proxy', d.version, () => ({ value, secret: null }), 'settings.proxy_updated');
+  await commit(pool, config, actor, requestId, 'proxy', d.version, () => ({ value, secret: null, extra: (broad ? { broad: true } : {}) as Detail }), 'settings.proxy_updated');
 }
 
 // ---------- email ----------
@@ -184,7 +194,7 @@ export async function saveEmail(pool: Pool, config: AppConfig, actor: Actor, inp
   if (d.security === 'none' && (d.username !== null || d.password !== '')) {
     throw new AppError('invalid_input', 'Credentials are never sent without encryption: choose TLS or STARTTLS, or remove the username');
   }
-  await confirmPassword(pool, actor, d.currentPassword);
+  await confirmPassword(pool, actor, d.currentPassword, requestId);
   const value: EmailValue = {
     host: d.host, port: d.port, security: d.security, username: d.username, fromAddress: d.fromAddress, fromName: d.fromName,
     allowRestrictedTargets: d.allowRestrictedTargets === true,
@@ -209,7 +219,7 @@ export async function saveEmail(pool: Pool, config: AppConfig, actor: Actor, inp
 export async function clearEmail(pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string): Promise<void> {
   authorize(actor, 'settings:manage');
   const d = parse(settingsSchemas.clearEmail, input);
-  await confirmPassword(pool, actor, d.currentPassword);
+  await confirmPassword(pool, actor, d.currentPassword, requestId);
   await commit(pool, config, actor, requestId, 'email', d.version, (current) => ({
     value: {}, secret: null, extra: { cleared: true, ...(current.secretCiphertext ? { password: 'cleared' } : {}) }, hide: ['username'],
   }), 'settings.email_cleared');

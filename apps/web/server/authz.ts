@@ -15,6 +15,8 @@ export interface Actor {
   role: Role;
   displayName: string;
   sessionId: string;
+  /** True until the person replaces an administrator-issued temporary password. Such an actor may only change the password or sign out. */
+  mustChangePassword: boolean;
 }
 
 export function can(actor: Actor, capability: Capability): boolean {

@@ -434,6 +434,74 @@ try {
     if (shots) await page.screenshot({ path: path.join(shots, `phone-${new URL(target).pathname.replace(/[0-9a-f-]{36}/, 'detail').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.png`), fullPage: true });
   }
   ok('overview queues and filtered list work; phone layout does not overflow');
+
+  // Password reset and forced change, end to end in a second browser context (the administrator's page keeps its own session).
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${origin}/operators`);
+  await page.fill('form[action="/api/operators/invite"] #email', 'sam@example.test');
+  await page.click('form[action="/api/operators/invite"] button[type=submit]');
+  const inviteLink = (await page.locator('code').innerText()).trim();
+  const samPassword = 'synthetic operator phrase';
+  const samContext = await browser.newContext({ colorScheme });
+  const sam = await samContext.newPage();
+  await sam.goto(inviteLink);
+  await sam.fill('#displayName', 'Sam Example');
+  await sam.fill('#password', samPassword);
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(/\/login\?notice=account_created/);
+  await sam.fill('#email', 'sam@example.test');
+  await sam.fill('#password', samPassword);
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(`${origin}/`);
+  assert.match(await sam.locator('main').innerText(), /Overview/);
+  await page.goto(`${origin}/operators`);
+  assert.equal(await page.locator('a', { hasText: 'Reset password' }).count(), 1, 'an administrator cannot reset their own row');
+  await page.click('a:has-text("Reset password")');
+  await page.waitForURL(/\/operators\/[0-9a-f-]{36}\/reset-password$/);
+  await a11y('reset password confirmation');
+  await page.click('form[action="/api/operators/reset-password"] button[type=submit]');
+  const temporary = (await page.locator('code').innerText()).trim();
+  assert.match(temporary, /^[A-Z2-9]{5}(-[A-Z2-9]{5}){3}$/);
+  // Sam's open session was revoked by the reset.
+  await sam.goto(`${origin}/bills`);
+  await sam.waitForURL(/\/login/);
+  await sam.fill('#email', 'sam@example.test');
+  await sam.fill('#password', samPassword);
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(/\/login\?error=unauthenticated/);
+  await sam.fill('#email', 'sam@example.test');
+  await sam.fill('#password', temporary);
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(`${origin}/password/change`);
+  await a11y('required password change');
+  for (const blocked of ['/', '/bills', '/operators', '/account/password', '/documents']) {
+    await sam.goto(`${origin}${blocked}`);
+    assert.equal(new URL(sam.url()).pathname, '/password/change', `${blocked} is closed until the password is changed`);
+  }
+  assert.equal((await sam.request.get(`${origin}/api/hsa/export`)).status(), 403);
+  await sam.fill('#newPassword', 'a new synthetic passphrase');
+  await sam.fill('#confirmPassword', 'a different synthetic passphrase');
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(/\/password\/change\?error=invalid_input/);
+  await sam.fill('#newPassword', 'a new synthetic passphrase');
+  await sam.fill('#confirmPassword', 'a new synthetic passphrase');
+  await sam.click('button[type=submit]');
+  await sam.waitForURL(`${origin}/?notice=password_changed`);
+  assert.match(await sam.locator('main').innerText(), /Your password was changed/);
+  await sam.goto(`${origin}/account/password`);
+  await sam.waitForURL(`${origin}/account/password`);
+  const samA11y = await new AxeBuilder({ page: sam }).analyze();
+  assert.deepEqual(samA11y.violations.map((v) => v.id), [], 'accessibility on change password');
+  await sam.goto(`${origin}/bills`);
+  assert.equal(new URL(sam.url()).pathname, '/bills', 'the account works normally after the change');
+  const reuse = await (await browser.newContext()).newPage();
+  await reuse.goto(`${origin}/login`);
+  await reuse.fill('#email', 'sam@example.test');
+  await reuse.fill('#password', temporary);
+  await reuse.click('button[type=submit]');
+  await reuse.waitForURL(/\/login\?error=unauthenticated/);
+  ok('administrator reset, forced password change and normal change work in a browser; the temporary password is dead afterwards');
+  await page.goto(`${origin}/`);
 } finally {
   await cleanup();
 }

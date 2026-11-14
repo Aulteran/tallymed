@@ -64,14 +64,16 @@ export function parseTrustedEntry(raw: string): ParsedEntry | { error: string } 
   const [addr, len, ...rest] = entry.split('/');
   const ip = addr ? parseIp(addr) : null;
   if (!ip || rest.length > 0 || addr!.includes('%')) return { error: `"${entry.slice(0, 60)}" is not an IP address or CIDR range` };
-  const max = ip.family === 4 ? 32 : 128;
-  let prefix = max;
+  const written = addr!.includes(':') ? 128 : 32; // how the entry was written; a mapped IPv6 form carries an IPv6 prefix length
+  let prefix = ip.family === 4 ? 32 : 128;
   if (len !== undefined) {
-    if (!/^\d{1,3}$/.test(len) || Number(len) > max) return { error: `"${entry.slice(0, 60)}" has an invalid prefix length` };
-    prefix = ip.family === 4 && /:/.test(addr!) ? Number(len) - 96 : Number(len);
+    if (!/^\d{1,3}$/.test(len) || Number(len) > written) return { error: `"${entry.slice(0, 60)}" has an invalid prefix length` };
+    prefix = ip.family === 4 && written === 128 ? Number(len) - 96 : Number(len);
     if (prefix < 0) return { error: `"${entry.slice(0, 60)}" is too broad` };
   }
   if (prefix < (ip.family === 4 ? MIN_V4_PREFIX : MIN_V6_PREFIX)) return { error: `"${entry.slice(0, 60)}" is too broad to trust; list your proxy's own address or a small range` };
+  const kind = classifyAddress(ip.text);
+  if (kind === 'unspecified' || kind === 'multicast') return { error: `"${entry.slice(0, 60)}" is not a usable proxy address` };
   return { entry, family: ip.family, address: ip.text, prefix };
 }
 
@@ -83,6 +85,16 @@ export function parseTrustedList(entries: string[]): { ok: ParsedEntry[]; errors
     if ('error' in r) errors.push(r.error); else ok.push(r);
   }
   return { ok, errors };
+}
+
+/**
+ * Ranges worth a warning and an explicit confirmation: anything wider than /16 (IPv4) or /48 (IPv6), and any range of public addresses
+ * wider than /24 (IPv4) or /64 (IPv6). Trusting a range means any host in it that can reach the app directly can forge client addresses.
+ */
+export function isBroadEntry(e: ParsedEntry): boolean {
+  const v4 = e.family === 4;
+  if (e.prefix < (v4 ? 16 : 48)) return true;
+  return classifyAddress(e.address) === 'public' && e.prefix < (v4 ? 24 : 64);
 }
 
 export class IpMatcher {
@@ -103,7 +115,7 @@ export class IpMatcher {
 
 // ---------- address classes (SMTP target policy) ----------
 
-export type AddressClass = 'public' | 'private' | 'loopback' | 'link_local' | 'metadata' | 'unspecified' | 'multicast';
+export type AddressClass = 'reserved' | 'public' | 'private' | 'loopback' | 'link_local' | 'metadata' | 'unspecified' | 'multicast';
 
 const V4_METADATA = ['100.100.100.200', '192.0.0.192', '168.63.129.16'];
 
@@ -134,5 +146,11 @@ export function classifyAddress(text: string): AddressClass {
   if ((p[0]! & 0xff00) === 0xff00) return 'multicast';
   if (p[0] === 0xfd00 && p[1] === 0x0ec2 && p.slice(2, 7).every((n) => n === 0) && p[7] === 0x254) return 'metadata';
   if ((p[0]! & 0xfe00) === 0xfc00) return 'private';
+  // IPv4-translated (::ffff:0:a.b.c.d) is judged as that IPv4 address.
+  if (p.slice(0, 4).every((n) => n === 0) && p[4] === 0xffff && p[5] === 0) return classifyAddress(`${p[6]! >> 8}.${p[6]! & 255}.${p[7]! >> 8}.${p[7]! & 255}`);
+  // Only global unicast (2000::/3) is public. Everything else (IPv4-compatible ::a.b.c.d, site-local fec0::/10, local-use NAT64
+  // 64:ff9b:1::/48, discard 100::/64 and all other unassigned space) is reserved, and so are Teredo (2001::/32) and documentation (2001:db8::/32).
+  if ((p[0]! & 0xe000) !== 0x2000) return 'reserved';
+  if (p[0] === 0x2001 && (p[1] === 0 || p[1] === 0x0db8)) return 'reserved';
   return 'public';
 }

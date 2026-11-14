@@ -9,9 +9,9 @@
 | M04 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone and financial rechecks approved head `5d106ab` with CI green; squash-merged as `f26beb8` (PR #6). Evidence in the M04 handoff. Next: M05 (migration 0007) only when started. |
 | M05 | Accepted | Accepted 2026-11-13 under the owner's preauthorization after the milestone and security rechecks approved head `2f8d50f` with CI green; squash-merged as `a5a155d` (PR #7). Evidence in the M05 handoff. Next: M06 and M07 only when started. |
 | M06 | Accepted | Accepted 2026-11-13 by the owner ("Okay, accepted") after the milestone, financial and security reviews approved head `844e9a5` with CI green; squash-merged as `5cac939` (PR #8). Evidence in the M06 handoff. Next: M07 only when started. |
-| M07 | Merged, awaiting owner acceptance | First slice squash-merged as `d76e1e0` (PR #9) after the milestone and security reviews approved head `a7571d0` with CI green. Still required before acceptance: the owner steps below, the fresh-install, upgrade and isolated-restore drills against published images, release notes and the owner's release decision. Next: owner steps, then drills. |
+| M07 | Accepted | Accepted by the owner on 2026-11-14 ("I accept M07") after the first slice was squash-merged as `d76e1e0` (PR #9; milestone and security reviews approved head `a7571d0`, CI green). The owner will run the real Docker, TLS, firewall, reverse-proxy and MCP drills on their homelab after the admin settings (trusted proxy) and password reset work lands; those drills are tracked in `docs/release-drills.md` and the release stays untagged until they pass. Next: licence review and release preparation (PR against `dev`), then the owner's drills and release decision. |
 
-Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. Milestones M00 to M06 are accepted (see the table above). The Pages workflow deploys on every push to `main`, the release branch.
+Implemented here are the marketing foundation and descriptive public roadmap, shared SVG brand assets, web shell and liveness route, development PostgreSQL/Compose configuration, dependency lockfile, verification tests and GitHub workflows. Milestones M00 to M07 are accepted (see the table above). The Pages workflow deploys on every push to `main`, the release branch.
 
 For each active or accepted milestone, record the GitHub issue and PR, tested and reviewed SHA, checks and blockers, decisions, remaining work, and the next owner/action. To record acceptance include the merged commit and deployment/release evidence when required. Keep real household records, logs and credentials out of this file.
 
@@ -121,12 +121,22 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 
 ## M07 handoff
 
+- **Acceptance (2026-11-14).** The owner accepted M07 and asked for the remaining release work (licence review, release notes) to be done. Acceptance does not mean a release exists: no tag or GitHub Release has been created, the images have not been run outside CI, and the fresh-install, upgrade, isolated-restore, reverse-proxy and MCP drills are still to be run by the owner against the published images (see below and `docs/release-drills.md`).
+
 - Branch: `m07-self-hosted-release-and-dev-branching`, PR #9, reviewed head `a7571d0`, squash-merged as `d76e1e0`. Reviews (milestone and security) are comments on the PR; the milestone review's blocking finding (`setup-role` in the web image) was fixed and both approved.
 - Changed: `dev` branching model (CLAUDE.md, README, COORDINATOR.md, CLOUD-INSTRUCTIONS.md, the implement-milestone skill, development and GitHub guides); `.github/workflows/publish.yml` (a push to `main` builds `infra/Dockerfile.web` and `infra/Dockerfile.mcp` and pushes `ghcr.io/<owner>/tallymed-web` and `tallymed-mcp` with `sha-<12>` and `latest` tags; job permissions `contents: read` and `packages: write`; no secret except `GITHUB_TOKEN`; no third-party action, only `actions/checkout` plus the Docker CLI); CI also runs on pushes to `dev` and validates `deploy/compose.release.yaml`; `deploy/compose.release.yaml` and `deploy/release.env.example` (published-image operator stack, required secrets, private port binding); `docs/operations.md` (install, proxy topology and nginx example, upgrade and rollback limits, encrypted backup, isolated restore drill, integrity checks, known pre-deployment gaps, release record).
 - Owner steps GitHub requires and a thread cannot do without repository admin: create `dev` from `main` after this PR merges, make `dev` the default branch (Settings -> Branches), confirm the `github-pages` environment still allows deployments from `main`, make the ghcr packages public if wanted, move any branch rules to `dev` and `main`, and protect `main` (require the CI checks, restrict direct pushes) because a push to `main` publishes images; enable private vulnerability reporting for `SECURITY.md`.
 - Not done and still required before acceptance: fresh-install, upgrade and isolated-restore drills against published images (no Docker daemon or registry in the implementation environment), a run behind a real reverse proxy, end-to-end ledger reconciliation after a restore, the dependency licence and source-notice review, the secret-scan check, release notes, and the site update with a version and install CTA. None of the public site copy was changed: no release exists yet.
 - Carried into every deployment (also in the guide): no password change or reset flow, shared-address sign-in lockout, the `setup-role` step for the assistant (including after a restore), a best-effort PDF scan, a per-process upload rate limit.
 - `actions/checkout@v6` is referenced by tag like the other workflows; resolving a full commit SHA needs a registry lookup that was not available here. Pin it to a SHA before the first stable release if you want immutable action references.
+
+### M07 release preparation (after acceptance, PR against `dev`)
+
+- Changed: `docs/licensing.md` (AGPL and dependency licence review, verdict and findings), `THIRD-PARTY-NOTICES.md`, `scripts/generate-third-party-licenses.mjs` and both Dockerfiles (licence texts of production dependencies, `LICENSE` and the notices are now inside the images at `/app/licenses/`), `scripts/check-restore-reconciliation.mjs` and `npm run test:restore` (synthetic ledger dumped with `pg_dump`, restored with `pg_restore`, every reported figure compared; added to CI), `CHANGELOG.md` with the draft 0.1.0 notes and known limitations, `docs/release-drills.md` (owner checklist and commands for the drills and the release steps).
+- Secret scan: all 25 commits on every branch searched for common token and key patterns, credential assignments and key/env/dump files; only test fixtures matched. The owner should repeat it on the release commit and enable GitHub secret scanning.
+- Verified locally (Node 22.23, PostgreSQL 16.15 disposable): `npm ci`, `npm run build`, `npm run test:restore` (3 bills, 2 payments, identical figures after restore, migrate a no-op), the licence-text generator against a simulated `npm ci --omit=dev` stage. Not verified: the Docker builds of the changed Dockerfiles (no Docker daemon; CI's Compose smoke test builds them), the CI step that installs the PostgreSQL 17 client, real TLS, firewall, MCP client.
+- Owner only: everything in `docs/release-drills.md`, GitHub settings (default branch, `main` protection, public packages, vulnerability reporting), the release decision and tag.
+- Open dependency on other work: the admin trusted-proxy settings and the password reset flow are being built separately. When they land, update the known-limitations list in `CHANGELOG.md`, `docs/operations.md` and the proxy drill in `docs/release-drills.md`.
 
 ## First-run setup token handoff (owner request after M07)
 
@@ -142,9 +152,15 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Checks run locally and results: see the PR description.
 - Next: independent review, owner merge. The public site changes only when `dev` is next merged into `main`.
 
+## Password change and administrator reset (owner request 2026-11-14, phase 1)
+
+- Branch: `admin-password-reset-forced-change`, PR against `dev` (number and tested head are on the PR). Independent security review pending.
+- Changed: migration 0009 (`must_change_password`, `password_resets`), `server/services/credentials.ts`, `repositories/password-resets.ts`, the closed-by-default gate in `server/http.ts`, sign-in re-check under a row lock, `/account/password`, `/password/change`, Operators reset flow, login copy, `docs/security.md`, `docs/operations.md`, `docs/development.md`, DECISIONS.md, `tests/web/password-reset.test.mjs`.
+- Still open: phase 2 (forgot-password email, needs SMTP), see DECISIONS.md for the model constraint it must respect.
+
 ## Admin settings, SMTP and trusted proxy handoff
 
-- Branch: `admin-settings-and-smtp` (PR against `dev`, see the PR for the head SHA). Migration `0009_server_settings.sql`; renumber at merge if the password-reset work takes 0009 first.
+- Branch: `admin-settings-and-smtp` (PR against `dev`, see the PR for the head SHA). Migration `0010_server_settings.sql` (0009 is password reset).
 - Changed: Server settings pages (General, Documents, Reverse proxy, Email), SMTP helper `server/email.ts`, encrypted SMTP password (`TALLYMED_SECRETS_KEY`), trusted proxy address/CIDR list with the signed peer address, audit entries, docs and decisions.
 - Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test` (201), build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`, a real SMTP server with STARTTLS/TLS, a real reverse proxy.
 - Next: owner test on the homelab proxy; independent security review of spoofed `X-Forwarded-For` handling.

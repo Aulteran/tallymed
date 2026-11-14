@@ -1,6 +1,7 @@
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { can } from '../../../../server/authz.ts';
+import { parseTrustedList, isBroadEntry } from '../../../../server/ip.ts';
 import { PROXY_SECRET_HEADER, clientInfo } from '../../../../server/proxy.ts';
 import { loadSettingsView } from '../../../../server/services/settings.ts';
 import { environmentDefaults } from '../../../../server/settings.ts';
@@ -22,6 +23,7 @@ export default async function ProxyPage({ searchParams }: { searchParams: Search
   const stored = v.proxy.value.trustedProxies;
   const envList = environmentDefaults(ctx.config).trustedProxies;
   const text = q.trustedProxies ?? (Array.isArray(stored) ? stored.join('\n') : envList.join('\n'));
+  const broad = parseTrustedList(ctx.config.trustedProxies).ok.filter(isBroadEntry).map((e) => e.entry);
   const saved = savedMessage(q.saved);
   const scheme = info.trustedProxy ? (h.get('x-forwarded-proto')?.split(',').at(-1)?.trim() ?? null) : null;
   return <main id="main" className="wide">
@@ -30,6 +32,8 @@ export default async function ProxyPage({ searchParams }: { searchParams: Search
     <SettingsTabs current="/settings/proxy" />
     <Banner code={q.error} />
     {saved && <p role="status" className="card">{saved}</p>}
+
+    {broad.length > 0 && <p role="alert" className="error">Warning: the trusted list currently contains very broad ranges ({broad.join(', ')}). Any machine in those ranges that can reach TallyMed directly can forge client addresses and so evade or aim the per-address sign-in lockout. List only your proxy's own address if you can.</p>}
 
     <div className="card">
       <h2>What the app sees for this request</h2>
@@ -53,7 +57,9 @@ export default async function ProxyPage({ searchParams }: { searchParams: Search
       <h2>Trusted proxy addresses</h2><Csrf token={csrf} /><input type="hidden" name="version" value={v.proxy.version} />
       <label htmlFor="trustedProxies">IP addresses or CIDR ranges, one per line</label>
       <textarea id="trustedProxies" name="trustedProxies" rows={4} maxLength={2000} defaultValue={text} placeholder={'192.168.1.10\n172.18.0.0/16\n2001:db8::10'} />
-      <p className="muted">Use the address your proxy connects from, as shown above as the connection address. Behind Docker this is often the bridge gateway (for example 172.18.0.1) or the proxy container's address. List the narrowest range that works. Very broad ranges (shorter than /8 for IPv4, /32 for IPv6) are refused because trusting them means trusting anyone. Leave empty to trust nothing.</p>
+      <p className="muted">Use the address your proxy connects from, as shown above as the connection address. Behind Docker this is often the bridge gateway (for example 172.18.0.1) or the proxy container's address. List the narrowest range that works. Ranges shorter than /8 (IPv4) or /32 (IPv6) are refused outright. Anything wider than /16 (IPv4) or /48 (IPv6), or a public range wider than /24 or /64, needs the confirmation box below, and a warning stays on this page while one is in force. Leave empty to trust nothing.</p>
+      <p className="muted">Notes: only the proxy nearest to the app is checked against this list, then the app reads X-Forwarded-For from the right, skipping any listed proxies, so list every proxy in a chain (a CDN edge you do not list is reported as the client). A port after the address (203.0.113.9:443) is ignored. IPv6 clients count per full address. A trusted proxy must send X-Forwarded-Proto: https or sign-ins are refused.</p>
+      <label><input type="checkbox" name="confirmBroad" value="yes" /> I understand that a broad range lets any machine in it forge client addresses</label>
       {ctx.config.trustedProxies.length > 0 && !Array.isArray(stored) && <p className="muted">Currently from TALLYMED_TRUSTED_PROXIES: {envList.join(', ')}.</p>}
       <label><input type="checkbox" name="useEnvironment" value="yes" defaultChecked={q.error === undefined && !Array.isArray(stored) && envList.length > 0} /> Use the value from TALLYMED_TRUSTED_PROXIES instead of this list</label>
       <ConfirmPassword id="proxy-pw" />

@@ -6,7 +6,7 @@ import test from 'node:test';
 import { loadConfig, parseSecretsKey, parseTrustedProxies } from '../../apps/web/server/config.ts';
 import { deliver, resolveSmtpTarget, resetEmailLimiterForTests } from '../../apps/web/server/email.ts';
 import * as handlers from '../../apps/web/server/http.ts';
-import { classifyAddress, normalizeIp, parseTrustedEntry } from '../../apps/web/server/ip.ts';
+import { classifyAddress, isBroadEntry, normalizeIp, parseTrustedEntry } from '../../apps/web/server/ip.ts';
 import { stampPeer } from '../../apps/web/server/peer.ts';
 import { clientInfo } from '../../apps/web/server/proxy.ts';
 import { SlidingWindowLimiter } from '../../apps/web/server/rate-limit.ts';
@@ -42,17 +42,21 @@ test('ip helpers: parsing, trusted entries and address classes', () => {
   assert.equal(normalizeIp('2001:DB8::1'), '2001:db8:0:0:0:0:0:1');
   assert.equal(normalizeIp('not an ip'), null);
   for (const ok of ['192.168.1.10', '10.0.0.0/8', '172.18.0.0/16', '2001:db8::10', '2001:db8::/32']) assert.ok(!('error' in parseTrustedEntry(ok)), ok);
-  for (const bad of ['0.0.0.0/0', '::/0', '1.2.3.4/7', '2001::/16', 'example.com', '1.2.3.4/33', '1.2.3.4/x', '1.2.3.4/8/9', '', '256.1.1.1']) assert.ok('error' in parseTrustedEntry(bad), bad);
+  for (const bad of ['0.0.0.0/0', '::/0', '1.2.3.4/7', '2001::/16', 'example.com', '1.2.3.4/33', '1.2.3.4/x', '1.2.3.4/8/9', '', '256.1.1.1', '0.0.0.0/8', '0.1.2.3', '224.0.0.1', '::', 'ff02::1']) assert.ok('error' in parseTrustedEntry(bad), bad);
+  assert.ok(!('error' in parseTrustedEntry('::ffff:10.1.2.0/120')) && parseTrustedEntry('::ffff:10.1.2.0/120').prefix === 24);
+  assert.deepEqual(['8.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '2001:db8::/32', '8.8.8.0/23'].map((e) => isBroadEntry(parseTrustedEntry(e))), [true, true, true, true, true]);
+  assert.deepEqual(['192.168.1.10', '172.18.0.0/16', '8.8.8.0/24', '192.168.0.0/16', '2001:db8:1::/48'].map((e) => isBroadEntry(parseTrustedEntry(e))), [false, false, false, false, false]);
   const classes = { '8.8.8.8': 'public', '10.1.1.1': 'private', '192.168.0.5': 'private', '127.0.0.1': 'loopback', '::1': 'loopback', '169.254.169.254': 'metadata', '169.254.1.1': 'link_local',
     'fe80::1': 'link_local', '0.0.0.0': 'unspecified', '::': 'unspecified', '224.0.0.1': 'multicast', '100.100.100.200': 'metadata', 'fd00:ec2::254': 'metadata', '::ffff:127.0.0.1': 'loopback',
-    '::ffff:169.254.169.254': 'metadata', '64:ff9b::a9fe:a9fe': 'metadata', '2002:7f00:1::1': 'loopback', '2606:4700::1111': 'public' };
+    '::ffff:169.254.169.254': 'metadata', '::127.0.0.1': 'reserved', '::ffff:0:127.0.0.1': 'loopback', '::ffff:0:169.254.169.254': 'metadata', '64:ff9b:1::7f00:1': 'reserved', 'fec0::1': 'reserved',
+    '2001:0:4136:e378:8000:63bf:3fff:fdd2': 'reserved', '2001:db8::1': 'reserved', '100::1': 'reserved', '::2': 'reserved', '64:ff9b::a9fe:a9fe': 'metadata', '2002:7f00:1::1': 'loopback', '2606:4700::1111': 'public' };
   for (const [ip, c] of Object.entries(classes)) assert.equal(classifyAddress(ip), c, ip);
 });
 
 test('secrets key: validated, never echoed; encryption binds purpose and key', () => {
   assert.equal(parseSecretsKey(''), null);
   assert.ok(parseSecretsKey(KEY));
-  for (const bad of ['short', 'not base64 !!', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=']) assert.throws(() => parseSecretsKey(bad), (e) => !e.message.includes(bad));
+  for (const bad of ['short', 'not base64 !!', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', Buffer.from('abcdefgh'.repeat(4)).toString('base64')]) assert.throws(() => parseSecretsKey(bad), (e) => !e.message.includes(bad));
   const key = parseSecretsKey(KEY);
   const sealed = encryptSecret(key, 'email.smtp_password', 'hunter-two-example');
   assert.ok(!sealed.includes('hunter'));
@@ -347,4 +351,39 @@ test('proxy settings: saved by the administrator, precedence over the environmen
 test('config: trusted proxy and secrets key environment values are validated', () => {
   assert.throws(() => loadConfig({ DATABASE_URL: 'postgres://x/y', TALLYMED_CANONICAL_ORIGIN: 'https://t.example', TALLYMED_TRUSTED_PROXIES: 'nope' }), /TALLYMED_TRUSTED_PROXIES/);
   assert.throws(() => loadConfig({ DATABASE_URL: 'postgres://x/y', TALLYMED_CANONICAL_ORIGIN: 'https://t.example', TALLYMED_SECRETS_KEY: 'tooshort' }), /TALLYMED_SECRETS_KEY/);
+});
+
+test('broad trusted ranges need confirmation and leave a warning; reauth failures are audited; floors and ports', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const save = (v, list, extra = {}) => act(t.ctx, t.admin, 'proxy', { version: v, currentPassword: PASSWORD, trustedProxies: list, ...extra });
+    for (const list of ['8.0.0.0/8', '10.0.0.0/8', '2001:db8::/32', '8.8.8.0/23']) {
+      const r = await save(0, list);
+      assert.equal(r.status, 400, list); assert.equal(await err(r), 'confirmation_required', list);
+    }
+    assert.equal((await t.db.pool.query('select count(*)::int n from server_settings')).rows[0].n, 0);
+    assert.equal((await save(0, '10.0.0.0/8', { confirmBroad: 'yes' })).status, 200);
+    assert.equal((await audit(t.db)).at(-1).detail.broad, true);
+    assert.equal((await save(1, '172.18.0.0/16\n192.168.1.10')).status, 200); // narrow lists need no confirmation
+    assert.equal((await audit(t.db)).at(-1).detail.broad, undefined);
+    assert.equal((await save(2, '0.0.0.0/8', { confirmBroad: 'yes' })).status, 400);
+    // The first wrong password and the lockout are audited, not every attempt.
+    for (let i = 0; i < 7; i++) await act(t.ctx, t.admin, 'email', EMAIL({ currentPassword: 'wrong password 123' }));
+    assert.deepEqual((await audit(t.db)).filter((a) => a.action.startsWith('settings.reauth')).map((a) => a.action), ['settings.reauth_failed', 'settings.reauth_locked']);
+    resetSettingsLimitersForTests();
+    // Session and invitation floors.
+    for (const f of ['sessionIdleMinutes', 'sessionAbsoluteMinutes', 'invitationMinutes']) {
+      assert.equal((await act(t.ctx, t.admin, 'general', { version: 0, currentPassword: PASSWORD, [f]: '4' })).status, 400, f);
+    }
+    assert.equal((await act(t.ctx, t.admin, 'general', { version: 0, currentPassword: PASSWORD, sessionIdleMinutes: '5' })).status, 200);
+  } finally { await t.db.drop(); }
+});
+
+test('forwarded client addresses with a port are read as the address', () => {
+  const c = testConfig({ TALLYMED_TRUSTED_PROXIES: '10.0.0.1' });
+  const from = (xff) => clientInfo(new Headers({ ...peerHeaders('10.0.0.1'), 'x-forwarded-for': xff }), c).ip;
+  assert.equal(from('9.9.9.9:443'), '9.9.9.9');
+  assert.equal(from('[2001:db8::7]:5000'), '2001:db8:0:0:0:0:0:7');
+  assert.equal(from('1.1.1.1, 9.9.9.9:80'), '9.9.9.9');
+  assert.equal(from('9.9.9.9:99999x'), null);
 });

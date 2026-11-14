@@ -17,6 +17,11 @@ const MESSAGES: Record<string, string> = {
   rate_limited: 'Too many attempts. Wait a few minutes (up to fifteen) and try again.',
   reauth_failed: 'Your password was not correct. Nothing was changed.',
   secrets_key_missing: 'The SMTP password cannot be saved because the server has no TALLYMED_SECRETS_KEY. Set it in the server environment (openssl rand -base64 32), restart, and try again.',
+  password_change_required: 'Choose a new password before continuing.',
+  temporary_password_expired: 'That temporary password has expired or was already used. Ask an administrator for a new one.',
+  self_reset_blocked: 'You cannot reset your own password here. Use Password in the menu to change it.',
+  reset_not_allowed: 'That account cannot be reset right now. It must be active, and the household must keep an administrator who can sign in.',
+  confirmation_required: 'That range is very broad: every machine in it that can reach the app directly could forge client addresses. Tick the confirmation box if you are sure, or list only your proxy\'s own address.',
   internal: 'Something went wrong. Try again.',
 };
 

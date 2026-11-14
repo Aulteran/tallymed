@@ -3,7 +3,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { can } from '../../server/authz.ts';
 import { appContext } from '../../server/context.ts';
-import { pageActor } from '../../server/http.ts';
+import { pageSession } from '../../server/http.ts';
 import { pendingProposalCount } from '../../server/services/assistant.ts';
 import { Lockup } from '../components/brand.tsx';
 import { ShellNav, type NavGroup } from '../components/ShellNav.tsx';
@@ -15,8 +15,9 @@ export const dynamic = 'force-dynamic';
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?';
 
 export default async function ShellLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const session = await pageActor(appContext(), await headers());
+  const session = await pageSession(appContext(), await headers());
   if (!session) redirect('/login');
+  if (session.actor.mustChangePassword) redirect('/password/change');
   const { actor, csrf } = session;
   const pending = await pendingProposalCount(appContext().pool, actor);
   const admin: NavGroup['items'] = [
@@ -51,6 +52,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
           </div>
           <div className="account-actions">
             <ThemeToggle initial={await readTheme()} />
+            <Link href="/account/password" className="ghost-link">Password</Link>
             <form method="post" action="/api/auth/logout">
               <input type="hidden" name="csrf" value={csrf} />
               <button type="submit" className="ghost">Sign out</button>
