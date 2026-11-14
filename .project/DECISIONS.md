@@ -162,6 +162,7 @@ Known limitations (owner-visible):
 
 ## M07 Self-hosted release
 
+- **Acceptance (owner, 2026-11-14).** The owner accepted M07 ("I accept M07") with the real Docker run, TLS, firewall and MCP testing still to be done on their homelab. Remaining release work is licence review, release notes and drill checklists; the first tag is the owner's decision after those drills.
 - **Branching and release (owner).** `dev` is the default branch and the target for work. `main` is the release branch; a push to `main` publishes the web and MCP images to ghcr.io and deploys the public site. Images are tagged `sha-<12>` and `latest`; operators pin a `sha-` tag or digest. The publish workflow uses only `GITHUB_TOKEN` and the Docker CLI.
 - **Pinning.** Operators set `TALLYMED_WEB_IMAGE` (and `TALLYMED_MCP_IMAGE` for the assistant) to a full image reference: a `sha-<12>` tag or an `@sha256:` digest. The sha tag can be re-pushed by a workflow re-run, so the digest the publish job prints is the immutable pin.
 - **`setup-role` runs from the assistant image.** The web image deliberately does not carry the listener or the MCP SDK; CI runs `setup-role` and the disabled-listener path in the built assistant image.
