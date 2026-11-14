@@ -12,14 +12,27 @@ import { revokeUserSessions } from '../repositories/sessions.ts';
 import {
   countActiveAdmins, findUserByEmail, findUserInHousehold, insertUser, listUsers, updateUserRoleStatus,
 } from '../repositories/users.ts';
+import { listPending } from '../repositories/password-resets.ts';
 import { digest, newToken } from '../tokens.ts';
+import { ADMIN_LOCK } from './credentials.ts';
 import { parse, schemas } from '../validation.ts';
 
-const ADMIN_LOCK = 7_203_403;
 
+/** Accounts with their pending temporary-password state (never any secret) for the operator list. */
 export async function listOperators(pool: Pool, actor: Actor) {
   authorize(actor, 'operators:manage');
-  return listUsers(pool, actor.householdId);
+  const [users, pending] = await Promise.all([listUsers(pool, actor.householdId), listPending(pool, actor.householdId)]);
+  const byUser = new Map(pending.map((p) => [p.userId, p]));
+  return users.map((u) => ({ ...u, pendingReset: byUser.get(u.id) ?? null }));
+}
+
+/** One account for the reset confirmation page. A missing account and one in another household look the same. */
+export async function getOperatorForReset(pool: Pool, actor: Actor, id: string) {
+  authorize(actor, 'operators:manage');
+  const u = await findUserInHousehold(pool, actor.householdId, id);
+  if (!u) throw new AppError('not_found');
+  const { passwordHash: _omit, ...rest } = u;
+  return rest;
 }
 
 export async function listInvitations(pool: Pool, actor: Actor) {

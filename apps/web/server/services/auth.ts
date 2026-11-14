@@ -7,7 +7,8 @@ import { log } from '../log.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import { findActiveSession, insertSession, revokeSession, touchSession } from '../repositories/sessions.ts';
 import { clearAccountFailures, countRecentFailures, lockThrottleKeys, pruneAttempts, pruneKeys, recordAttempt } from '../repositories/throttle.ts';
-import { findUserByEmail } from '../repositories/users.ts';
+import { findPending, markUsed } from '../repositories/password-resets.ts';
+import { findUserByEmail, findUserInHousehold } from '../repositories/users.ts';
 import { digest, emailKey, newToken } from '../tokens.ts';
 
 export const THROTTLE_WINDOW_SECONDS = 15 * 60;
@@ -15,7 +16,11 @@ export const MAX_ACCOUNT_FAILURES = 5;
 export const MAX_IP_FAILURES = 20;
 const TOUCH_INTERVAL_MS = 60_000;
 
-export interface LoginResult { token: string; expiresAt: Date; actor: Pick<Actor, 'userId' | 'householdId' | 'role'> }
+export interface LoginResult {
+  token: string; expiresAt: Date; actor: Pick<Actor, 'userId' | 'householdId' | 'role'>;
+  /** True when the sign-in used a temporary password: the session can only choose a new password or sign out. */
+  passwordChangeRequired: boolean;
+}
 
 /**
  * Verifies credentials with throttling. Failures return one generic error whether or not the account
@@ -61,8 +66,23 @@ export async function login(
     throw new AppError('unauthenticated', 'Invalid email or password');
   }
   const token = newToken();
-  const expiresAt = new Date(Date.now() + config.sessionAbsoluteSeconds * 1000);
-  await withTransaction(pool, async (tx) => {
+  // A temporary-password session lives only long enough to choose a new password.
+  const lifetimeSeconds = user.mustChangePassword
+    ? Math.min(config.sessionAbsoluteSeconds, config.passwordChangeSessionSeconds) : config.sessionAbsoluteSeconds;
+  const expiresAt = new Date(Date.now() + lifetimeSeconds * 1000);
+  const outcome = await withTransaction(pool, async (tx) => {
+    // Re-read under a row lock: the password was verified outside this transaction, so a concurrent reset, password change,
+    // disable or temporary-password sign-in must not let this attempt through on stale credentials.
+    const current = await findUserInHousehold(tx, user.householdId, user.id, true);
+    if (!current || current.status !== 'active' || current.passwordHash !== user.passwordHash) return 'stale' as const;
+    let resetId: string | null = null;
+    if (current.mustChangePassword) {
+      // Single use: the first successful sign-in with a temporary password consumes it. Expired, replaced or
+      // already-used credentials are refused even though the password itself matched.
+      const pending = await findPending(tx, current.id, true);
+      if (!pending || pending.status !== 'open' || pending.expired || !(await markUsed(tx, pending.id))) return 'expired' as const;
+      resetId = pending.id;
+    }
     if (input.previousToken) {
       const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds);
       if (prev) await revokeSession(tx, prev.sessionId, 'rotated_at_login');
@@ -71,12 +91,33 @@ export async function login(
       userId: user.id, householdId: user.householdId, tokenHash: digest(token), expiresAt,
     });
     await clearAccountFailures(tx, key);
+    if (resetId) {
+      await recordAudit(tx, {
+        householdId: user.householdId, actorUserId: user.id, action: 'auth.temporary_password_used', entityType: 'password_reset',
+        entityId: resetId, requestId: input.requestId,
+      });
+    }
     await recordAudit(tx, {
       householdId: user.householdId, actorUserId: user.id, action: 'auth.login', entityType: 'session', entityId: sessionId,
-      requestId: input.requestId,
+      requestId: input.requestId, detail: resetId ? { restricted: true } : {},
     });
+    return 'ok' as const;
   });
-  return { token, expiresAt, actor: { userId: user.id, householdId: user.householdId, role: user.role } };
+  if (outcome === 'stale') throw new AppError('unauthenticated', 'Invalid email or password');
+  if (outcome === 'expired') {
+    // The password matched, so the caller holds the credential and may be told why it no longer works. Audit stays bounded like
+    // other failures: the attempt was already counted toward the lockout above.
+    if (accountFailuresBefore === 0) {
+      await recordAudit(pool, {
+        householdId: user.householdId, actorUserId: null, action: 'auth.login_failed', entityType: 'session', requestId: input.requestId,
+        detail: { reason: 'temporary_password_unusable' },
+      });
+    }
+    throw new AppError('temporary_password_expired');
+  }
+  return {
+    token, expiresAt, actor: { userId: user.id, householdId: user.householdId, role: user.role }, passwordChangeRequired: user.mustChangePassword,
+  };
 }
 
 /** Resolves a cookie token to an actor, or null when absent, unknown, revoked, expired or idle. */

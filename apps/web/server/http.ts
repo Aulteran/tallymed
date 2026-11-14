@@ -9,6 +9,7 @@ import { flashSetCookie } from './flash.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
+import { changePassword, resetOperatorPassword } from './services/credentials.ts';
 import * as expenses from './services/expenses.ts';
 import * as assistant from './services/assistant.ts';
 import * as documents from './services/documents.ts';
@@ -248,6 +249,11 @@ function route(opts: {
   beforeBody?: (actor: Actor) => void;
   /** Redirect browser form posts back with an error code even for size and type failures. */
   redirectAllErrors?: boolean;
+  /**
+   * Lets an account that must still replace a temporary password through. Every other authenticated route refuses it with
+   * `password_change_required`, so the gate cannot be forgotten by a new route: the default is closed.
+   */
+  allowPendingPasswordChange?: boolean;
   run: (input: RouteInput) => Promise<RouteResult>;
 }) {
   return async (req: Request, ctx: AppContext): Promise<Response> => {
@@ -263,6 +269,7 @@ function route(opts: {
       const signIn = async () => {
         actor = await authenticate(ctx.pool, ctx.config, sessionToken);
         if (!actor || !sessionToken) throw new AppError('unauthenticated');
+        if (actor.mustChangePassword && !opts.allowPendingPasswordChange) throw new AppError('password_change_required');
       };
       if (opts.session && opts.authBeforeBody) {
         await signIn();
@@ -288,6 +295,10 @@ function route(opts: {
       } catch {
         errorPath = null;
       }
+      // A browser form post from an account that must change its password goes to the page that does it, not back to the form.
+      if (error instanceof AppError && error.code === 'password_change_required' && wantsHtml(req)) {
+        return redirect(ctx.config, '/password/change', BASE_HEADERS);
+      }
       return errorResponse(req, ctx, error, errorPath, flash, opts.redirectAllErrors);
     }
   };
@@ -302,15 +313,19 @@ export const handleLogin = route({
     const result = await login(ctx.pool, ctx.config, {
       email: data.email, password: data.password, ip: client.ip, requestId, previousToken: sessionToken,
     });
-    const cookie = cookieHeader(ctx.config, result.token, ctx.config.sessionAbsoluteSeconds);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, '/', { 'Set-Cookie': cookie }) };
-    return { json: { ok: true, csrfToken: csrfFor(result.token) }, headers: { 'Set-Cookie': cookie } };
+    const cookie = cookieHeader(ctx.config, result.token, Math.max(1, Math.floor((result.expiresAt.getTime() - Date.now()) / 1000)));
+    if (wantsHtml(req)) return { response: redirect(ctx.config, result.passwordChangeRequired ? '/password/change' : '/', { 'Set-Cookie': cookie }) };
+    return {
+      json: { ok: true, csrfToken: csrfFor(result.token), ...(result.passwordChangeRequired ? { passwordChangeRequired: true } : {}) },
+      headers: { 'Set-Cookie': cookie },
+    };
   },
 });
 
 export const handleLogout = route({
   name: 'logout',
   session: true,
+  allowPendingPasswordChange: true,
   errorPath: () => '/',
   async run({ ctx, actor, body, req, requestId }) {
     parse(schemas.logout, body);
@@ -337,6 +352,43 @@ export const handleInvite = route({
       return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, 'Content-Type': 'text/html; charset=utf-8' } }) };
     }
     return { json: { ok: true, link, email: invitation.email, expiresAt: invitation.expiresAt.toISOString() }, status: 201 };
+  },
+});
+
+/** Administrator-issued temporary password. The secret is shown once on a never-cached page and is not stored, logged or audited. */
+export const handleResetPassword = route({
+  name: 'reset-password',
+  session: true,
+  errorPath: () => '/operators',
+  async run({ ctx, actor, body, requestId, req }) {
+    const issued = await resetOperatorPassword(ctx.pool, ctx.config, actor!, body, requestId);
+    const headers = { 'Referrer-Policy': 'no-referrer' };
+    if (wantsHtml(req)) {
+      const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>Temporary password</title>`
+        + RESULT_PAGE_BODY + `<h1>Temporary password for ${escapeHtml(issued.displayName)}</h1>`
+        + `<p>Give this temporary password to ${escapeHtml(issued.email)} in person or by phone. It is shown only once, works once, and expires ${escapeHtml(issued.expiresAt.toISOString())}. `
+        + `They are signed out everywhere and must choose a new password when they sign in with it.</p>`
+        + `<p><code>${escapeHtml(issued.temporaryPassword)}</code></p><p><a href="/operators">Back to operators</a></p></main></body></html>`;
+      return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, ...headers, 'Content-Type': 'text/html; charset=utf-8' } }) };
+    }
+    return {
+      json: { ok: true, temporaryPassword: issued.temporaryPassword, email: issued.email, expiresAt: issued.expiresAt.toISOString() },
+      status: 201, headers,
+    };
+  },
+});
+
+/** Change password for the signed-in account: a normal change (current password required) or the forced change after a temporary password. */
+export const handleChangePassword = route({
+  name: 'change-password',
+  session: true,
+  allowPendingPasswordChange: true,
+  errorPath: (body) => (body.page === 'required' ? '/password/change' : '/account/password'),
+  async run({ ctx, actor, body, requestId, req }) {
+    const result = await changePassword(ctx.pool, ctx.config, actor!, body, requestId);
+    const cookie = cookieHeader(ctx.config, result.token, Math.max(1, Math.floor((result.expiresAt.getTime() - Date.now()) / 1000)));
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/?notice=password_changed', { 'Set-Cookie': cookie }) };
+    return { json: { ok: true, csrfToken: csrfFor(result.token), sessionsRevoked: result.sessionsRevoked }, headers: { 'Set-Cookie': cookie } };
   },
 });
 
@@ -385,11 +437,24 @@ export const handleSetup = route({
   },
 });
 
-/** Used by server-rendered pages. Authorization still happens in the service for every mutation. */
-export async function pageActor(ctx: AppContext, headers: Headers): Promise<{ actor: Actor; csrf: string } | null> {
+/**
+ * The signed-in session for a page or a GET route, including an account that must still replace a temporary password. Only the
+ * sign-in, shell and change-password pages use this directly; everything else goes through `pageActor`, which refuses that state.
+ */
+export async function pageSession(ctx: AppContext, headers: Headers): Promise<{ actor: Actor; csrf: string } | null> {
   const token = readCookie(headers, sessionCookieName(ctx.config));
   const actor = await authenticate(ctx.pool, ctx.config, token);
   return actor && token ? { actor, csrf: csrfFor(token) } : null;
+}
+
+/**
+ * Used by server-rendered pages and GET routes. Closed by default: an account that must change its temporary password is refused
+ * with `password_change_required`. Authorization still happens in the service for every mutation.
+ */
+export async function pageActor(ctx: AppContext, headers: Headers): Promise<{ actor: Actor; csrf: string } | null> {
+  const session = await pageSession(ctx, headers);
+  if (session?.actor.mustChangePassword) throw new AppError('password_change_required');
+  return session;
 }
 
 
@@ -717,4 +782,9 @@ export async function handleAssistantAction(req: Request, ctx: AppContext, actio
   const handler = ASSISTANT_ROUTES.get(action);
   if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
   return handler(req, ctx);
+}
+
+/** Names of every allow-listed action behind the catch-all routes, so tests can prove each one is behind the password-change gate. */
+export function actionInventory(): { expenses: string[]; documents: string[]; assistant: string[] } {
+  return { expenses: [...expenseRoutes.keys()], documents: [...documentRoutes.keys()], assistant: [...ASSISTANT_ROUTES.keys()] };
 }

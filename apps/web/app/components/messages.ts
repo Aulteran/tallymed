@@ -15,6 +15,10 @@ const MESSAGES: Record<string, string> = {
   invalid_setup_token: 'The setup token was not accepted. Use the value of TALLYMED_SETUP_TOKEN, or the token the server printed to its console when it started.',
   bootstrap_closed: 'Setup was already completed.',
   rate_limited: 'Too many attempts. Wait fifteen minutes and try again.',
+  password_change_required: 'Choose a new password before continuing.',
+  temporary_password_expired: 'That temporary password has expired or was already used. Ask an administrator for a new one.',
+  self_reset_blocked: 'You cannot reset your own password here. Use Password in the menu to change it.',
+  reset_not_allowed: 'That account cannot be reset right now. It must be active, and the household must keep an administrator who can sign in.',
   internal: 'Something went wrong. Try again.',
 };
 
