@@ -360,7 +360,7 @@ export const handleLogout = route({
 export const handleInvite = route({
   name: 'invite',
   session: true,
-  errorPath: () => '/operators',
+  errorPath: () => '/users',
   async run({ ctx, actor, body, requestId, req }) {
     const invitation = await inviteOperator(ctx.pool, ctx.config, actor!, body, requestId);
     const link = new URL(`/invite/${invitation.token}`, ctx.config.canonicalOrigin).href;
@@ -369,7 +369,7 @@ export const handleInvite = route({
       const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Invitation created</title>`
         + RESULT_PAGE_BODY + `<h1>Invitation created</h1>`
         + `<p>Share this one-time link with ${escapeHtml(invitation.email)}. It expires ${escapeHtml(invitation.expiresAt.toISOString())} and is not shown again.</p>`
-        + `<p><code>${escapeHtml(link)}</code></p><p><a href="/operators">Back to operators</a></p></main></body></html>`;
+        + `<p><code>${escapeHtml(link)}</code></p><p><a href="/users">Back to users</a></p></main></body></html>`;
       return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, 'Content-Type': 'text/html; charset=utf-8' } }) };
     }
     return { json: { ok: true, link, email: invitation.email, expiresAt: invitation.expiresAt.toISOString() }, status: 201 };
@@ -380,7 +380,7 @@ export const handleInvite = route({
 export const handleResetPassword = route({
   name: 'reset-password',
   session: true,
-  errorPath: () => '/operators',
+  errorPath: () => '/users',
   async run({ ctx, actor, body, requestId, req }) {
     const issued = await resetOperatorPassword(ctx.pool, ctx.config, actor!, body, requestId);
     const headers = { 'Referrer-Policy': 'no-referrer' };
@@ -389,7 +389,7 @@ export const handleResetPassword = route({
         + RESULT_PAGE_BODY + `<h1>Temporary password for ${escapeHtml(issued.displayName)}</h1>`
         + `<p>Give this temporary password to ${escapeHtml(issued.email)} in person or by phone. It is shown only once, works once, and expires ${escapeHtml(issued.expiresAt.toISOString())}. `
         + `They are signed out everywhere and must choose a new password when they sign in with it.</p>`
-        + `<p><code>${escapeHtml(issued.temporaryPassword)}</code></p><p><a href="/operators">Back to operators</a></p></main></body></html>`;
+        + `<p><code>${escapeHtml(issued.temporaryPassword)}</code></p><p><a href="/users">Back to users</a></p></main></body></html>`;
       return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, ...headers, 'Content-Type': 'text/html; charset=utf-8' } }) };
     }
     return {
@@ -416,10 +416,10 @@ export const handleChangePassword = route({
 export const handleUpdateOperator = route({
   name: 'update-operator',
   session: true,
-  errorPath: () => '/operators',
+  errorPath: () => '/users',
   async run({ ctx, actor, body, requestId, req }) {
     await updateOperator(ctx.pool, actor!, body, requestId);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, '/operators') };
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/users') };
     return { json: { ok: true } };
   },
 });
@@ -427,10 +427,10 @@ export const handleUpdateOperator = route({
 export const handleRevokeInvitation = route({
   name: 'revoke-invitation',
   session: true,
-  errorPath: () => '/operators',
+  errorPath: () => '/users',
   async run({ ctx, actor, body, requestId, req }) {
     await revokeInvitation(ctx.pool, actor!, body, requestId);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, '/operators') };
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/users') };
     return { json: { ok: true } };
   },
 });

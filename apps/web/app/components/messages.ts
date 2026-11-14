@@ -10,7 +10,7 @@ const MESSAGES: Record<string, string> = {
   payload_too_large: 'That file is larger than the upload limit, or the household document storage limit has been reached.',
   unsupported_media_type: 'That file was not accepted. Use a PDF, PNG or JPEG whose contents match its type and that has no scripts or attachments inside.',
   duplicate_document: 'A document with identical contents already exists. Tick the box to upload it anyway, or attach the existing document.',
-  storage_unavailable: 'Document storage is not available right now. Nothing was saved. Try again, or ask the operator to check the document volume.',
+  storage_unavailable: 'Document storage is not available right now. Nothing was saved. Try again, or ask the server administrator to check the document volume.',
   busy: 'Several uploads are in progress. Wait a moment and try again.',
   invalid_setup_token: 'The setup token was not accepted. Use the value of TALLYMED_SETUP_TOKEN, or the token the server printed to its console when it started.',
   bootstrap_closed: 'Setup was already completed.',

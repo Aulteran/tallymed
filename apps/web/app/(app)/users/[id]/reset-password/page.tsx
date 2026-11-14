@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { can } from '../../../../../server/authz.ts';
 import { AppError } from '../../../../../server/errors.ts';
@@ -25,7 +26,7 @@ export default async function ResetPasswordPage({ params, searchParams }: { para
     <h1>Reset password for {target.displayName}</h1>
     <p>{target.email}</p>
     {error && <p className="error" role="alert">{error}</p>}
-    {self ? <p role="note">You cannot reset your own password here. Use Password in the menu to change it.</p>
+    {self ? <p role="note">This is your own account, so it cannot be reset here. To set a new password, use <Link href="/account/password">Change password</Link> in the user menu.</p>
       : target.status !== 'active' ? <p role="note">This account is disabled. Enable it before resetting its password.</p>
         : <form className="card" method="post" action="/api/operators/reset-password">
           <h2>What happens</h2>

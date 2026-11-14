@@ -171,3 +171,11 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Changed: `services/forgot-password.ts`, login handling in `services/auth.ts`, `repositories/password-resets.ts`, `handleForgotPassword` and `/api/auth/forgot-password`, `/password/forgot` page, Reset password button on sign-in, docs, decisions, `tests/web/forgot-password.test.mjs` (12 tests).
 - Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test`. See the PR for build, export and browser results. Not run: Node 24, Docker/Compose, a real SMTP server with STARTTLS/TLS.
 - Reviewer focus: no enumeration (response and timing), no lockout or takeover by requests, limits, audit, secret handling, interaction with the admin reset and forced-change gate.
+
+## Users page and user menu handoff
+
+- Branch: `ui/users-page-and-user-menu` (PR against `dev`; head SHA is on the PR). No migration, no server behaviour change beyond the page address (`/users`, `/operators` redirects).
+- Changed: `app/(app)/users` (moved from `operators`), `AccountMenu.tsx` (new), `ThemeToggle.tsx`, `icons.tsx`, `ui.tsx` (`roleLabel`), shell layout, `globals.css`, result-page links in `server/http.ts`, `next.config.mjs` redirect, `scripts/check-app-browser.mjs`, `scripts/check-proxy.mjs`, docs, decisions, screenshots in `docs/design/screenshots`.
+- Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test`, build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`.
+- Wiki: pages that say "Operators page" or "Password in the menu" need the same wording change (the wiki is a separate repository pushed by the owner).
+

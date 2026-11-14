@@ -445,7 +445,7 @@ try {
 
   // Password reset and forced change, end to end in a second browser context (the administrator's page keeps its own session).
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`${origin}/operators`);
+  await page.goto(`${origin}/users`);
   await page.fill('form[action="/api/operators/invite"] #email', 'sam@example.test');
   await page.click('form[action="/api/operators/invite"] button[type=submit]');
   const inviteLink = (await page.locator('code').innerText()).trim();
@@ -462,10 +462,56 @@ try {
   await sam.click('button[type=submit]');
   await sam.waitForURL(`${origin}/`);
   assert.match(await sam.locator('main').innerText(), /Overview/);
-  await page.goto(`${origin}/operators`);
+  await page.goto(`${origin}/users`);
   assert.equal(await page.locator('a', { hasText: 'Reset password' }).count(), 1, 'an administrator cannot reset their own row');
+  await a11y('users page');
+  // Each person is one line: Role, Status and Save share a row, and the old address still leads here.
+  const rowTops = await page.locator('table.users tbody tr').first().evaluate((tr) => [...tr.querySelectorAll('select, form button')].map((e) => Math.round(e.getBoundingClientRect().top + e.getBoundingClientRect().height / 2)));
+  assert.equal(rowTops.length, 3);
+  assert.ok(Math.max(...rowTops) - Math.min(...rowTops) <= 2, `role, status and Save are on one line: ${rowTops}`);
+  assert.doesNotMatch(await page.locator('body').innerText(), /operator/i, 'the interface says users, not operators');
+  await page.goto(`${origin}/operators`);
+  assert.equal(new URL(page.url()).pathname, '/users');
+  await page.selectOption('select[aria-label="Role for Sam Example"]', 'admin');
+  await page.click('button[aria-label="Save role and status for Sam Example"]');
+  await page.waitForURL(`${origin}/users`);
+  assert.equal(await page.inputValue('select[aria-label="Role for Sam Example"]'), 'admin', 'the role select still saves through the row form');
+  await page.selectOption('select[aria-label="Role for Sam Example"]', 'operator');
+  await page.click('button[aria-label="Save role and status for Sam Example"]');
+  await page.waitForURL(`${origin}/users`);
+  assert.equal(await page.inputValue('select[aria-label="Role for Sam Example"]'), 'operator');
+
+  // User menu: settings dialog, theme choice, and sign out only after confirming.
+  await page.click('button[aria-label="User settings"]');
+  const settingsDialog = page.locator('dialog[aria-labelledby="user-settings-title"]');
+  await settingsDialog.waitFor({ state: 'visible' });
+  assert.deepEqual(await settingsDialog.locator('strong').allInnerTexts(), ['Change password', 'Change theme', 'Sign out']);
+  const box = await settingsDialog.boundingBox();
+  assert.ok(Math.abs(box.x + box.width / 2 - 640) <= 2 && Math.abs(box.y + box.height / 2 - 450) <= 2, 'the settings dialog is centred');
+  for (let i = 0; i < 12; i++) {
+    await page.keyboard.press('Tab');
+    assert.ok(await page.evaluate(() => document.activeElement === document.body || !!document.activeElement.closest('dialog[open]')), 'Tab never reaches the page behind the open dialog');
+  }
+  await a11y('user settings dialog');
+  await settingsDialog.locator('.segmented button', { hasText: 'Dark' }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+  assert.match(await page.locator('.account-actions .theme-toggle').getAttribute('aria-label'), /Theme: Dark/, 'the sidebar icon follows the dialog');
+  await settingsDialog.locator('.segmented button', { hasText: 'System' }).click();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), undefined);
+  await page.keyboard.press('Escape');
+  await settingsDialog.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'User settings', 'focus returns to the button that opened the dialog');
+  await page.click('.account-id button[aria-label="Sign out"]');
+  const confirmDialog = page.locator('dialog[aria-labelledby="sign-out-title"]');
+  await confirmDialog.waitFor({ state: 'visible' });
+  await a11y('sign out confirmation');
+  await confirmDialog.locator('button', { hasText: 'Cancel' }).click();
+  await confirmDialog.waitFor({ state: 'hidden' });
+  await page.goto(`${origin}/users`);
+  assert.equal(new URL(page.url()).pathname, '/users', 'cancelling keeps the session');
+  assert.equal(await page.locator('.account-actions a', { hasText: 'Change password' }).getAttribute('href'), '/account/password');
   await page.click('a:has-text("Reset password")');
-  await page.waitForURL(/\/operators\/[0-9a-f-]{36}\/reset-password$/);
+  await page.waitForURL(/\/users\/[0-9a-f-]{36}\/reset-password$/);
   await a11y('reset password confirmation');
   await page.click('form[action="/api/operators/reset-password"] button[type=submit]');
   const temporary = (await page.locator('code').innerText()).trim();
@@ -482,7 +528,7 @@ try {
   await sam.click('button[type=submit]');
   await sam.waitForURL(`${origin}/password/change`);
   await a11y('required password change');
-  for (const blocked of ['/', '/bills', '/operators', '/account/password', '/documents']) {
+  for (const blocked of ['/', '/bills', '/users', '/account/password', '/documents']) {
     await sam.goto(`${origin}${blocked}`);
     assert.equal(new URL(sam.url()).pathname, '/password/change', `${blocked} is closed until the password is changed`);
   }
