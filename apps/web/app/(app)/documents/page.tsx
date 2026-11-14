@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { listDocuments } from '../../../server/services/documents.ts';
+import { AddDialog } from '../../components/AddDialog.tsx';
 import { formatBytes, KindOptions, mediaLabel, UploadForm } from '../../components/documents.tsx';
 import { Banner, dateOf, Empty, flat, label, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
@@ -14,8 +15,14 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Se
   const base: Record<string, string> = {};
   for (const k of ['q', 'kind', 'unmatched'] as const) if (q[k]) base[k] = q[k]!;
   return <main id="main" className="wide">
-    <h1>Documents</h1>
-    <Banner code={q.error} invalid={invalid} />
+    <div className="page-head">
+      <h1>Documents</h1>
+      {ctx.store && <AddDialog label="Upload document" title="Upload a new document" open={!!q.error || q.add === '1'} keep={base}>
+        {q.error && <Banner code={q.error} />}
+        <UploadForm heading={false} csrf={csrf} max={Math.floor(ctx.config.documentMaxBytes / 1024 / 1024)} />
+      </AddDialog>}
+    </div>
+    <Banner code={ctx.store ? undefined : q.error} invalid={invalid} />
     <p className="muted">Bills, EOBs, receipts and reimbursement evidence. Files are private, checked by content and open only to signed-in members of this household. An unmatched document is not attached to any record yet.</p>
     <form method="get" className="card row" aria-label="Filters">
       <div><label htmlFor="q">Title or file name</label><input id="q" name="q" maxLength={80} defaultValue={q.q} /></div>
@@ -34,7 +41,6 @@ export default async function DocumentsPage({ searchParams }: { searchParams: Se
       </table>}
       <Pager base="/documents" params={base} next={data.nextCursor} />
     </div>
-    {ctx.store ? <div className="card"><UploadForm level={2} csrf={csrf} max={Math.floor(ctx.config.documentMaxBytes / 1024 / 1024)} /></div>
-      : <p className="muted" role="note">Document storage is not configured. Set TALLYMED_DOCUMENTS_DIR to a private volume to enable uploads.</p>}
+    {!ctx.store && <p className="muted" role="note">Document storage is not configured. Set TALLYMED_DOCUMENTS_DIR to a private volume to enable uploads.</p>}
   </main>;
 }

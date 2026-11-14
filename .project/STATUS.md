@@ -179,3 +179,9 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test`, build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`.
 - Wiki: pages that say "Operators page" or "Password in the menu" need the same wording change (the wiki is a separate repository pushed by the owner).
 
+## Add forms in dialogs handoff
+
+- Branch: `ui/add-forms-in-modals`, based on `ui/users-page-and-user-menu` (PR #17) because both change the Users page; PR against `dev`, head SHA on the PR. Merge #17 first. No migration. One server change: a refused invitation redirects to `/users?add=1&error=...`.
+- Changed: `AddDialog.tsx` (new), list pages for providers, members, visits, documents, users, payments, plans and bills, `ui.tsx` (`pick`, `NarrowForm` in a dialog), `documents.tsx` (`UploadForm` heading), `icons.tsx` (plus), `globals.css`, `scripts/check-app-browser.mjs`, docs, decisions, screenshots (`docs/design/screenshots/add-forms-*`).
+- Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, a real screen reader or phone.
+- Wiki: checked the 27 pages; none describes where the add forms sit or quotes their headings, so no wiki change is needed.

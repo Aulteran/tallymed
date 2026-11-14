@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { listBills, listMembers, listProviders } from '../../../server/services/expenses.ts';
+import { Icon } from '../../components/icons.tsx';
 import { Banner, Empty, flat, load, Money, Options, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -16,9 +17,11 @@ export default async function BillsPage({ searchParams }: { searchParams: Search
   const { data, invalid } = await load(() => listBills(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
   return <main id="main" className="wide">
-    <h1>Bills</h1>
+    <div className="page-head">
+      <h1>Bills</h1>
+      <Link className="button page-action" href="/bills/new"><Icon name="plus" />Enter a bill</Link>
+    </div>
     <Banner code={p.error} invalid={invalid} />
-    <p className="actions"><Link className="button" href="/bills/new">Enter a bill</Link></p>
     <form method="get" className="card row" role="search">
       <div><label htmlFor="q">Search reference or provider</label><input id="q" name="q" defaultValue={p.q} /></div>
       <div><label htmlFor="memberId">Family member</label><select id="memberId" name="memberId" defaultValue={p.memberId ?? ''}><Options items={opt(members)} blank="Everyone" /></select></div>

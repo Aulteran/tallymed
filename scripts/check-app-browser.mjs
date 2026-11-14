@@ -75,6 +75,12 @@ try {
     if (shots) await page.screenshot({ path: path.join(shots, `${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`), fullPage: true });
   };
   const text = () => page.locator('main').innerText();
+  // The add form of a list page lives in a dialog opened by the button at the top right of the page header.
+  const addDialog = page.locator('dialog.form-modal');
+  const openAdd = async (label) => {
+    await page.click(`.page-head .page-action button:has-text("${label}")`);
+    await addDialog.waitFor({ state: 'visible' });
+  };
 
   // First administrator through the web setup page, using the operator-defined token.
   await page.goto(`${origin}/login`);
@@ -120,15 +126,70 @@ try {
   ok('sign in lands on the expense overview');
 
   await page.goto(`${origin}/members`);
+  await openAdd('Add family member');
+  await a11y('add family member dialog');
   await page.fill('#name', 'Pat Example');
   await page.click('form[action="/api/expenses/members/create"] button[type=submit]');
   await page.waitForURL(/\/members\/[0-9a-f-]{36}$/);
   await a11y('member detail');
   await page.goto(`${origin}/providers`);
+  await openAdd('Add provider');
   await page.fill('#name', 'Example Clinic');
   await page.click('form[action="/api/expenses/providers/create"] button[type=submit]');
   await page.waitForURL(/\/providers\/[0-9a-f-]{36}$/);
+
+  // The add form is a dialog behind a button at the top right; nothing of it is on the page until the button is used.
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`${origin}/providers`);
+  await a11y('providers list');
+  assert.equal(await addDialog.isVisible(), false, 'the add form is not shown until asked for');
+  assert.equal(await page.locator('main form[method=post]:visible').count(), 0, 'no add form is left on the page itself');
+  const place = await page.evaluate(() => {
+    const r = (e) => e.getBoundingClientRect();
+    const b = r(document.querySelector('.page-head .page-action button')), h = r(document.querySelector('.page-head h1')), t = r(document.querySelector('main table'));
+    return { rightGap: Math.abs(b.right - t.right), overlapsHeading: b.top < h.bottom && b.bottom > h.top, leftOfHeading: b.left < h.right };
+  });
+  assert.ok(place.rightGap <= 2 && place.overlapsHeading && !place.leftOfHeading, `Add provider sits at the top right, level with the heading: ${JSON.stringify(place)}`);
+  assert.equal(await page.locator('.page-action button svg').count(), 1, 'the button carries the plus icon');
+  await page.locator('.page-action button').focus();
+  await page.keyboard.press('Enter');
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => document.getElementById(document.querySelector('dialog.form-modal').getAttribute('aria-labelledby')).textContent), 'Add provider', 'the dialog is labelled by its title');
+  const addBox = await addDialog.boundingBox();
+  assert.ok(Math.abs(addBox.x + addBox.width / 2 - 640) <= 2 && Math.abs(addBox.y + addBox.height / 2 - 450) <= 2, 'the add dialog is centred');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'name', 'focus starts in the first field');
+  for (let i = 0; i < 10; i++) {
+    await page.keyboard.press('Tab');
+    assert.ok(await page.evaluate(() => document.activeElement === document.body || !!document.activeElement.closest('dialog[open]')), 'Tab never reaches the page behind the add dialog');
+  }
+  // Required fields: a red asterisk after the label, a "* required" note, and the required attribute for assistive technology.
+  const marks = await page.evaluate(() => Object.fromEntries(['name', 'kind', 'notes'].map((id) => [id, getComputedStyle(document.querySelector(`label[for=${id}]`), '::after').content])));
+  assert.match(marks.name, /\*/, 'the required field is marked');
+  assert.ok(!/\*/.test(marks.kind) && !/\*/.test(marks.notes), `optional fields are not marked: ${JSON.stringify(marks)}`);
+  assert.equal(await page.locator('#name').getAttribute('required'), '');
+  assert.match(await addDialog.locator('.required-note').innerText(), /^\* required$/);
+  await a11y('add provider dialog');
+  await page.keyboard.press('Escape');
+  await addDialog.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Add provider', 'Escape closes the dialog and focus returns to the button');
+  // A refused submission reopens the dialog with the message and what was typed.
+  await openAdd('Add provider');
+  await page.fill('#notes', 'Synthetic note kept after an error');
+  await page.evaluate(() => document.querySelector('#name').removeAttribute('required'));
+  await page.click('form[action="/api/expenses/providers/create"] button[type=submit]');
+  await page.waitForURL(/\/providers\?error=invalid_input/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.ok(await page.evaluate(() => document.querySelector('dialog.form-modal').matches(':modal')), 'the dialog reopens as a modal after an error');
+  assert.equal(await addDialog.locator('[role=alert]').count(), 1, 'the error is shown inside the dialog');
+  assert.equal(await page.locator('main [role=alert]:visible').count(), 1, 'and only there');
+  assert.equal(await page.inputValue('#notes'), 'Synthetic note kept after an error');
+  await a11y('add provider dialog with error');
+  await addDialog.locator('button[aria-label=Close]').click();
+  await addDialog.waitFor({ state: 'hidden' });
+  assert.equal(new URL(page.url()).search, '', 'closing clears the error from the address');
+  ok('add provider: top-right button, centred labelled dialog, keyboard, required marks, and errors reopen it');
+
+  await openAdd('Add provider');
   await page.fill('#name', 'Example Lab');
   await page.selectOption('#kind', 'lab');
   await page.click('form[action="/api/expenses/providers/create"] button[type=submit]');
@@ -136,6 +197,8 @@ try {
   ok('member and providers created');
 
   await page.goto(`${origin}/visits`);
+  await openAdd('Add visit');
+  await a11y('add visit dialog');
   await page.selectOption('#v-member', { label: 'Pat Example' });
   await page.selectOption('#v-provider', { label: 'Example Clinic' });
   await page.fill('#serviceDate', '2026-02-14');
@@ -200,6 +263,8 @@ try {
   // Payments: record cash against the bill, refund part of it, and see the bill balance follow the posted events.
   const billId = billUrl.split('/').pop();
   await page.goto(`${origin}/payments?billId=${billId}`);
+  await addDialog.waitFor({ state: 'visible' }); // arriving from a bill opens the form with that bill chosen
+  assert.equal(await page.inputValue('#billId'), billId);
   await a11y('payments list and entry form');
   await page.fill('#paidOn', '2026-03-05');
   await page.fill('#amount', '100.00');
@@ -224,6 +289,8 @@ try {
 
   // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
   await page.goto(`${origin}/plans`);
+  await a11y('plans list');
+  await openAdd('Create plan');
   await a11y('plans list and form');
   await page.fill('#name', 'Clinic plan');
   await page.selectOption('#providerId', { label: 'Example Clinic' });
@@ -321,14 +388,17 @@ try {
   writeFileSync(badPath, '<html>not an image</html>');
   await page.goto(`${origin}/documents`);
   await a11y('documents list');
+  await openAdd('Upload document');
+  await a11y('upload document dialog');
   await page.setInputFiles('#u-file', badPath);
-  await page.click('button:has-text("Upload")');
+  await page.click('form[action="/api/documents/upload"] button[type=submit]');
   await page.waitForURL(/\/documents\?error=unsupported_media_type/);
-  assert.match(await text(), /was not accepted/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.match(await addDialog.innerText(), /was not accepted/);
   await page.setInputFiles('#u-file', pngPath);
   await page.fill('#u-title', 'Synthetic statement');
   await page.selectOption('#u-kind', 'statement');
-  await page.click('button:has-text("Upload")');
+  await page.click('form[action="/api/documents/upload"] button[type=submit]');
   await page.waitForURL(/\/documents\/[0-9a-f-]{36}$/);
   const documentUrl = page.url();
   assert.match(await text(), /Synthetic statement[\s\S]*Unmatched/);
@@ -435,7 +505,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);
@@ -446,6 +516,14 @@ try {
   // Password reset and forced change, end to end in a second browser context (the administrator's page keeps its own session).
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`${origin}/users`);
+  // An invitation that is refused comes back to the open dialog; other messages on this page stay on the page.
+  await openAdd('Invite user');
+  await page.fill('form[action="/api/operators/invite"] #email', 'admin@example.test');
+  await page.click('form[action="/api/operators/invite"] button[type=submit]');
+  await page.waitForURL(/\/users\?add=1&error=/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await addDialog.locator('[role=alert]').count(), 1);
+  await a11y('invite user dialog with error');
   await page.fill('form[action="/api/operators/invite"] #email', 'sam@example.test');
   await page.click('form[action="/api/operators/invite"] button[type=submit]');
   const inviteLink = (await page.locator('code').innerText()).trim();

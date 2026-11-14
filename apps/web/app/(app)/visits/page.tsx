@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { listVisits, pickParties } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, Empty, flatWithFlash, load, NarrowForm, Options, Pager, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
+import { AddDialog } from '../../components/AddDialog.tsx';
+import { Banner, Csrf, Empty, flatWithFlash, load, NarrowForm, Options, Pager, pick, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Visits · TallyMed' };
@@ -18,9 +19,25 @@ export default async function VisitsPage({ searchParams }: { searchParams: Searc
   const { data, invalid } = await load(() => listVisits(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const truncated = members.truncated || providers.truncated || activeMembers.truncated || activeProviders.truncated;
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
+  const open = !!p.error || p.add === '1';
   return <main id="main" className="wide">
-    <h1>Visits</h1>
-    <Banner code={p.error} invalid={invalid} />
+    <div className="page-head">
+      <h1>Visits</h1>
+      <AddDialog label="Add visit" open={open} keep={pick(p, ['q', 'memberId', 'providerId', 'from', 'to', 'memberQ', 'providerQ'])}>
+        {p.error && <Banner code={p.error} />}
+        <form method="post" action="/api/expenses/visits/create">
+          <Csrf token={csrf} />
+          <label htmlFor="v-member">Family member</label><select id="v-member" name="memberId" required defaultValue={p.memberId ?? ''}><Options items={opt(activeMembers)} blank="Choose…" /></select>
+          <label htmlFor="v-provider">Provider</label><select id="v-provider" name="providerId" required defaultValue={p.providerId ?? ''}><Options items={opt(activeProviders)} blank="Choose…" /></select>
+          <label htmlFor="serviceDate">Service date</label><input id="serviceDate" name="serviceDate" type="date" required defaultValue={p.serviceDate} />
+          <label htmlFor="description">Description (optional)</label><input id="description" name="description" maxLength={200} defaultValue={p.description} />
+          <label htmlFor="notes">Notes</label><textarea id="notes" name="notes" maxLength={2000} defaultValue={p.notes} />
+          <button type="submit">Add visit</button>
+          <p className="muted">One visit can have bills from several providers, such as a facility, a clinician and a lab. Add each bill from the Bills page.</p>
+        </form>
+      </AddDialog>
+    </div>
+    <Banner invalid={invalid} />
     {(truncated || p.memberQ || p.providerQ) && <>
       {(members.truncated || activeMembers.truncated) && <Truncated what="family members" />}{(providers.truncated || activeProviders.truncated) && <Truncated what="providers" />}
       <NarrowForm fields={[{ name: 'memberQ', label: 'Find a family member' }, { name: 'providerQ', label: 'Find a provider' }]} values={p} />
@@ -41,15 +58,5 @@ export default async function VisitsPage({ searchParams }: { searchParams: Searc
       </tr>)}</tbody>
     </table>}
     <Pager base="/visits" params={filters} next={data.nextCursor} />
-    <form className="card" method="post" action="/api/expenses/visits/create">
-      <h2>Record a visit</h2><Csrf token={csrf} />
-      <label htmlFor="v-member">Family member</label><select id="v-member" name="memberId" required defaultValue={p.memberId ?? ''}><Options items={opt(activeMembers)} blank="Choose…" /></select>
-      <label htmlFor="v-provider">Provider</label><select id="v-provider" name="providerId" required defaultValue={p.providerId ?? ''}><Options items={opt(activeProviders)} blank="Choose…" /></select>
-      <label htmlFor="serviceDate">Service date</label><input id="serviceDate" name="serviceDate" type="date" required defaultValue={p.serviceDate} />
-      <label htmlFor="description">Description (optional)</label><input id="description" name="description" maxLength={200} defaultValue={p.description} />
-      <label htmlFor="notes">Notes</label><textarea id="notes" name="notes" maxLength={2000} defaultValue={p.notes} />
-      <button type="submit">Record visit</button>
-      <p className="muted">One visit can have bills from several providers, such as a facility, a clinician and a lab. Add each bill from the Bills page.</p>
-    </form>
   </main>;
 }
