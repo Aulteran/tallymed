@@ -573,7 +573,7 @@ try {
   await a11y('user settings dialog');
   await settingsDialog.locator('.segmented button', { hasText: 'Dark' }).click();
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
-  assert.match(await page.locator('.account-actions .theme-toggle').getAttribute('aria-label'), /Theme: Dark/, 'the sidebar icon follows the dialog');
+  assert.equal(await settingsDialog.locator('.segmented button[aria-pressed="true"]').innerText(), 'Dark', 'the dialog shows the chosen theme');
   await settingsDialog.locator('.segmented button', { hasText: 'System' }).click();
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), undefined);
   await page.keyboard.press('Escape');
@@ -587,7 +587,7 @@ try {
   await confirmDialog.waitFor({ state: 'hidden' });
   await page.goto(`${origin}/users`);
   assert.equal(new URL(page.url()).pathname, '/users', 'cancelling keeps the session');
-  assert.equal(await page.locator('.account-actions a', { hasText: 'Change password' }).getAttribute('href'), '/account/password');
+  assert.equal(await page.locator('.account a, .account-id a').count(), 0, 'the sidebar has no standalone password or theme buttons');
   await page.click('a:has-text("Reset password")');
   await page.waitForURL(/\/users\/[0-9a-f-]{36}\/reset-password$/);
   await a11y('reset password confirmation');

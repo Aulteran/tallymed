@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useRef } from 'react';
 import { closeOnBackdrop } from './AddDialog.tsx';
 import { Icon } from './icons.tsx';
-import { THEMES, THEME_ICON, THEME_LABEL, ThemeToggle, useTheme, type Theme } from './ThemeToggle.tsx';
+import { THEMES, THEME_ICON, THEME_LABEL, useTheme, type Theme } from './ThemeToggle.tsx';
 
 /**
  * The signed-in person's corner of the sidebar: who they are, a settings button, a sign-out button, and quick links.
@@ -28,10 +28,6 @@ export function AccountMenu({ displayName, initials, csrf, initialTheme }: { dis
           <Icon name="logout" />
         </button>
       </form>
-    </div>
-    <div className="account-actions">
-      <ThemeToggle initial={initialTheme} />
-      <Link href="/account/password" className="ghost-link"><Icon name="key" />Change password</Link>
     </div>
 
     <dialog ref={settings} className="modal" aria-labelledby="user-settings-title" onClick={closeOnBackdrop}>
