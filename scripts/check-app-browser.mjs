@@ -294,7 +294,9 @@ try {
   await a11y('plans list and form');
   await page.fill('#name', 'Clinic plan');
   await page.selectOption('#providerId', { label: 'Example Clinic' });
-  await page.selectOption('#billId', { value: billId });
+  await page.check(`#bill_${billId}`);
+  // The existing $85 of applied cash would otherwise be matched at creation; this flow matches by hand.
+  await page.uncheck('#matchExisting');
   await page.fill('#totalAmount', '30.00');
   await page.fill('#installmentCount', '3');
   await page.fill('#firstDueDate', '2026-01-15');
