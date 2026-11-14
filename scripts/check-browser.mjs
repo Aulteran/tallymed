@@ -59,15 +59,18 @@ try {
   }
   await page.locator('role=tab[name="Dashboard"]').focus();
   await page.keyboard.press('ArrowRight');
-  ok(await page.locator('role=tab[name="Payment Plans"]').getAttribute('aria-selected') === 'true', 'ArrowRight selects next tab');
-  ok(await page.locator('role=tab[name="Payment Plans"]').evaluate((el) => el === document.activeElement), 'Focus follows the selected tab');
-  ok(await page.getByRole('tabpanel').getByRole('table').isVisible(), 'Payment Plans panel is visible');
+  ok(await page.locator('role=tab[name="Bills"]').getAttribute('aria-selected') === 'true', 'ArrowRight selects next tab');
+  ok(await page.locator('role=tab[name="Bills"]').evaluate((el) => el === document.activeElement), 'Focus follows the selected tab');
+  await page.getByRole('tabpanel').getByRole('img').scrollIntoViewIfNeeded();
+  ok(await page.getByRole('tabpanel').getByRole('img').evaluate((el) => el.complete && el.naturalWidth === 1440), 'Bills screenshot is visible and loaded');
   await page.keyboard.press('End');
   ok(await page.locator('role=tab[name="HSA"]').getAttribute('aria-selected') === 'true', 'End selects last tab');
   await page.keyboard.press('ArrowRight');
   ok(await page.locator('role=tab[name="Dashboard"]').getAttribute('aria-selected') === 'true', 'Tabs wrap around');
   const previewText = await page.locator('#preview-title ~ .preview').innerText();
-  ok(/fictional/i.test(previewText) && /planned/i.test(previewText), 'Preview labels data fictional and features planned');
+  ok(/fictional/i.test(previewText) && !/conceptual|not available yet/i.test(previewText), 'Screenshots are labelled as fictional data, not as a concept');
+  const heroImage = page.locator('.hero-art img');
+  ok(await heroImage.getAttribute('alt') && await heroImage.getAttribute('width') === '1440' && await heroImage.getAttribute('height') === '900', 'Hero screenshot has alt text and dimensions');
   await page.getByText('Can I use TallyMed today?').focus();
   await page.keyboard.press('Enter');
   ok(await page.locator('details[open]').count() === 1, 'FAQ opens with keyboard');

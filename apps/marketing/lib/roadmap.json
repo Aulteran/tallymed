@@ -6,37 +6,47 @@
   },
   {
     "name": "Application Foundation",
-    "status": "Planned",
-    "description": "Set up the private household workspace."
+    "status": "Complete",
+    "description": "Set up the private household workspace: first-run setup, sign-in, invitations and an audit trail."
   },
   {
     "name": "Medical Expense Management",
-    "status": "Planned",
+    "status": "Complete",
     "description": "Connect family members, visits, providers and bills."
   },
   {
     "name": "Payments and Payment Plans",
-    "status": "Planned",
-    "description": "Record payments, adjustments and installments."
+    "status": "Complete",
+    "description": "Record payments, refunds, adjustments and installments."
   },
   {
     "name": "HSA Reimbursements",
-    "status": "Planned",
+    "status": "Complete",
     "description": "Track eligible payments and reconcile reimbursements."
   },
   {
     "name": "Document Management",
-    "status": "Planned",
+    "status": "Complete",
     "description": "Organize receipts, statements and supporting documents."
   },
   {
     "name": "Optional AI Assistance",
-    "status": "Planned",
-    "description": "Review proposed document matches from an authenticated local client."
+    "status": "Complete",
+    "description": "Review proposed document matches from an authenticated local client. Not yet tried against a real client."
+  },
+  {
+    "name": "Administration and Account Recovery",
+    "status": "Complete",
+    "description": "Server settings with email and reverse-proxy options, a Users page, and password reset by an administrator or by email. Email delivery is not yet tried against a real mail server."
+  },
+  {
+    "name": "Interface Redesign",
+    "status": "Complete",
+    "description": "A refreshed look with light and dark themes, and add forms that open in pop-up dialogs."
   },
   {
     "name": "Self-Hosted Release",
-    "status": "Planned",
-    "description": "Verify deployment, backups and recovery."
+    "status": "In development",
+    "description": "Verify deployment, backups and recovery on real hardware: a fresh install, an upgrade, a restore, and a run behind a real reverse proxy. A stable release follows."
   }
 ]
