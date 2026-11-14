@@ -28,16 +28,20 @@ const freePort = () => new Promise((resolve) => {
 const dbName = `tallymed_ui_${randomBytes(5).toString('hex')}`;
 const password = 'synthetic passphrase for tests';
 const setupToken = randomBytes(24).toString('base64url');
+const restoreDbName = `tallymed_ui_restore_${randomBytes(5).toString('hex')}`;
 let app;
+let restoredApp;
 let browser;
 const ok = (name) => console.log(`ok - ${name}`);
 
 async function cleanup() {
   await browser?.close().catch(() => {});
   app?.kill('SIGTERM');
+  restoredApp?.kill('SIGTERM');
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();
   await admin.query(`drop database if exists ${dbName} with (force)`).catch(() => {});
+  await admin.query(`drop database if exists ${restoreDbName} with (force)`).catch(() => {});
   await admin.end();
 }
 
@@ -485,6 +489,72 @@ try {
   assert.match(await text(), /Not configured/);
   ok('server settings, reverse proxy and email pages: accessible, saved with password confirmation, proxy trust visible');
 
+  // Backup: an administrator downloads an encrypted backup, and a second, empty installation is restored from it on its setup page.
+  await page.goto(`${origin}/settings/backup`);
+  await a11y('backup settings');
+  const backupPassphrase = 'synthetic backup passphrase';
+  await page.fill('#passphrase', backupPassphrase);
+  await page.fill('#passphraseConfirm', backupPassphrase);
+  await page.fill('#backup-pw', password);
+  const [backupDownload] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Download backup")')]);
+  assert.match(backupDownload.suggestedFilename(), /^tallymed-backup-[0-9TZ-]+\.tar\.gz\.enc$/);
+  const backupFile = path.join(mkdtempSync(path.join(tmpdir(), 'tallymed-ui-backup-')), backupDownload.suggestedFilename());
+  await backupDownload.saveAs(backupFile);
+  await page.goto(`${origin}/settings/backup`);
+  assert.match(await text(), /Backup downloaded[\s\S]*encrypted[\s\S]*SHA-256/);
+  const billsBefore = await (await page.goto(`${origin}/bills`), text());
+  {
+    const a = new pg.Client({ connectionString: ADMIN_URL });
+    await a.connect();
+    await a.query(`create database ${restoreDbName}`);
+    await a.end();
+    const restoreUrl = new URL(ADMIN_URL);
+    restoreUrl.pathname = `/${restoreDbName}`;
+    const restorePort = await freePort();
+    const restoreOrigin = `http://127.0.0.1:${restorePort}`;
+    const restoreToken = randomBytes(24).toString('base64url');
+    const restoreEnv = { ...env, DATABASE_URL: restoreUrl.href, TALLYMED_CANONICAL_ORIGIN: restoreOrigin, TALLYMED_SETUP_TOKEN: restoreToken, TALLYMED_DOCUMENTS_DIR: mkdtempSync(path.join(tmpdir(), 'tallymed-ui-restore-docs-')) };
+    const m = spawnSync('node', ['apps/web/cli/migrate.ts'], { env: restoreEnv, encoding: 'utf8' });
+    assert.equal(m.status, 0, m.stderr);
+    restoredApp = spawn('node', [server], { env: { ...restoreEnv, PORT: String(restorePort), HOSTNAME: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'ignore' });
+    for (let i = 0; i < 100; i++) {
+      if (await new Promise((res) => net.connect(restorePort, '127.0.0.1').on('connect', function () { this.end(); res(true); }).on('error', () => res(false)))) break;
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    const fresh = await (await browser.newContext({ colorScheme })).newPage();
+    await fresh.goto(`${restoreOrigin}/setup`);
+    await fresh.click('a:has-text("Restore from a backup")');
+    await fresh.waitForURL(`${restoreOrigin}/setup/restore`);
+    const freshA11y = await new AxeBuilder({ page: fresh }).analyze();
+    assert.deepEqual(freshA11y.violations.map((v) => v.id), [], 'accessibility on restore from a backup');
+    if (shots) await fresh.screenshot({ path: path.join(shots, 'restore-from-a-backup.png'), fullPage: true });
+    await fresh.setInputFiles('#file', backupFile);
+    await fresh.fill('#setupToken', restoreToken);
+    await fresh.fill('#passphrase', 'not the passphrase');
+    await fresh.click('button:has-text("Restore backup")');
+    await fresh.locator('p.error[role=alert]').waitFor();
+    assert.match(await fresh.locator('p.error[role=alert]').innerText(), /passphrase/i);
+    await fresh.fill('#setupToken', restoreToken);
+    await fresh.fill('#passphrase', backupPassphrase);
+    await fresh.click('button:has-text("Restore backup")');
+    await fresh.locator('text=Restore complete.').waitFor({ timeout: 60000 });
+    if (shots) await fresh.screenshot({ path: path.join(shots, 'restore-complete.png'), fullPage: true });
+    await fresh.click('a:has-text("Sign in")');
+    await fresh.fill('#email', 'admin@example.test');
+    await fresh.fill('#password', password);
+    await fresh.click('button[type=submit]');
+    await fresh.waitForURL(`${restoreOrigin}/`);
+    await fresh.goto(`${restoreOrigin}/bills`);
+    assert.equal(await fresh.locator('main').innerText(), billsBefore, 'the restored installation shows the same bills and balances');
+    await fresh.goto(`${restoreOrigin}/setup/restore`);
+    assert.equal((await fresh.request.get(`${restoreOrigin}/setup/restore`)).status(), 404, 'restore is closed once the installation holds data');
+    await fresh.goto(`${restoreOrigin}/settings/backup`);
+    assert.match(await fresh.locator('main').innerText(), /Restored from a backup/);
+    restoredApp.kill('SIGTERM');
+    restoredApp = undefined;
+  }
+  ok('backup downloaded encrypted from Server settings and restored into a second empty installation on its setup page');
+
   await page.goto(`${origin}/`);
   const overview = await text();
   assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
@@ -505,7 +575,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);

@@ -11,6 +11,8 @@ import { AppError } from './errors.ts';
 import { log } from './log.ts';
 import { safeEqual } from './tokens.ts';
 
+/** Advisory lock taken by everything that can fill an empty installation (first-run setup and restoring a backup), so only one of them wins. */
+export const BOOTSTRAP_LOCK = 7_203_402;
 export const SETUP_WINDOW_SECONDS = 15 * 60;
 export const MAX_SETUP_FAILURES = 10;
 export const MAX_SETUP_FAILURES_PER_ADDRESS = 5;

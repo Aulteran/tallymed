@@ -1,14 +1,13 @@
 import type { AppConfig } from '../config.ts';
 import { AppError } from '../errors.ts';
 import { log } from '../log.ts';
-import { checkSetupToken, closeSetup } from '../setup-token.ts';
+import { BOOTSTRAP_LOCK, checkSetupToken, closeSetup } from '../setup-token.ts';
 import { isUniqueViolation, withTransaction, type Pool } from '../db.ts';
 import { hashPassword } from '../passwords.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import { insertUser } from '../repositories/users.ts';
 import { parse, schemas } from '../validation.ts';
 
-const BOOTSTRAP_LOCK = 7_203_402;
 
 export async function isBootstrapped(pool: Pool): Promise<boolean> {
   const r = await pool.query('select 1 from bootstrap_state');

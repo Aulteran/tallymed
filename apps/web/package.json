@@ -10,6 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "migrate": "node cli/migrate.ts",
     "documents": "node cli/documents.ts",
+    "backup": "node cli/backup.ts",
     "mcp": "node cli/mcp.ts"
   },
   "dependencies": {
