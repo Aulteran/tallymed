@@ -7,6 +7,13 @@ export default {
   poweredByHeader: false,
   // Operator CLIs run from the standalone image and import these directly, so they must be traced, not bundled.
   serverExternalPackages: ['zod', 'pg', '@node-rs/argon2', 'nodemailer'],
+  // The Users page used to live at /operators; keep old bookmarks working.
+  async redirects() {
+    return [
+      { source: '/operators', destination: '/users', permanent: false },
+      { source: '/operators/:path*', destination: '/users/:path*', permanent: false },
+    ];
+  },
   async headers() {
     return [{
       source: '/:path*',

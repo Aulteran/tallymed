@@ -68,7 +68,7 @@ export async function AttachmentsPanel({ ctx, actor, csrf, type, id, returnTo, q
         <button type="submit">Attach document</button>
       </form>
       <UploadForm csrf={csrf} returnTo={returnTo} target={{ type, id }} idPrefix={field} />
-    </> : <p className="muted" role="note">Document storage is not configured, so documents cannot be uploaded or opened. See the operator guide.</p>}
+    </> : <p className="muted" role="note">Document storage is not configured, so documents cannot be uploaded or opened. See the operations guide.</p>}
   </div>;
 }
 

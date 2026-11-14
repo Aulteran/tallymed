@@ -12,7 +12,7 @@ export async function SourceNotice() {
       TallyMed is free software under the GNU Affero General Public License, version 3 only, and comes with no warranty.
       {' '}{source
         ? <>Corresponding source for this running build: <a href={source}>{source}</a>.</>
-        : <>The operator has not configured a corresponding-source link.</>}
+        : <>The server administrator has not configured a corresponding-source link.</>}
     </p>
   </footer>;
 }

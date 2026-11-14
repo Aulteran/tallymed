@@ -17,7 +17,7 @@ TallyMed is a self-hosted medical expense ledger for one household. Use fabricat
 - **Documents.** Private document storage on a volume with content checks, versioning, checksums, `documents verify` and `documents cleanup` commands, attachment-only downloads.
 - **Optional assistant (off by default).** A separate, LAN-only MCP listener in its own image with scoped, expiring, revocable credentials. It can only create document-match proposals that a person approves in the app; it has no right to change any financial record.
 - **Operating it.** Published images on GitHub Container Registry, a release Compose file, an encrypted-backup and isolated-restore procedure, integrity checks and a reverse-proxy guide ([operations guide](docs/operations.md)). Both images carry the AGPL licence and third-party notices.
-- **Interface.** The Ledger and Medical Cross brand, light and dark themes, phone-width layout, accessibility checks in CI.
+- **Interface.** The Ledger and Medical Cross brand, light and dark themes, phone-width layout, accessibility checks in CI. Accounts are managed on the Users page (`/users`; the old `/operators` address redirects), and the sidebar's user menu has a User settings dialog (Change password, Change theme, Sign out) with a confirmation before signing out.
 
 ### Verified
 

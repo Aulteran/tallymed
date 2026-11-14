@@ -7,7 +7,8 @@ import { pageSession } from '../../server/http.ts';
 import { pendingProposalCount } from '../../server/services/assistant.ts';
 import { Lockup } from '../components/brand.tsx';
 import { ShellNav, type NavGroup } from '../components/ShellNav.tsx';
-import { ThemeToggle } from '../components/ThemeToggle.tsx';
+import { AccountMenu } from '../components/AccountMenu.tsx';
+import { roleLabel } from '../components/ui.tsx';
 import { readTheme } from '../components/theme.ts';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
   const { actor, csrf } = session;
   const pending = await pendingProposalCount(appContext().pool, actor);
   const admin: NavGroup['items'] = [
-    ...(can(actor, 'operators:manage') ? [{ href: '/operators', label: 'Operators', icon: 'operators' }] : []),
+    ...(can(actor, 'operators:manage') ? [{ href: '/users', label: 'Users', icon: 'users' }] : []),
     ...(can(actor, 'settings:manage') ? [{ href: '/settings', label: 'Server settings', icon: 'settings' }] : []),
     ...(can(actor, 'assistant:manage') ? [{ href: '/assistant', label: 'Assistant', icon: 'assistant' }] : []),
   ];
@@ -45,20 +46,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
         <Link href="/" className="brand"><Lockup onDark title="TallyMed overview" /></Link>
       </div>
       <ShellNav groups={groups}>
-        <div className="account">
-          <div className="account-id">
-            <span className="avatar" aria-hidden="true">{initials(actor.displayName)}</span>
-            <span><span className="account-name">{actor.displayName}</span><span className="account-role">{actor.role}</span></span>
-          </div>
-          <div className="account-actions">
-            <ThemeToggle initial={await readTheme()} />
-            <Link href="/account/password" className="ghost-link">Password</Link>
-            <form method="post" action="/api/auth/logout">
-              <input type="hidden" name="csrf" value={csrf} />
-              <button type="submit" className="ghost">Sign out</button>
-            </form>
-          </div>
-        </div>
+        <AccountMenu displayName={actor.displayName} role={roleLabel(actor.role)} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} />
       </ShellNav>
     </header>
     {children}

@@ -81,6 +81,8 @@ export function Options({ items, blank }: { items: Array<{ id: string; name: str
 
 export const AMOUNT_SOURCES = ['statement', 'portal', 'eob', 'phone', 'manual'] as const;
 export const ADJUSTMENT_CATEGORIES = ['insurer_adjustment', 'insurer_payment', 'provider_discount', 'financial_assistance', 'correction'] as const;
+/** Account roles as shown to people. The stored value `operator` is the standard (non-administrator) role. */
+export const roleLabel = (role: string) => (role === 'admin' ? 'Admin' : 'Standard');
 export const label = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 /** Shown when a select list was cut at the page limit, so the person knows to search instead of assuming the list is complete. */
