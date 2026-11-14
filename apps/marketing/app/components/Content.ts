@@ -15,10 +15,11 @@ export const steps = [
 ] as const;
 
 export const faq = [
-  { q: 'Can I use TallyMed today?', a: 'Not yet. The project is in development, and everything described here is planned. The roadmap shows current progress.' },
+  { q: 'Can I use TallyMed today?', a: 'You can run it from source with Docker Compose and try it with made-up data. There is no stable release yet: the maintainer still has to check a fresh install, an upgrade, a restore and a real reverse proxy on real hardware. Until then, do not rely on it for real records. The roadmap shows the current state.' },
   { q: 'Is it free and open source?', a: 'Yes. TallyMed is published under the GNU AGPL v3 and the source is on GitHub.' },
   { q: 'Where is my data stored?', a: 'On your own server. Each installation serves one household, and there is no hosted service or public registration.' },
   { q: 'Do I need an AI service?', a: 'No. AI assistance is optional. The ledger works fully with manual entry.' },
   { q: 'Does the site track visitors?', a: 'No. This site uses no analytics, cookies or sign-up forms.' },
+  { q: 'What is not planned?', a: 'Bank or insurer sync, claim submission, tax advice, clinical records, public registration, multi-tenant hosting and currencies other than USD are not planned for the first release.' },
   { q: 'Does it file HSA claims or give tax advice?', a: 'No. It helps you keep records and reconcile reimbursements. Claim submission and tax decisions stay with you and your administrator.' },
 ] as const;

@@ -4,7 +4,7 @@ import { absoluteUrl, ogImages } from '../../lib/site';
 
 export const metadata: Metadata = {
   title: 'Development Roadmap',
-  description: 'Follow the planned development of TallyMed.',
+  description: 'Follow the development of TallyMed.',
   alternates: { canonical: absoluteUrl('/roadmap/') },
   openGraph: { url: absoluteUrl('/roadmap/'), images: ogImages },
 };
@@ -15,7 +15,7 @@ export default function Roadmap() {
     <section className="page-head">
       <div className="frame">
         <h1>Development Roadmap</h1>
-        <p className="intro">TallyMed is built in the open, one area at a time. {done} of {roadmap.length} planned areas are complete.</p>
+        <p className="intro">TallyMed is built in the open, one area at a time. {done} of {roadmap.length} areas are complete. The application is built; what remains before a first stable release is checking it on real hardware.</p>
       </div>
     </section>
     <section className="frame roadmap">
