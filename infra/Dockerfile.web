@@ -16,7 +16,7 @@ WORKDIR /app
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 NEXT_TELEMETRY_DISABLED=1
 COPY --from=build --chown=node:node /repo/apps/web/.next/standalone ./
 COPY --from=build --chown=node:node /repo/apps/web/.next/static ./apps/web/.next/static
-# Operator commands (migrate, bootstrap) run from the same image: docker compose run --rm web node apps/web/cli/migrate.ts
+# Operator commands (migrate, documents) run from the same image: docker compose run --rm web node apps/web/cli/migrate.ts
 COPY --from=build --chown=node:node /repo/apps/web/cli ./apps/web/cli
 COPY --from=build --chown=node:node /repo/apps/web/server ./apps/web/server
 COPY --from=build --chown=node:node /repo/apps/web/db ./apps/web/db

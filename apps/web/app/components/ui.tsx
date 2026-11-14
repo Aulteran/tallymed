@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { randomUUID } from 'node:crypto';
 import { notFound, redirect } from 'next/navigation';
 import { cookies, headers } from 'next/headers';
@@ -7,6 +8,7 @@ import { flashCookieName, readFlash } from '../../server/flash.ts';
 import { AppError } from '../../server/errors.ts';
 import { pageActor } from '../../server/http.ts';
 import { formatCents } from '../../server/money.ts';
+import { Icon } from './icons.tsx';
 import { errorMessage } from './messages.ts';
 
 export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -60,8 +62,11 @@ export function Banner({ code, invalid }: { code?: string; invalid?: boolean }) 
 export function Pager({ base, params, next }: { base: string; params: Record<string, string>; next: string | null }) {
   if (!next) return null;
   const q = new URLSearchParams({ ...params, cursor: next });
-  return <p><Link href={`${base}?${q}`}>Next page</Link></p>;
+  return <p className="actions"><Link className="button secondary" href={`${base}?${q}`}>Next page</Link></p>;
 }
+
+/** Shown in place of a list or table that has no rows. */
+export const Empty = ({ children }: { children: ReactNode }) => <div className="empty"><Icon name="empty" /><p>{children}</p></div>;
 
 export const dateOf = (d: Date) => d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 

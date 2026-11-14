@@ -24,9 +24,10 @@ export default async function ProposalPage({ params, searchParams }: { params: P
     if (pr.alreadyAttached) reasons.push('This document is already attached to that record.');
     if (pr.clientRevoked) reasons.push('The credential that made this proposal was revoked.');
   }
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/proposals">← Proposals</Link></p>
     <h1>Proposal: {pr.documentTitle}</h1>
-    <p>{label(pr.status)} · from {pr.clientName} · {dateOf(pr.createdAt)} · confidence {pr.confidence}</p>
+    <p><span className={pr.status === 'pending' ? 'pill warn' : pr.status === 'approved' ? 'pill' : 'pill neutral'}>{label(pr.status)}</span> · from {pr.clientName} · {dateOf(pr.createdAt)} · confidence {pr.confidence}</p>
     <Banner code={q.error} />
     <p className="muted" role="note">Everything below that the assistant or a file supplied (title, notes, reason) is shown as plain text and was not checked. Compare it with the document and the record yourself.</p>
     {reasons.length > 0 && <div className="card" role="alert"><h2>Out of date</h2><ul>{reasons.map((r) => <li key={r}>{r}</li>)}</ul>
@@ -58,6 +59,5 @@ export default async function ProposalPage({ params, searchParams }: { params: P
     {pr.status !== 'pending' && <div className="card"><h2>Decision</h2>
       <p>{label(pr.status)} by {pr.decidedByName ?? 'unknown'} · {pr.decidedAt ? dateOf(pr.decidedAt) : ''}{pr.decisionNote ? ` · ${pr.decisionNote}` : ''}</p>
       {pr.attachmentId && <p>The document is attached to the record: <Link href={recordHref}>open the record</Link>.</p>}</div>}
-    <p><Link href="/proposals">All proposals</Link></p>
   </main>;
 }

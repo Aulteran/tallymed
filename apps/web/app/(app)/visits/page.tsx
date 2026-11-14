@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { listVisits, pickParties } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, flatWithFlash, load, NarrowForm, Options, Pager, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Csrf, Empty, flatWithFlash, load, NarrowForm, Options, Pager, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Visits · TallyMed' };
@@ -18,7 +18,7 @@ export default async function VisitsPage({ searchParams }: { searchParams: Searc
   const { data, invalid } = await load(() => listVisits(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const truncated = members.truncated || providers.truncated || activeMembers.truncated || activeProviders.truncated;
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Visits</h1>
     <Banner code={p.error} invalid={invalid} />
     {(truncated || p.memberQ || p.providerQ) && <>
@@ -33,7 +33,7 @@ export default async function VisitsPage({ searchParams }: { searchParams: Searc
       <div><label htmlFor="to">To</label><input id="to" name="to" type="date" defaultValue={p.to} /></div>
       <div><button type="submit">Filter</button></div>
     </form>
-    {data.items.length === 0 ? <p>No visits match.</p> : <table className="stack">
+    {data.items.length === 0 ? <Empty>No visits match.</Empty> : <table className="stack">
       <thead><tr><th>Date</th><th>Family member</th><th>Provider</th><th>Description</th><th>Bills</th></tr></thead>
       <tbody>{data.items.map((v) => <tr key={v.id}>
         <td data-label="Date"><Link href={`/visits/${v.id}`}>{v.serviceDate}</Link></td><td data-label="Family member">{v.memberName}</td>

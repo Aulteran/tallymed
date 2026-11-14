@@ -18,7 +18,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Se
   if (!can(actor, 'assistant:manage')) notFound();
   const q = await flatWithFlash(searchParams, '/assistant');
   const clients = await listClients(ctx.pool, actor);
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Assistant</h1>
     <Banner code={q.error} />
     <p className="muted">Optional. TallyMed works fully without any AI. An assistant is an outside program that connects to a separate, private MCP service on your own network, reads only what its permissions allow and can only <em>propose</em> that a document belongs to a bill or visit. It can never approve a proposal, change a bill, record a payment or reach accounts. You review each proposal under <a href="/proposals">Proposals</a>. The service is off unless the person running this installation starts it; see the setup guide in the repository (docs/mcp.md).</p>

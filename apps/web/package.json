@@ -9,7 +9,6 @@
     "build": "next build",
     "typecheck": "next typegen && tsc --noEmit",
     "migrate": "node cli/migrate.ts",
-    "bootstrap": "node cli/bootstrap.ts",
     "documents": "node cli/documents.ts",
     "mcp": "node cli/mcp.ts"
   },

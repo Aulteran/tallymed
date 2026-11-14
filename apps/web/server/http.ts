@@ -15,6 +15,7 @@ import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
+import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
@@ -196,6 +197,18 @@ interface RouteInput {
 type RouteResult = { response: Response } | { json: unknown; status?: number; headers?: Record<string, string> };
 
 const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/**
+ * Presentation only, for the two one-time pages below (new invitation link, new assistant token). A fixed string with no
+ * interpolation; the colours are the design tokens from app/globals.css and follow the system theme.
+ */
+const RESULT_PAGE_BODY = '<style>:root{color-scheme:light dark}'
+  + 'body{font:1rem/1.55 system-ui,sans-serif;margin:0;padding:3rem 1rem;background:light-dark(#F4F7F9,#061725);color:light-dark(#0B2942,#E9EEF2)}'
+  + 'main{max-width:44rem;margin:0 auto;padding:2rem 1.5rem;background:light-dark(#FFFFFF,#0B2942);border:1px solid light-dark(#D5DEE5,#1F4663);border-top:4px solid #14B8A6;border-radius:.625rem}'
+  + 'h1{font-size:1.375rem;line-height:1.2;margin:0 0 1rem}'
+  + 'code{display:block;padding:.75rem 1rem;border-radius:.375rem;background:light-dark(#E9EEF2,#113550);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}'
+  + 'a{color:light-dark(#0A6B62,#5FE0CF);font-weight:600}a:focus-visible{outline:3px solid light-dark(#0A6B62,#5FE0CF);outline-offset:2px}'
+  + '</style><body><main>';
 const wantsHtml = (req: Request) => (req.headers.get('accept') ?? '').includes('text/html');
 
 export function redirect(config: AppConfig, pathAndQuery: string, headers: Record<string, string> = {}): Response {
@@ -318,9 +331,9 @@ export const handleInvite = route({
     if (wantsHtml(req)) {
       // Shown once and never stored in recoverable form; the page must not be cached.
       const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Invitation created</title>`
-        + `<body style="font-family:system-ui;max-width:40rem;margin:3rem auto;padding:0 1rem"><h1>Invitation created</h1>`
+        + RESULT_PAGE_BODY + `<h1>Invitation created</h1>`
         + `<p>Share this one-time link with ${escapeHtml(invitation.email)}. It expires ${escapeHtml(invitation.expiresAt.toISOString())} and is not shown again.</p>`
-        + `<p><code>${escapeHtml(link)}</code></p><p><a href="/operators">Back to operators</a></p></body></html>`;
+        + `<p><code>${escapeHtml(link)}</code></p><p><a href="/operators">Back to operators</a></p></main></body></html>`;
       return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, 'Content-Type': 'text/html; charset=utf-8' } }) };
     }
     return { json: { ok: true, link, email: invitation.email, expiresAt: invitation.expiresAt.toISOString() }, status: 201 };
@@ -356,6 +369,18 @@ export const handleAcceptInvitation = route({
   async run({ ctx, body, requestId, req }) {
     await acceptInvitation(ctx.pool, body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?notice=account_created') };
+    return { json: { ok: true }, status: 201 };
+  },
+});
+
+export const handleSetup = route({
+  name: 'setup',
+  session: false,
+  errorPath: () => '/setup',
+  keepFields: ['householdName', 'displayName', 'email'],
+  async run({ ctx, body, client, requestId, req }) {
+    await completeSetup(ctx.pool, ctx.config, body, { ip: client.ip, requestId });
+    if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?notice=setup_complete') };
     return { json: { ok: true }, status: 201 };
   },
 });
@@ -642,10 +667,10 @@ const createAssistantClient = route({
     if (wantsHtml(req)) {
       // Shown once and never stored in recoverable form; the page must not be cached.
       const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Assistant credential created</title>`
-        + `<body style="font-family:system-ui;max-width:44rem;margin:3rem auto;padding:0 1rem"><h1>Assistant credential created</h1>`
+        + RESULT_PAGE_BODY + `<h1>Assistant credential created</h1>`
         + `<p>Copy this token into your assistant client now. It is shown once, only its checksum is stored, and it expires ${escapeHtml(c.expiresAt.toISOString())}.</p>`
-        + `<p><code style="word-break:break-all">${escapeHtml(c.token)}</code></p><p>Permissions: ${escapeHtml(c.scopes.join(', '))}</p>`
-        + `<p>If it is ever exposed, revoke it on the assistant page.</p><p><a href="/assistant">Back to assistant settings</a></p></body></html>`;
+        + `<p><code>${escapeHtml(c.token)}</code></p><p>Permissions: ${escapeHtml(c.scopes.join(', '))}</p>`
+        + `<p>If it is ever exposed, revoke it on the assistant page.</p><p><a href="/assistant">Back to assistant settings</a></p></main></body></html>`;
       return { response: new Response(html, { status: 201, headers: { ...BASE_HEADERS, 'Content-Type': 'text/html; charset=utf-8' } }) };
     }
     return { json: { ok: true, id: c.id, token: c.token, scopes: c.scopes, expiresAt: c.expiresAt.toISOString() }, status: 201 };

@@ -14,7 +14,7 @@ The first milestone delivers a public introduction and a dedicated roadmap. The 
 8. Development progress with a link to the standalone roadmap.
 9. FAQ and footer with source, license, documentation and contributions.
 
-Use dark navy, teal accents and light surfaces with a dark theme. Use the ledger and cross mark from `packages/brand`. Starter SVGs reinterpret the approved concept. Retain the approved direction and refine typography and spacing during the milestone. Use local assets and optimized static previews. Keep keyboard focus visible, handle reduced motion, check contrast, and verify layouts across phone, tablet and desktop.
+Use the brand palette (navy `#0B2942`, teal `#14B8A6`, mist gray `#E9EEF2`, amber `#F59E0B`) with light and dark themes, and the ledger and cross logo from `packages/brand`, as described in the [design system](design-system.md). Use local assets and optimized static previews. Keep keyboard focus visible, handle reduced motion, check contrast, and verify layouts across phone, tablet and desktop.
 
 ## Roadmap and launch
 

@@ -21,7 +21,7 @@ Open http://localhost:3000. In another terminal, run `npm run dev:web` for the s
 | --- | --- |
 | `apps/marketing` | Public static Next.js export |
 | `apps/web` | Private application shell |
-| `packages/brand` | Ledger and Medical Cross assets |
+| `packages/brand` | Ledger and Medical Cross logo, wordmark, lockups, app icons and the bundled font ([design system](docs/design-system.md)) |
 | `infra` | Container build |
 | `deploy` | Compose file and example environment for published images |
 | `docs` | Human guides and specifications |

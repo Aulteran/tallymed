@@ -38,6 +38,8 @@ services:
       TALLYMED_CANONICAL_ORIGIN: ${TALLYMED_CANONICAL_ORIGIN:?Set the public https origin}
       TALLYMED_PROXY_SECRET: ${TALLYMED_PROXY_SECRET:?Set a random secret of 32 or more characters shared with the proxy}
       TALLYMED_SOURCE_URL: ${TALLYMED_SOURCE_URL:-}
+      # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
+      TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
       TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
     volumes:
       - documents_data:/var/lib/tallymed/documents

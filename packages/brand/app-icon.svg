@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">TallyMed app icon</title>
+  <rect width="64" height="64" rx="14" fill="#0B2942"/>
+  <g transform="translate(10.24 10.24) scale(.68)"><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 24 8H15a8 8 0 0 0-8 8v22a8 8 0 0 0 8 8h9" fill="#14B8A6" stroke="#FFFFFF" stroke-width="4.4"/>
+    <path d="M 22 8h27a8 8 0 0 1 8 8v40l-5.83-6-5.84 6-5.83-6-5.83 6-5.84-6L22 56z" fill="#0B2942" stroke="#FFFFFF" stroke-width="4.4"/>
+    <path d="M 30.5 19.5h18M 30.5 27.5h13.5M 30.5 35.5h7" stroke="#FFFFFF" stroke-width="4.4"/>
+    <path d="M 45.4 31.5h4.2a.8.8 0 0 1 .8.8V36h3.7a.8.8 0 0 1 .8.8V41a.8.8 0 0 1-.8.8h-3.7v3.7a.8.8 0 0 1-.8.8h-4.2a.8.8 0 0 1-.8-.8v-3.7h-3.7a.8.8 0 0 1-.8-.8v-4.2a.8.8 0 0 1 .8-.8h3.7v-3.7a.8.8 0 0 1 .8-.8z" fill="#14B8A6"/>
+  </g></g>
+</svg>

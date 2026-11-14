@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { listMembers } from '../../../server/services/expenses.ts';
-import { Banner, Csrf, flat, flatWithFlash, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Csrf, Empty, flat, flatWithFlash, load, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Family members · TallyMed' };
@@ -9,7 +9,7 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
   const { ctx, actor, csrf } = await requireSession();
   const params = await flatWithFlash(searchParams, '/members');
   const { data, invalid } = await load(() => listMembers(ctx.pool, actor, { q: params.q, archived: params.archived, cursor: params.cursor }), { items: [], nextCursor: null });
-  return <main>
+  return <main id="main">
     <h1>Family members</h1>
     <Banner code={params.error} invalid={invalid} />
     <form method="get" className="card row" role="search">
@@ -17,7 +17,7 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
       <div><label className="checkbox"><input type="checkbox" name="archived" value="yes" defaultChecked={params.archived === 'yes'} /> Include archived</label></div>
       <div><button type="submit">Search</button></div>
     </form>
-    {data.items.length === 0 ? <p>No matching records.</p> : <table className="stack">
+    {data.items.length === 0 ? <Empty>No matching records.</Empty> : <table className="stack">
       <thead><tr><th>Name</th><th>Date of birth</th><th>Status</th></tr></thead>
       <tbody>{data.items.map((i) => <tr key={i.id}>
         <td data-label="Name"><Link href={`/members/${i.id}`}>{i.name}</Link></td>

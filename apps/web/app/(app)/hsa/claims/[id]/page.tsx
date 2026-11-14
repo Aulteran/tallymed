@@ -14,9 +14,10 @@ export default async function HsaClaimPage({ params, searchParams }: { params: P
   const { claim, lines, entries, history } = data!;
   const base = <><Csrf token={csrf} /><input type="hidden" name="claimId" value={claim.id} /></>;
   const key = <input type="hidden" name="idempotencyKey" value={newKey()} />;
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/hsa/claims">← Claims</Link></p>
     <h1>Claim submitted {claim.submittedOn}</h1>
-    <p>{claim.administrator}{claim.reference ? ` · ${claim.reference}` : ''} · by {claim.createdByName ?? 'unknown'} {dateOf(claim.createdAt)} <span className={claim.open ? 'pill warn' : 'pill'}>{claim.open ? 'Open' : 'Closed'}</span> · <Link href="/hsa/claims">All claims</Link></p>
+    <p>{claim.administrator}{claim.reference ? ` · ${claim.reference}` : ''} · by {claim.createdByName ?? 'unknown'} {dateOf(claim.createdAt)} <span className={claim.open ? 'pill warn' : 'pill neutral'}>{claim.open ? 'Open' : 'Closed'}</span> · <Link href="/hsa/claims">All claims</Link></p>
     {claim.note && <p>{claim.note}</p>}
     <Banner code={q.error} />
     <section className="metrics" aria-label="Claim totals">

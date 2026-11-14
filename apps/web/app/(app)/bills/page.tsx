@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { listBills, listMembers, listProviders } from '../../../server/services/expenses.ts';
-import { Banner, flat, load, Money, Options, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Empty, flat, load, Money, Options, Pager, requireSession, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Bills · TallyMed' };
@@ -15,10 +15,10 @@ export default async function BillsPage({ searchParams }: { searchParams: Search
   const filters = Object.fromEntries(KEYS.filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listBills(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
-  return <main className="wide">
+  return <main id="main" className="wide">
     <h1>Bills</h1>
     <Banner code={p.error} invalid={invalid} />
-    <p><Link href="/bills/new">Enter a bill</Link></p>
+    <p className="actions"><Link className="button" href="/bills/new">Enter a bill</Link></p>
     <form method="get" className="card row" role="search">
       <div><label htmlFor="q">Search reference or provider</label><input id="q" name="q" defaultValue={p.q} /></div>
       <div><label htmlFor="memberId">Family member</label><select id="memberId" name="memberId" defaultValue={p.memberId ?? ''}><Options items={opt(members)} blank="Everyone" /></select></div>
@@ -30,7 +30,7 @@ export default async function BillsPage({ searchParams }: { searchParams: Search
         <label className="checkbox"><input type="checkbox" name="duplicates" value="yes" defaultChecked={p.duplicates === 'yes'} /> Possible duplicates</label></div>
       <div><button type="submit">Filter</button> <Link href="/bills">Clear</Link></div>
     </form>
-    {data.items.length === 0 ? <p>No bills match.</p> : <table className="stack">
+    {data.items.length === 0 ? <Empty>No bills match.</Empty> : <table className="stack">
       <thead><tr><th>Statement</th><th>Family member</th><th>Provider</th><th>Reference</th><th>Amounts</th><th>Visit</th><th className="num">Responsibility</th></tr></thead>
       <tbody>{data.items.map((b) => <tr key={b.id}>
         <td data-label="Statement"><Link href={`/bills/${b.id}`}>{b.statementDate}</Link></td>

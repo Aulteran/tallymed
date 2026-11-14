@@ -127,3 +127,17 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Not done and still required before acceptance: fresh-install, upgrade and isolated-restore drills against published images (no Docker daemon or registry in the implementation environment), a run behind a real reverse proxy, end-to-end ledger reconciliation after a restore, the dependency licence and source-notice review, the secret-scan check, release notes, and the site update with a version and install CTA. None of the public site copy was changed: no release exists yet.
 - Carried into every deployment (also in the guide): no password change or reset flow, shared-address sign-in lockout, the `setup-role` step for the assistant (including after a restore), a best-effort PDF scan, a per-process upload rate limit.
 - `actions/checkout@v6` is referenced by tag like the other workflows; resolving a full commit SHA needs a registry lookup that was not available here. Pin it to a SHA before the first stable release if you want immutable action references.
+
+## First-run setup token handoff (owner request after M07)
+
+- Branch: `setup-token-first-admin`, PR against `dev` (head SHA on the PR). Replaces the local bootstrap CLI with a setup-token web setup page; see DECISIONS.md under First-run setup token decision.
+- Changed: `server/setup-token.ts` (token source, constant-time comparison, in-memory attempt limits, console banner), `services/bootstrap.ts` (`completeSetup`), `http.ts` (`handleSetup`), `/setup` page, `/api/setup` route, startup hook `instrumentation.ts` with `server/setup-announce.ts`, `TALLYMED_SETUP_TOKEN` validation in `config.ts`, login page link, Compose files and env examples, `dev-up.sh` and `dev-up.cmd` (show the token on screen once, only while setup is needed, never written to a file), CI Compose smoke, `check-proxy` and `check-app-browser`, docs (development, operations, security). Removed: `apps/web/cli/bootstrap.ts`, `npm run bootstrap`, `TALLYMED_BOOTSTRAP_*`.
+- Operators: complete setup before exposing the proxy publicly, remove `TALLYMED_SETUP_TOKEN` afterwards, run one web container, treat the container log as sensitive until setup is complete (a generated token is in the console banner). The password change and reset flow and shared-NAT lockout documentation from M01 remain required before a real deployment.
+
+## Interface redesign handoff (owner request, 2026-11-13)
+
+- Branch: `ui-redesign-ledger-cross-branding`, PR against `dev` (head SHA and screenshots on the PR). Decisions are in DECISIONS.md under Interface redesign decisions; the reference is `docs/design-system.md`.
+- Changed: `packages/brand` (new vector logo set, icons, bundled font, `paths.json`); `apps/web/app/globals.css` (tokens, themes, components), the shell layout, `ShellNav`, `ThemeToggle`, `AuthShell`, `brand.tsx`, `icons.tsx`, `not-found.tsx`, class and markup changes on every page; the style string of the two one-time result pages in `server/http.ts`; `apps/marketing` (layout, home, roadmap, preview, `site.css`, icons, regenerated `og.png`); `scripts/check-app-browser.mjs`, `scripts/check-export.mjs`, `scripts/generate-og.mjs`, `tests/marketing.test.mjs`; CI dark-theme step; docs.
+- Not changed: business logic, data handling, authentication, authorization, headers and the public roadmap data.
+- Checks run locally and results: see the PR description.
+- Next: independent review, owner merge. The public site changes only when `dev` is next merged into `main`.

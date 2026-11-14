@@ -3,6 +3,7 @@ import Link from 'next/link';
 import roadmap from '../lib/roadmap.json';
 import { absoluteUrl, links, ogImages, siteDescription } from '../lib/site';
 import { faq, features, steps } from './components/Content';
+import { Mark } from './components/Brand';
 import Preview from './components/Preview';
 
 export const metadata: Metadata = {
@@ -15,14 +16,17 @@ export default function Home() {
   const done = roadmap.filter((item) => item.status === 'Complete').length;
   return <>
     <section className="hero" aria-labelledby="hero-title">
-      <div className="frame">
-        <p className="status">Open source · In development</p>
-        <h1 id="hero-title">Medical expenses,<br /> accounted for.</h1>
-        <p className="intro">{siteDescription}</p>
-        <div className="actions">
-          <a className="button" href={links.source}>View on GitHub</a>
-          <a className="textlink" href={links.features}>Explore planned features</a>
+      <div className="frame hero-grid">
+        <div>
+          <p className="status"><span className="dot" aria-hidden="true" />Open source · In development</p>
+          <h1 id="hero-title">Medical expenses,<br /> <span className="hl">accounted for.</span></h1>
+          <p className="intro">{siteDescription}</p>
+          <div className="actions">
+            <a className="button" href={links.source}>View on GitHub</a>
+            <a className="textlink" href={links.features}>Explore planned features</a>
+          </div>
         </div>
+        <div className="hero-art" aria-hidden="true"><Mark onDark /></div>
       </div>
     </section>
 
@@ -36,7 +40,7 @@ export default function Home() {
       <div className="frame section">
         <h2 id="features-title">What TallyMed is planned to do</h2>
         <ul className="cards">{features.map(({ title, text }) =>
-          <li key={title}><h3>{title}</h3><p>{text}</p></li>)}</ul>
+          <li key={title}><span className="tick" aria-hidden="true" /><h3>{title}</h3><p>{text}</p></li>)}</ul>
       </div>
     </section>
 
@@ -84,6 +88,9 @@ export default function Home() {
     <section className="frame section" aria-labelledby="progress-title">
       <h2 id="progress-title">Development progress</h2>
       <p className="lead">{done} of {roadmap.length} planned areas complete. {active.length > 0 && <>Now in development: {active.map((item) => item.name).join(', ')}.</>}</p>
+      <div className="meter" role="img" aria-label={`${done} of ${roadmap.length} planned areas complete`}>
+        {roadmap.map((item) => <span key={item.name} data-status={item.status} />)}
+      </div>
       <Link className="button" href="/roadmap/">See the full roadmap</Link>
     </section>
 

@@ -18,6 +18,71 @@ export interface AppConfig {
   documentQuotaBytes: number;
   /** Days a removed document's bytes are kept before the cleanup command purges them. */
   documentRetentionDays: number;
+  /** Operator-defined one-time setup token (TALLYMED_SETUP_TOKEN). Null means the server generates one at startup while setup is needed. */
+  setupToken: string | null;
+  /**
+   * Why TALLYMED_SETUP_TOKEN was rejected, or null. An invalid value never stops the app: once an administrator exists the variable is
+   * irrelevant, and while setup is needed setup fails closed with this reason in the log.
+   */
+  setupTokenError: string | null;
+}
+
+export const MIN_SETUP_TOKEN_LENGTH = 32;
+export const MAX_SETUP_TOKEN_LENGTH = 128;
+const PLACEHOLDER_TOKEN = /^(change[-_ ]?me|replace[-_ ]?me|your[-_ ]?token|setup[-_ ]?token|tallymed|password|passphrase|secret|example|test)/i;
+const COMMON_WORDS = ['password', 'passphrase', 'tallymed', 'changeme', 'replaceme', 'secret', 'token', 'setup', 'example', 'correct', 'horse', 'battery', 'staple',
+  'admin', 'letmein', 'welcome', 'qwerty', 'abcdef', 'hunter'];
+const KEYBOARD_ROWS = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm', '1234567890'];
+
+/** True for 5 or more consecutive ascending or descending characters (`abcde`, `98765`) or a keyboard row fragment. */
+function hasPattern(value: string): boolean {
+  const lower = value.toLowerCase();
+  let up = 1;
+  let down = 1;
+  for (let i = 1; i < lower.length; i++) {
+    const d = lower.charCodeAt(i) - lower.charCodeAt(i - 1);
+    up = d === 1 ? up + 1 : 1;
+    down = d === -1 ? down + 1 : 1;
+    if (up >= 5 || down >= 5) return true;
+  }
+  for (const row of KEYBOARD_ROWS) {
+    for (const r of [row, [...row].reverse().join('')]) {
+      for (let i = 0; i + 5 <= r.length; i++) if (lower.includes(r.slice(i, i + 5))) return true;
+    }
+  }
+  return false;
+}
+
+/** True when any 8-character block occurs twice (`abcdefgh-abcdefgh-...`) or a single character makes up a quarter of the value. */
+function isRepetitive(value: string): boolean {
+  const seen = new Set<string>();
+  for (let i = 0; i + 8 <= value.length; i++) {
+    const block = value.slice(i, i + 8);
+    if (seen.has(block)) return true;
+    seen.add(block);
+  }
+  const counts = new Map<string, number>();
+  for (const c of value) counts.set(c, (counts.get(c) ?? 0) + 1);
+  return Math.max(...counts.values()) * 4 > value.length;
+}
+
+/**
+ * An operator-defined setup token is a bearer credential for creating the first administrator, so it must be long and
+ * not guessable from a dictionary: 32 to 128 printable ASCII characters without whitespace, at least 16 different
+ * characters, no run of 5 sequential characters or keyboard-row fragment, no repeated 8-character block, no common word
+ * or placeholder. Values from `openssl rand -base64 32` pass; a 32-byte hex value (16 symbols) often has fewer than 16 distinct characters and is rejected about a quarter of the time, so use base64 or `-hex 48`. Error messages never contain the value.
+ */
+export function parseSetupToken(value: string | undefined): string | null {
+  if (value === undefined || value === '') return null;
+  if (value.length < MIN_SETUP_TOKEN_LENGTH || value.length > MAX_SETUP_TOKEN_LENGTH) {
+    throw new Error(`TALLYMED_SETUP_TOKEN must be ${MIN_SETUP_TOKEN_LENGTH} to ${MAX_SETUP_TOKEN_LENGTH} characters (use \`openssl rand -base64 32\`, or leave it empty to have the server generate one)`);
+  }
+  if (!/^[\x21-\x7e]+$/.test(value)) throw new Error('TALLYMED_SETUP_TOKEN must use printable ASCII characters without spaces');
+  const lower = value.toLowerCase();
+  if (new Set(value).size < 16 || PLACEHOLDER_TOKEN.test(value) || COMMON_WORDS.some((w) => lower.includes(w)) || hasPattern(value) || isRepetitive(value)) {
+    throw new Error('TALLYMED_SETUP_TOKEN is too guessable: use a random value such as `openssl rand -base64 32` (or leave it empty)');
+  }
+  return value;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -87,6 +152,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       note: 'Per-address login throttling is disabled until TALLYMED_PROXY_SECRET is set and the proxy sends it.',
     });
   }
+  let setupToken: string | null = null;
+  let setupTokenError: string | null = null;
+  try {
+    setupToken = parseSetupToken(env.TALLYMED_SETUP_TOKEN);
+  } catch (error) {
+    setupTokenError = error instanceof Error ? error.message : 'invalid TALLYMED_SETUP_TOKEN';
+    log('warn', 'config.setup_token_invalid', { reason: setupTokenError, note: 'ignored once an administrator exists; setup stays closed until fixed' });
+  }
   return {
     databaseUrl,
     canonicalOrigin: origin,
@@ -100,5 +173,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     documentMaxBytes: intEnv(env, 'TALLYMED_DOCUMENT_MAX_MB', 10, 1, 25) * 1024 * 1024,
     documentQuotaBytes: intEnv(env, 'TALLYMED_DOCUMENT_QUOTA_MB', 2048, 10, 1_048_576) * 1024 * 1024,
     documentRetentionDays: intEnv(env, 'TALLYMED_DOCUMENT_RETENTION_DAYS', 30, 0, 3650),
+    setupToken,
+    setupTokenError,
   };
 }

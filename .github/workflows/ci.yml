@@ -42,6 +42,10 @@ jobs:
       - run: npm run test:performance
       - name: Verify expense screens in a browser (disposable PostgreSQL)
         run: npm run test:app-browser
+      - name: Verify the same screens and contrast in the dark theme
+        run: npm run test:app-browser
+        env:
+          TALLYMED_COLOR_SCHEME: dark
       - name: Verify repository-path export
         run: npm run build:marketing && npm run test:export && npm run test:browser && npm run test:performance
         env:
@@ -50,6 +54,8 @@ jobs:
           TALLYMED_REPOSITORY: example/tallymed-example
   compose-smoke:
     runs-on: ubuntu-latest
+    env:
+      TALLYMED_SETUP_TOKEN: k7Qz4mVx9LpR2wTn8YbH5cJd3FgS6aUe
     steps:
       - uses: actions/checkout@v6
       - name: Validate release Compose file
@@ -65,9 +71,22 @@ jobs:
         run: |
           curl --fail --retry 10 --retry-connrefused --retry-delay 2 http://127.0.0.1:3001/healthz
           docker compose --env-file .env.example run --rm web node apps/web/cli/migrate.ts
-          printf 'synthetic ci passphrase' | docker compose --env-file .env.example run --rm -T \
-            -e TALLYMED_BOOTSTRAP_EMAIL=admin@example.test -e TALLYMED_BOOTSTRAP_NAME='Alex Example' \
-            -e TALLYMED_HOUSEHOLD_NAME='Example Family' web node apps/web/cli/bootstrap.ts
+          # The server prints its setup notice once the schema exists. The token comes from TALLYMED_SETUP_TOKEN (job env), so the
+          # notice names the variable and must not contain the value.
+          for i in $(seq 1 30); do
+            docker compose --env-file .env.example logs web | grep -q 'TallyMed setup is required' && break
+            sleep 1
+          done
+          docker compose --env-file .env.example logs web | grep -q 'TallyMed setup is required'
+          if docker compose --env-file .env.example logs web | grep -qF "$TALLYMED_SETUP_TOKEN"; then echo 'the configured setup token appears in the web log'; exit 1; fi
+          curl --fail http://127.0.0.1:3001/setup | grep -q 'Create the first administrator'
+          setup() { curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' \
+            -d "{\"setupToken\":\"$1\",\"householdName\":\"Example Family\",\"displayName\":\"Alex Example\",\"email\":\"admin@example.test\",\"password\":\"synthetic ci passphrase\"}" \
+            http://127.0.0.1:3001/api/setup; }
+          test "$(setup wrong-setup-token)" = 403
+          test "$(setup "$TALLYMED_SETUP_TOKEN")" = 201
+          test "$(setup "$TALLYMED_SETUP_TOKEN")" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/setup)" = 404
           curl --fail http://127.0.0.1:3001/login | grep -q 'Sign in'
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://127.0.0.1:3001' \
             -H 'Content-Type: application/json' -d '{"email":"admin@example.test","password":"synthetic ci passphrase"}' \

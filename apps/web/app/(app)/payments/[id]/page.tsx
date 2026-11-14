@@ -20,7 +20,8 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
   const key = (name: string) => <input type="hidden" name="idempotencyKey" value={newKey()} data-for={name} />;
   const base = (<><Csrf token={csrf} /><input type="hidden" name="paymentId" value={pm.id} /></>);
   const canVoid = live && BigInt(pm.appliedCents) === 0n && BigInt(pm.refundedCents) === 0n;
-  return <main className="wide">
+  return <main id="main" className="wide">
+    <p className="crumb"><Link href="/payments">← Payments</Link></p>
     <h1>Payment of <Money cents={pm.amountCents} /> on {pm.paidOn}</h1>
     <p>{label(pm.method)}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
     {pm.note && <p>{pm.note}</p>}
