@@ -24,13 +24,16 @@ echo   3) Logs
 echo   4) Restart and update
 echo   5) Wipe (delete data)
 echo   6) Quit
-choice /c 123456 /n /m "Choose: "
-if errorlevel 6 goto :quit
-if errorlevel 5 ( call :wipe & goto :menu )
-if errorlevel 4 ( call :update & goto :menu )
-if errorlevel 3 ( call :logs & goto :menu )
-if errorlevel 2 ( call :stop & goto :menu )
-call :start
+set "CHOICE="
+set /p "CHOICE=Choose (then press Enter): "
+if "%CHOICE%"=="6" goto :quit
+if /i "%CHOICE%"=="q" goto :quit
+if "%CHOICE%"=="5" ( call :wipe & goto :menu )
+if "%CHOICE%"=="4" ( call :update & goto :menu )
+if "%CHOICE%"=="3" ( call :logs & goto :menu )
+if "%CHOICE%"=="2" ( call :stop & goto :menu )
+if "%CHOICE%"=="1" ( call :start & goto :menu )
+echo Unknown choice. Type a number from 1 to 6 and press Enter.
 goto :menu
 
 :quit
@@ -83,16 +86,33 @@ for /f "delims=" %%u in ('git rev-parse --abbrev-ref --symbolic-full-name "@{u}"
 if not defined UPSTREAM ( echo Git: skipped, branch %BRANCH% has no upstream. & goto :eof )
 for /f "delims=" %%d in ('git status --porcelain --untracked-files=no') do set "DIRTY=1"
 if defined DIRTY ( echo Git: skipped, tracked files have local changes. & goto :eof )
-git pull --ff-only > "%TMPOUT%" 2>&1
+for /f "delims=" %%h in ('git rev-parse HEAD') do set "OLDHEAD=%%h"
+echo Pulling %BRANCH% from %UPSTREAM%...
+rem The full git output stays hidden unless the pull fails.
+git pull --ff-only --quiet > "%TMPOUT%" 2>&1
 if errorlevel 1 (
   type "%TMPOUT%"
-  echo Git: pull failed on %BRANCH%; continuing with the current checkout.
-) else (
-  set "FIRST="
-  for /f "usebackq delims=" %%l in ("%TMPOUT%") do set "FIRST=%%l"
-  call echo Git: %BRANCH% from %UPSTREAM%: %%FIRST%%
+  echo Git: pull failed on %BRANCH% ^(offline?^); continuing with the current checkout.
+  del "%TMPOUT%" >nul 2>&1
+  goto :eof
 )
 del "%TMPOUT%" >nul 2>&1
+for /f "delims=" %%h in ('git rev-parse HEAD') do set "NEWHEAD=%%h"
+if "%OLDHEAD%"=="%NEWHEAD%" ( echo Git: already up to date. & goto :eof )
+for /f "delims=" %%c in ('git rev-list --count %OLDHEAD%..%NEWHEAD%') do set "NCOMMITS=%%c"
+echo Git: updated %OLDHEAD:~0,7%..%NEWHEAD:~0,7% ^(%NCOMMITS% commits^)
+rem Concise summary of the changed files: the diffstat, first 25 file lines, then the totals line.
+set "STATN=0"
+set "STATLAST="
+for /f "delims=" %%l in ('git diff --stat %OLDHEAD% %NEWHEAD%') do call :statline "%%l"
+if %STATN% gtr 26 echo   ... %STATN% diffstat lines in all; showing the first 25.
+if %STATN% gtr 25 echo   %STATLAST%
+goto :eof
+
+:statline
+set /a STATN+=1
+set "STATLAST=%~1"
+if %STATN% leq 25 echo   %~1
 goto :eof
 
 :bringup
@@ -110,11 +130,13 @@ if errorlevel 1 (
   powershell -NoProfile -Command "$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $k=[Convert]::ToBase64String($b); $f=@(Get-Content .env | Where-Object { $_ -notmatch '^TALLYMED_SECRETS_KEY=' }); $f + ('TALLYMED_SECRETS_KEY=' + $k) | Set-Content -Encoding ascii .env"
   echo Generated a local TALLYMED_SECRETS_KEY in .env.
 )
+echo Building images ^(the build log is shown only if it fails^)...
 docker compose build --quiet > "%TMPOUT%" 2>&1
 if errorlevel 1 ( echo Image build failed: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
 echo Starting containers (waits for the database health check)...
-docker compose up -d --wait db
-if errorlevel 1 ( echo Database did not become healthy. & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
+docker compose up -d --wait db > "%TMPOUT%" 2>&1
+if errorlevel 1 ( echo Database did not become healthy: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
+echo Applying database migrations...
 docker compose run --rm web node apps/web/cli/migrate.ts > "%TMPOUT%" 2>&1
 if errorlevel 1 ( echo Database migration failed: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
 del "%TMPOUT%" >nul 2>&1
@@ -133,10 +155,11 @@ if defined TOKDEFINED goto :startweb
 for /f "delims=" %%t in ('powershell -NoProfile -Command "$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b).TrimEnd([char]61).Replace([char]43,[char]45).Replace([char]47,[char]95)"') do set "SETUPTOK=%%t"
 :startweb
 if defined SETUPTOK set "TALLYMED_SETUP_TOKEN=%SETUPTOK%"
-docker compose up -d --wait
+docker compose up -d --wait > "%TMPOUT%" 2>&1
 set "UPRESULT=%ERRORLEVEL%"
 if defined SETUPTOK set "TALLYMED_SETUP_TOKEN="
-if not "%UPRESULT%"=="0" ( set "SETUPTOK=" & echo Containers did not start cleanly. & pause & goto :eof )
+if not "%UPRESULT%"=="0" ( set "SETUPTOK=" & echo Containers did not start cleanly: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
+del "%TMPOUT%" >nul 2>&1
 set "PORT=3001"
 if exist .env for /f "usebackq tokens=1,* delims==" %%a in (`findstr /b /c:"TALLYMED_WEB_PORT=" .env`) do set "PORT=%%b"
 set "PORT=%PORT:"=%"

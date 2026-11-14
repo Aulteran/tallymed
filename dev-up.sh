@@ -46,15 +46,27 @@ web_port() {
 
 git_pull() {
   if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then echo "Git: skipped, not a git checkout."; return 0; fi
-  local branch up out
+  local branch up out old new
   branch=$(git symbolic-ref -q --short HEAD) || { echo "Git: skipped, HEAD is detached."; return 0; }
   up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || { echo "Git: skipped, branch '$branch' has no upstream."; return 0; }
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "Git: skipped, tracked files have local changes."; return 0; fi
-  if out=$(git pull --ff-only 2>&1); then
-    echo "Git: $branch from $up: $(printf '%s\n' "$out" | tail -n 1)"
-  else
-    printf '%s\n' "$out" >&2; echo "Git: pull failed on '$branch'; continuing with the current checkout."
+  old=$(git rev-parse HEAD)
+  echo "Pulling $branch from $up..."
+  # The full git output stays hidden unless the pull fails.
+  if ! out=$(GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=8 git pull --ff-only --quiet 2>&1); then
+    printf '%s\n' "$out" >&2; echo "Git: pull failed on '$branch' (offline?); continuing with the current checkout."; return 0
   fi
+  new=$(git rev-parse HEAD)
+  if [ "$old" = "$new" ]; then echo "Git: already up to date ($(git rev-parse --short HEAD))."; return 0; fi
+  echo "Git: updated $(git rev-parse --short "$old")..$(git rev-parse --short "$new") ($(git rev-list --count "$old..$new") commits)"
+  # Concise summary of the changed files: first 25 lines of the diffstat, then the totals line.
+  local stat; stat=$(git diff --stat=78 "$old" "$new")
+  printf '%s\n' "$stat" | head -n 25 | sed 's/^/  /'
+  if [ "$(printf '%s\n' "$stat" | wc -l)" -gt 26 ]; then
+    echo "  ... and $(( $(printf '%s\n' "$stat" | wc -l) - 26 )) more files"
+  fi
+  [ "$(printf '%s\n' "$stat" | wc -l)" -gt 25 ] && printf '%s\n' "$stat" | tail -n 1 | sed 's/^/  /'
+  return 0
 }
 
 # Runs a command quietly; prints its output only when it fails.
@@ -88,9 +100,11 @@ setup_token_defined() {
 
 bring_up() {
   ensure_env || return 1
+  echo "Building images (the build log is shown only if it fails)..."
   quiet "Image build" docker compose build --quiet || return 1
   echo "Starting containers (waits for the database health check)..."
-  docker compose up -d --wait db || { die "Database did not become healthy."; return 1; }
+  quiet "Database start" docker compose up -d --wait db || return 1
+  echo "Applying database migrations..."
   quiet "Database migration" docker compose run --rm web node apps/web/cli/migrate.ts || return 1
   # The token lives only in this variable and in the environment of the one compose command below.
   local setup=unknown token=""
@@ -102,9 +116,9 @@ bring_up() {
     token=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 40)
   fi
   if [ -n "$token" ]; then
-    TALLYMED_SETUP_TOKEN=$token docker compose up -d --wait || { die "Containers did not start cleanly."; return 1; }
+    quiet "Container start" env TALLYMED_SETUP_TOKEN="$token" docker compose up -d --wait || return 1
   else
-    docker compose up -d --wait || { die "Containers did not start cleanly."; return 1; }
+    quiet "Container start" docker compose up -d --wait || return 1
   fi
   local port; port=$(web_port)
   wait_web "$port" || return 1
