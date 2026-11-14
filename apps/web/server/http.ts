@@ -17,6 +17,8 @@ import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
 import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
+import * as settingsService from './services/settings.ts';
+import { refreshRuntimeConfig } from './settings.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
 
@@ -255,6 +257,7 @@ function route(opts: {
     let body: Record<string, unknown> = {};
     try {
       if (req.method !== 'POST') throw new AppError('invalid_input', 'POST required');
+      await refreshRuntimeConfig(ctx.config, ctx.pool);
       const client = clientInfo(req.headers, ctx.config);
       assertTransport(req.headers, ctx.config, client);
       assertSameOrigin(req.headers, ctx.config);
@@ -489,7 +492,8 @@ export async function handleHsaExport(req: Request, ctx: AppContext): Promise<Re
   const requestId = randomUUID();
   try {
     if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
-    const client = clientInfo(req.headers, ctx.config);
+    await refreshRuntimeConfig(ctx.config, ctx.pool);
+      const client = clientInfo(req.headers, ctx.config);
     assertTransport(req.headers, ctx.config, client);
     const session = await pageActor(ctx, req.headers);
     if (!session) throw new AppError('unauthenticated');
@@ -625,7 +629,8 @@ export async function handleDocumentDownload(req: Request, ctx: AppContext, id: 
   const requestId = randomUUID();
   try {
     if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
-    const client = clientInfo(req.headers, ctx.config);
+    await refreshRuntimeConfig(ctx.config, ctx.pool);
+      const client = clientInfo(req.headers, ctx.config);
     assertTransport(req.headers, ctx.config, client);
     const session = await pageActor(ctx, req.headers);
     if (!session) throw new AppError('unauthenticated');
@@ -715,6 +720,52 @@ const ASSISTANT_ROUTES = new Map<string, ReturnType<typeof route>>([
 /** Assistant mutations from a fixed allow-list. The MCP listener has no route into any of them. */
 export async function handleAssistantAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
   const handler = ASSISTANT_ROUTES.get(action);
+  if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
+  return handler(req, ctx);
+}
+
+
+// ---------- administrator settings ----------
+
+const SETTINGS_PAGES = { general: '/settings', documents: '/settings', proxy: '/settings/proxy', email: '/settings/email' } as const;
+const SETTINGS_ACTIONS: Record<string, {
+  service: (pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string) => Promise<void>; page: string; saved: string; keep?: string[];
+}> = {
+  general: { service: settingsService.saveGeneral, page: SETTINGS_PAGES.general, saved: 'general', keep: ['sourceUrl', 'sessionAbsoluteMinutes', 'sessionIdleMinutes', 'invitationMinutes'] },
+  documents: { service: settingsService.saveDocuments, page: SETTINGS_PAGES.documents, saved: 'documents', keep: ['documentMaxMb', 'documentQuotaMb', 'documentRetentionDays'] },
+  proxy: { service: settingsService.saveProxy, page: SETTINGS_PAGES.proxy, saved: 'proxy', keep: ['trustedProxies'] },
+  email: { service: settingsService.saveEmail, page: SETTINGS_PAGES.email, saved: 'email', keep: ['host', 'port', 'security', 'username', 'fromAddress', 'fromName'] },
+  'email/clear': { service: settingsService.clearEmail, page: SETTINGS_PAGES.email, saved: 'email_cleared' },
+};
+
+const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promise<Response>>([
+  ...Object.entries(SETTINGS_ACTIONS).map(([name, a]) => [name, route({
+    name: `settings.${name}`,
+    session: true,
+    errorPath: () => a.page,
+    keepFields: a.keep,
+    async run({ ctx, actor, body, requestId, req }) {
+      await a.service(ctx.pool, ctx.config, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `${a.page}?saved=${a.saved}`) };
+      return { json: { ok: true } };
+    },
+  })] as const),
+  ['email/test', route({
+    name: 'settings.email.test',
+    session: true,
+    errorPath: () => '/settings/email',
+    async run({ ctx, actor, body, requestId, req }) {
+      const result = await settingsService.sendTestEmail(ctx.pool, ctx.config, actor!, body, requestId);
+      const outcome = result.sent ? 'sent' : result.reason;
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `/settings/email?tested=${outcome}`) };
+      return { json: { ok: result.sent, result: outcome, smtpCode: result.sent ? undefined : result.smtpCode } };
+    },
+  })],
+]);
+
+/** Settings mutations from a fixed allow-list. Admin-only; each one also re-checks the role and the administrator's password in its service. */
+export async function handleSettingsAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
+  const handler = SETTINGS_ROUTES.get(action);
   if (!handler) return Response.json({ error: { code: 'not_found', message: 'not_found' } }, { status: 404, headers: BASE_HEADERS });
   return handler(req, ctx);
 }

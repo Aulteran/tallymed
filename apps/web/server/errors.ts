@@ -15,6 +15,8 @@ export type ErrorCode =
   | 'duplicate_document'
   | 'storage_unavailable'
   | 'busy'
+  | 'reauth_failed'
+  | 'secrets_key_missing'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -34,6 +36,8 @@ const STATUS: Record<ErrorCode, number> = {
   duplicate_document: 409,
   storage_unavailable: 503,
   busy: 429,
+  reauth_failed: 403,
+  secrets_key_missing: 409,
   internal: 500,
 };
 

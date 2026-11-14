@@ -387,6 +387,26 @@ try {
   assert.match(await text(), /Visit[\s\S]*Matched from an assistant proposal|Visit/);
   ok('assistant credential shown once; a proposal is reviewed and approved in the app with its text shown as plain text');
 
+  // Administrator settings: the three pages render accessibly, a limit is saved with password confirmation, and the proxy page shows what the app sees.
+  await page.goto(`${origin}/settings`);
+  await a11y('server settings');
+  await page.fill('#sessionIdleMinutes', '90');
+  await page.fill('#general-pw', password);
+  await page.click('button:has-text("Save general settings")');
+  assert.match(await text(), /General settings saved/);
+  await page.goto(`${origin}/settings/proxy`);
+  await a11y('reverse proxy settings');
+  assert.match(await text(), /Connection address[\s\S]*127\.0\.0\.1[\s\S]*No: forwarded headers are ignored/i);
+  await page.fill('#trustedProxies', '127.0.0.1');
+  await page.fill('#proxy-pw', password);
+  await page.click('button:has-text("Save trusted proxies")');
+  assert.match(await text(), /Reverse proxy settings saved/);
+  assert.match(await text(), /Yes, by address list/i);
+  await page.goto(`${origin}/settings/email`);
+  await a11y('email settings');
+  assert.match(await text(), /Not configured/);
+  ok('server settings, reverse proxy and email pages: accessible, saved with password confirmation, proxy trust visible');
+
   await page.goto(`${origin}/`);
   const overview = await text();
   assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
@@ -407,7 +427,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl]) {
+  for (const target of [documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);

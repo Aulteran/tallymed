@@ -1,32 +1,60 @@
 import { isIP } from 'node:net';
 import type { AppConfig } from './config.ts';
 import { AppError } from './errors.ts';
+import { IpMatcher, normalizeIp, parseTrustedList } from './ip.ts';
+import { readPeer } from './peer.ts';
 import { safeEqual } from './tokens.ts';
 
 export const PROXY_SECRET_HEADER = 'x-tallymed-proxy-secret';
 
 export interface ClientInfo {
-  /** True only when the request carried the operator proxy's shared secret. */
+  /** True only when the request came from a trusted address or carried the operator proxy's shared secret. */
   trustedProxy: boolean;
-  /** Client address as reported by the trusted proxy, otherwise null. */
+  /** How the proxy was recognised. */
+  trustedBy: 'address' | 'secret' | null;
+  /** Client address as reported by the trusted proxy, otherwise null. Only this value is ever used for throttling keys. */
   ip: string | null;
+  /** The TCP peer address of this request (the nearest hop), when the server could determine it. */
+  peer: string | null;
+}
+
+const matchers = new Map<string, IpMatcher>();
+/** Compiled matcher for a trusted list. Cached by content; invalid entries are skipped (they cannot be saved, only come from a bad edit). */
+export function trustedMatcher(entries: string[]): IpMatcher {
+  const key = entries.join(',');
+  let m = matchers.get(key);
+  if (!m) {
+    m = new IpMatcher(parseTrustedList(entries).ok);
+    if (matchers.size > 50) matchers.clear();
+    matchers.set(key, m);
+  }
+  return m;
 }
 
 /**
- * Forwarded headers (X-Forwarded-For / -Proto) are honoured only when the request presents the
- * configured proxy secret. The operator's proxy must strip client-supplied copies of both the
- * secret header and the forwarded headers, then set them. Without a configured secret every
- * forwarded header is ignored. The canonical origin never depends on Host or X-Forwarded-Host.
+ * Forwarded headers (X-Forwarded-For / -Proto) are honoured only for a request that arrived from a trusted proxy: either its TCP peer
+ * address is in the trusted list (Settings > Reverse proxy, or TALLYMED_TRUSTED_PROXIES), or it presents the configured shared secret
+ * (TALLYMED_PROXY_SECRET). With neither configured every forwarded header is ignored (trust nothing). The client is the right-most
+ * X-Forwarded-For entry that is not itself a trusted proxy, so a chain of trusted proxies works and a client-supplied left part never
+ * counts. The operator's proxy must replace (not append to) any client-supplied forwarded headers it receives. The canonical origin never
+ * depends on Host or X-Forwarded-Host.
  */
 export function clientInfo(headers: Headers, config: AppConfig): ClientInfo {
+  const peer = readPeer(headers);
+  const trusted = trustedMatcher(config.trustedProxies);
   const presented = headers.get(PROXY_SECRET_HEADER);
-  if (!config.proxySecret || !presented || !safeEqual(presented, config.proxySecret)) {
-    return { trustedProxy: false, ip: null };
+  const byAddress = peer !== null && trusted.has(peer);
+  const bySecret = !!config.proxySecret && !!presented && safeEqual(presented, config.proxySecret);
+  if (!byAddress && !bySecret) return { trustedProxy: false, trustedBy: null, ip: null, peer };
+  const entries = (headers.get('x-forwarded-for') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  let client: string | null = null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i]!;
+    if (isIP(e) === 0) { client = null; break; } // anything unparseable means the chain cannot be believed
+    client = normalizeIp(e);
+    if (!trusted.has(e)) break;
   }
-  const forwarded = headers.get('x-forwarded-for');
-  // The proxy appends the address it observed, so the right-most entry is the only one it vouches for.
-  const last = forwarded?.split(',').map((s) => s.trim()).filter(Boolean).at(-1) ?? null;
-  return { trustedProxy: true, ip: last && isIP(last) ? last : null };
+  return { trustedProxy: true, trustedBy: byAddress ? 'address' : 'secret', ip: client, peer };
 }
 
 /** For an https canonical origin, a trusted proxy that reports plain http is a misconfiguration. */

@@ -141,3 +141,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Not changed: business logic, data handling, authentication, authorization, headers and the public roadmap data.
 - Checks run locally and results: see the PR description.
 - Next: independent review, owner merge. The public site changes only when `dev` is next merged into `main`.
+
+## Admin settings, SMTP and trusted proxy handoff
+
+- Branch: `admin-settings-and-smtp` (PR against `dev`, see the PR for the head SHA). Migration `0009_server_settings.sql`; renumber at merge if the password-reset work takes 0009 first.
+- Changed: Server settings pages (General, Documents, Reverse proxy, Email), SMTP helper `server/email.ts`, encrypted SMTP password (`TALLYMED_SECRETS_KEY`), trusted proxy address/CIDR list with the signed peer address, audit entries, docs and decisions.
+- Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test` (201), build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`, a real SMTP server with STARTTLS/TLS, a real reverse proxy.
+- Next: owner test on the homelab proxy; independent security review of spoofed `X-Forwarded-For` handling.

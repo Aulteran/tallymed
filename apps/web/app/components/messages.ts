@@ -14,7 +14,9 @@ const MESSAGES: Record<string, string> = {
   busy: 'Several uploads are in progress. Wait a moment and try again.',
   invalid_setup_token: 'The setup token was not accepted. Use the value of TALLYMED_SETUP_TOKEN, or the token the server printed to its console when it started.',
   bootstrap_closed: 'Setup was already completed.',
-  rate_limited: 'Too many attempts. Wait fifteen minutes and try again.',
+  rate_limited: 'Too many attempts. Wait a few minutes (up to fifteen) and try again.',
+  reauth_failed: 'Your password was not correct. Nothing was changed.',
+  secrets_key_missing: 'The SMTP password cannot be saved because the server has no TALLYMED_SECRETS_KEY. Set it in the server environment (openssl rand -base64 32), restart, and try again.',
   internal: 'Something went wrong. Try again.',
 };
 
