@@ -6,6 +6,7 @@
 //                                            the volume; --force overrides that after you have checked with verify.
 // Both need DATABASE_URL and TALLYMED_DOCUMENTS_DIR. Output lists document and version numbers, never file names or titles.
 import { parseDocumentsDir } from '../server/config.ts';
+import { readGroup } from '../server/settings.ts';
 import { createPool } from '../server/db.ts';
 import { cleanupStorage, verifyStorage } from '../server/services/documents.ts';
 import { FileObjectStore } from '../server/storage.ts';
@@ -31,7 +32,9 @@ try {
     console.log(JSON.stringify(report, null, 2));
     if (report.missing.length || report.corrupt.length) process.exitCode = 1;
   } else {
-    const days = Number(process.env.TALLYMED_DOCUMENT_RETENTION_DAYS ?? 30);
+    // An administrator's stored value (Settings > Documents) wins over the environment value and the default of 30.
+    const stored = await readGroup(pool, 'documents').catch(() => null);
+    const days = stored?.value.documentRetentionDays ?? Number(process.env.TALLYMED_DOCUMENT_RETENTION_DAYS ?? 30);
     if (!Number.isInteger(days) || days < 0 || days > 3650) throw new Error('TALLYMED_DOCUMENT_RETENTION_DAYS must be an integer from 0 to 3650');
     const flags = process.argv.slice(3);
     if (flags.some((f) => f !== '--apply' && f !== '--force')) throw new Error('Unknown option. Use --apply and optionally --force.');

@@ -157,3 +157,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Branch: `admin-password-reset-forced-change`, PR against `dev` (number and tested head are on the PR). Independent security review pending.
 - Changed: migration 0009 (`must_change_password`, `password_resets`), `server/services/credentials.ts`, `repositories/password-resets.ts`, the closed-by-default gate in `server/http.ts`, sign-in re-check under a row lock, `/account/password`, `/password/change`, Operators reset flow, login copy, `docs/security.md`, `docs/operations.md`, `docs/development.md`, DECISIONS.md, `tests/web/password-reset.test.mjs`.
 - Still open: phase 2 (forgot-password email, needs SMTP), see DECISIONS.md for the model constraint it must respect.
+
+## Admin settings, SMTP and trusted proxy handoff
+
+- Branch: `admin-settings-and-smtp` (PR against `dev`, see the PR for the head SHA). Migration `0010_server_settings.sql` (0009 is password reset).
+- Changed: Server settings pages (General, Documents, Reverse proxy, Email), SMTP helper `server/email.ts`, encrypted SMTP password (`TALLYMED_SECRETS_KEY`), trusted proxy address/CIDR list with the signed peer address, audit entries, docs and decisions.
+- Checks run locally (Node 22, PostgreSQL 16): typecheck, `npm test` (201), build, `test:export`, `test:app-browser` in light and dark. Not run: Node 24, Docker/Compose, `test:proxy`, a real SMTP server with STARTTLS/TLS, a real reverse proxy.
+- Next: owner test on the homelab proxy; independent security review of spoofed `X-Forwarded-For` handling.

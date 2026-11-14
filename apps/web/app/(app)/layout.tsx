@@ -22,6 +22,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
   const pending = await pendingProposalCount(appContext().pool, actor);
   const admin: NavGroup['items'] = [
     ...(can(actor, 'operators:manage') ? [{ href: '/operators', label: 'Operators', icon: 'operators' }] : []),
+    ...(can(actor, 'settings:manage') ? [{ href: '/settings', label: 'Server settings', icon: 'settings' }] : []),
     ...(can(actor, 'assistant:manage') ? [{ href: '/assistant', label: 'Assistant', icon: 'assistant' }] : []),
   ];
   const groups: NavGroup[] = [

@@ -9,6 +9,7 @@ import { findActiveSession, insertSession, revokeSession, touchSession } from '.
 import { clearAccountFailures, countRecentFailures, lockThrottleKeys, pruneAttempts, pruneKeys, recordAttempt } from '../repositories/throttle.ts';
 import { findPending, markUsed } from '../repositories/password-resets.ts';
 import { findUserByEmail, findUserInHousehold } from '../repositories/users.ts';
+import { refreshRuntimeConfig } from '../settings.ts';
 import { digest, emailKey, newToken } from '../tokens.ts';
 
 export const THROTTLE_WINDOW_SECONDS = 15 * 60;
@@ -31,6 +32,7 @@ export async function login(
   pool: Pool, config: AppConfig,
   input: { email: string; password: string; ip: string | null; requestId: string; previousToken?: string | null },
 ): Promise<LoginResult> {
+  await refreshRuntimeConfig(config, pool);
   const key = emailKey(input.email);
   const ipKey = input.ip ?? 'untrusted';
   // Check and reserve atomically: the attempt is recorded as a failure before the password is verified, under
@@ -133,6 +135,7 @@ export async function login(
 /** Resolves a cookie token to an actor, or null when absent, unknown, revoked, expired or idle. */
 export async function authenticate(pool: Pool, config: AppConfig, token: string | null | undefined): Promise<Actor | null> {
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+  await refreshRuntimeConfig(config, pool);
   const session = await findActiveSession(pool, digest(token), config.sessionIdleSeconds);
   if (!session) return null;
   if (Date.now() - session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) await touchSession(pool, session.sessionId);

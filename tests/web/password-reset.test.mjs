@@ -294,14 +294,14 @@ const CLASSIFIED = {
   '/auth/login': 'public', '/invitations/accept': 'public', '/setup': 'public',
   '/auth/logout': 'allowed', '/auth/change-password': 'allowed',
   '/operators/invite': 'gated', '/operators/update': 'gated', '/operators/reset-password': 'gated', '/operators/invitations/revoke': 'gated',
-  '/expenses/[...action]': 'gated', '/documents/[...action]': 'gated', '/assistant/[...action]': 'gated',
+  '/expenses/[...action]': 'gated', '/documents/[...action]': 'gated', '/assistant/[...action]': 'gated', '/settings/[...action]': 'gated',
   '/documents/download/[id]': 'gated-get', '/hsa/export': 'gated-get',
 };
 
 test('every API route is classified for the password-change gate', () => {
   assert.deepEqual(routeFiles().sort(), Object.keys(CLASSIFIED).sort());
   const inv = handlers.actionInventory();
-  assert.ok(inv.expenses.length > 20 && inv.documents.length > 3 && inv.assistant.length > 2, 'catch-all actions are enumerated');
+  assert.ok(inv.expenses.length > 20 && inv.documents.length > 3 && inv.assistant.length > 2 && inv.settings.length >= 5, 'catch-all actions are enumerated');
 });
 
 test('an account with a temporary password reaches nothing but change-password and sign-out', { skip: skipDb }, async () => {
@@ -317,6 +317,7 @@ test('an account with a temporary password reaches nothing but change-password a
     for (const a of inv.expenses) await gated(await handlers.handleExpenseAction(post(`/api/expenses/${a}`, {}, { type: 'json', cookie: sam.cookie, headers: { 'x-csrf-token': sam.csrf } }), ctx, a));
     for (const a of inv.documents) await gated(await handlers.handleDocumentAction(post(`/api/documents/${a}`, {}, { type: 'json', cookie: sam.cookie, headers: { 'x-csrf-token': sam.csrf } }), ctx, a));
     for (const a of inv.assistant) await gated(await handlers.handleAssistantAction(post(`/api/assistant/${a}`, {}, { type: 'json', cookie: sam.cookie, headers: { 'x-csrf-token': sam.csrf } }), ctx, a));
+    for (const a of inv.settings) await gated(await handlers.handleSettingsAction(post(`/api/settings/${a}`, {}, { type: 'json', cookie: sam.cookie, headers: { 'x-csrf-token': sam.csrf } }), ctx, a));
     await gated(await run(handlers.handleInvite, '/api/operators/invite'));
     await gated(await run(handlers.handleUpdateOperator, '/api/operators/update'));
     await gated(await run(handlers.handleResetPassword, '/api/operators/reset-password'));
@@ -432,7 +433,7 @@ test('migration 0009 upgrades existing accounts: nobody is forced to change a pa
     await seedHousehold(db.pool);
     await db.pool.query(`insert into sessions (user_id, household_id, token_hash, expires_at)
       select id, household_id, decode(repeat('ab', 32), 'hex'), now() + interval '1 hour' from users`);
-    assert.deepEqual(await migrate(db.pool), ['0009']);
+    assert.deepEqual(await migrate(db.pool), ['0009', '0010']);
     const u = (await db.pool.query('select must_change_password, password_changed_at from users')).rows[0];
     assert.deepEqual(u, { must_change_password: false, password_changed_at: null });
     assert.equal((await db.pool.query('select count(*)::int n from sessions where revoked_at is null')).rows[0].n, 1);

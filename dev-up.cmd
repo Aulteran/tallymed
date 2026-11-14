@@ -105,6 +105,11 @@ if exist .env (
 ) else (
   echo .env.example is missing; cannot create .env. & pause & goto :eof
 )
+findstr /b /r /c:"TALLYMED_SECRETS_KEY=[^ ]" .env >nul 2>&1
+if errorlevel 1 (
+  powershell -NoProfile -Command "$b=New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $k=[Convert]::ToBase64String($b); $f=@(Get-Content .env | Where-Object { $_ -notmatch '^TALLYMED_SECRETS_KEY=' }); $f + ('TALLYMED_SECRETS_KEY=' + $k) | Set-Content -Encoding ascii .env"
+  echo Generated a local TALLYMED_SECRETS_KEY in .env.
+)
 docker compose build --quiet > "%TMPOUT%" 2>&1
 if errorlevel 1 ( echo Image build failed: & type "%TMPOUT%" & del "%TMPOUT%" >nul 2>&1 & pause & goto :eof )
 echo Starting containers (waits for the database health check)...

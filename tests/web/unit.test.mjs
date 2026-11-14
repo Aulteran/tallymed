@@ -32,9 +32,9 @@ test('config validates secrets, ttls and the source link', () => {
 
 test('proxy headers are ignored without the secret', () => {
   const c = loadConfig({ ...base, TALLYMED_PROXY_SECRET: 's'.repeat(32) });
-  assert.deepEqual(clientInfo(new Headers({ 'x-forwarded-for': '1.1.1.1' }), c), { trustedProxy: false, ip: null });
-  assert.deepEqual(clientInfo(new Headers({ 'x-tallymed-proxy-secret': 's'.repeat(32), 'x-forwarded-for': '6.6.6.6, 1.1.1.1' }), c), { trustedProxy: true, ip: '1.1.1.1' });
-  assert.deepEqual(clientInfo(new Headers({ 'x-tallymed-proxy-secret': 's'.repeat(32) }), c), { trustedProxy: true, ip: null });
+  assert.deepEqual(clientInfo(new Headers({ 'x-forwarded-for': '1.1.1.1' }), c), { trustedProxy: false, trustedBy: null, peer: null, ip: null });
+  assert.deepEqual(clientInfo(new Headers({ 'x-tallymed-proxy-secret': 's'.repeat(32), 'x-forwarded-for': '6.6.6.6, 1.1.1.1' }), c), { trustedProxy: true, trustedBy: 'secret', peer: null, ip: '1.1.1.1' });
+  assert.deepEqual(clientInfo(new Headers({ 'x-tallymed-proxy-secret': 's'.repeat(32) }), c), { trustedProxy: true, trustedBy: 'secret', peer: null, ip: null });
 });
 
 test('redaction removes credentials, cookies, tokens and emails', () => {

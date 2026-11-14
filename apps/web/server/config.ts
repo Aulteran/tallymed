@@ -1,3 +1,4 @@
+import { parseTrustedList } from './ip.ts';
 import { log } from './log.ts';
 
 export interface AppConfig {
@@ -29,6 +30,16 @@ export interface AppConfig {
    * irrelevant, and while setup is needed setup fails closed with this reason in the log.
    */
   setupTokenError: string | null;
+  /**
+   * Key for secrets stored in the database (the SMTP password), from TALLYMED_SECRETS_KEY. Null means saving a secret is refused.
+   * Never shown, logged or returned.
+   */
+  secretsKey: Buffer | null;
+  /**
+   * Addresses or CIDR ranges of the reverse proxies whose forwarded headers are believed, as seen on the TCP connection. Empty (the default)
+   * trusts no address. Environment value TALLYMED_TRUSTED_PROXIES (comma separated); an administrator can override it in the settings.
+   */
+  trustedProxies: string[];
 }
 
 export const MIN_SETUP_TOKEN_LENGTH = 32;
@@ -89,6 +100,16 @@ export function parseSetupToken(value: string | undefined): string | null {
   return value;
 }
 
+/** 32 to 64 random bytes as base64 or base64url (`openssl rand -base64 32`). The error never contains the value. */
+export function parseSecretsKey(value: string | undefined): Buffer | null {
+  if (value === undefined || value === '') return null;
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) throw new Error('TALLYMED_SECRETS_KEY must be base64 (use `openssl rand -base64 32`)');
+  const key = Buffer.from(value, 'base64');
+  if (key.length < 32 || key.length > 64) throw new Error('TALLYMED_SECRETS_KEY must decode to 32 to 64 bytes (use `openssl rand -base64 32`)');
+  if (new Set(key).size < 16) throw new Error('TALLYMED_SECRETS_KEY is not random enough (use `openssl rand -base64 32`)');
+  return key;
+}
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function intEnv(env: Record<string, string | undefined>, key: string, fallback: number, min: number, max: number) {
@@ -143,6 +164,13 @@ export function parseDocumentsDir(value: string | undefined): string | null {
   return value.replace(/\/+$/, '');
 }
 
+export function parseTrustedProxies(value: string | undefined): string[] {
+  const entries = (value ?? '').split(',').map((e) => e.trim()).filter(Boolean);
+  const { ok, errors } = parseTrustedList(entries);
+  if (errors.length) throw new Error(`TALLYMED_TRUSTED_PROXIES: ${errors[0]}`);
+  return ok.map((e) => e.entry);
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
@@ -151,9 +179,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (proxySecret !== null && proxySecret.length < 32) {
     throw new Error('TALLYMED_PROXY_SECRET must be at least 32 characters');
   }
-  if (secure && proxySecret === null) {
+  if (secure && proxySecret === null && !env.TALLYMED_TRUSTED_PROXIES) {
     log('warn', 'config.proxy_secret_missing', {
-      note: 'Per-address login throttling is disabled until TALLYMED_PROXY_SECRET is set and the proxy sends it.',
+      note: 'Per-address login throttling is disabled until a trusted proxy address is set (Settings > Reverse proxy, or TALLYMED_TRUSTED_PROXIES) or TALLYMED_PROXY_SECRET is set and the proxy sends it.',
     });
   }
   let setupToken: string | null = null;
@@ -181,5 +209,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     documentRetentionDays: intEnv(env, 'TALLYMED_DOCUMENT_RETENTION_DAYS', 30, 0, 3650),
     setupToken,
     setupTokenError,
+    secretsKey: parseSecretsKey(env.TALLYMED_SECRETS_KEY),
+    trustedProxies: parseTrustedProxies(env.TALLYMED_TRUSTED_PROXIES),
   };
 }

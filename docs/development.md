@@ -4,7 +4,7 @@ Use Node.js 24, npm, and Docker Compose v2 for the optional container stack. Ins
 
 ## Private app database, first-run setup and checks
 
-The private app needs PostgreSQL and these variables: `DATABASE_URL`, `TALLYMED_CANONICAL_ORIGIN` and optionally `TALLYMED_PROXY_SECRET` and `TALLYMED_SETUP_TOKEN` (see `.env.example`). With the Compose stack running:
+The private app needs PostgreSQL and these variables: `DATABASE_URL`, `TALLYMED_CANONICAL_ORIGIN` and optionally `TALLYMED_TRUSTED_PROXIES`, `TALLYMED_SECRETS_KEY` (needed only to store an SMTP password) and `TALLYMED_PROXY_SECRET` and `TALLYMED_SETUP_TOKEN` (see `.env.example`). With the Compose stack running:
 
 ```sh
 docker compose run --rm web node apps/web/cli/migrate.ts
@@ -37,3 +37,11 @@ Stop the npm web dev server before starting Compose. The web port binds to loopb
 Future app tests use disposable PostgreSQL and fabricated data. Test authorization with real sessions and a second actor, data constraints with real transactions, and core UI workflows in a browser. Use current official specifications when introducing new protocol, framework or tax references. For bugs and contributions, open a GitHub issue with a synthetic reproduction and link the relevant plan. Keep credentials, medical details, financial exports and live backups out of issues, pull requests and CI.
 
 Work branches from `dev` (the default branch) and pull requests target `dev`; `main` is the release branch and publishing is described in [operations](operations.md). For a deployment, set `TALLYMED_SOURCE_URL` to the corresponding source for the running build. See [security and operations](security.md) for the planned reverse-proxy topology and release criteria.
+
+## Server settings, email and trusted proxies (development)
+
+Administrator-editable settings live in the `server_settings` table (migration 0010; one row per group: `general`, `documents`, `email`, `proxy`). `server/settings.ts` reads them at most every five seconds per process and applies them in place to the config object (stored value, then environment, then default). `server/services/settings.ts` holds the admin-only mutations: each re-checks the role, asks for the administrator's password (five wrong answers in 15 minutes lock the check), is optimistic-locked by the group version and audits in the same transaction. Secrets are encrypted by `server/secrets.ts` (AES-256-GCM, HKDF per setting, key from `TALLYMED_SECRETS_KEY`).
+
+Email goes through `server/email.ts` (`isEmailConfigured`, `sendEmail`; see operations.md). To try it locally, run a throwaway mail catcher on port 1025 (for example Mailpit), choose that port, security "None", and tick "Allow loopback and link-local addresses" (from the Compose network use the service name instead). The test suite uses a fake SMTP server (`tests/web/settings.test.mjs`).
+
+The connection address used for the trusted-proxy check is recorded by `installPeerStamp` (called from `instrumentation.ts`), which signs each request's socket address with a per-process key. Tests simulate a connection with `stampPeer(headers, ip)` from `server/peer.ts`. `dev-up` needs nothing new: `dev-up` generates a random `TALLYMED_SECRETS_KEY` into the local `.env` when it is missing (it never prints it); the Compose bridge address of your browser's requests appears on the Reverse proxy page if you want to try the list.

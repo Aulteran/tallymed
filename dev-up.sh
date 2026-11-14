@@ -24,6 +24,18 @@ ensure_env() {
   else
     die ".env.example is missing; cannot create .env."; return 1
   fi
+  ensure_secrets_key
+}
+
+# The key that encrypts an SMTP password saved in the app. Generated once into the local .env, never printed.
+ensure_secrets_key() {
+  grep -Eq '^TALLYMED_SECRETS_KEY=[^[:space:]]' .env 2>/dev/null && return 0
+  local key tmp
+  key=$(head -c 32 /dev/urandom | base64 | tr -d '\n') || return 0
+  tmp=$(mktemp) || return 0
+  { grep -v '^TALLYMED_SECRETS_KEY=' .env; printf 'TALLYMED_SECRETS_KEY=%s\n' "$key"; } > "$tmp" && cat "$tmp" > .env
+  rm -f "$tmp"
+  echo "Generated a local TALLYMED_SECRETS_KEY in .env."
 }
 
 web_port() {
