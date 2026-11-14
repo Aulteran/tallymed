@@ -130,6 +130,14 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Carried into every deployment (also in the guide): no password change or reset flow, shared-address sign-in lockout, the `setup-role` step for the assistant (including after a restore), a best-effort PDF scan, a per-process upload rate limit.
 - `actions/checkout@v6` is referenced by tag like the other workflows; resolving a full commit SHA needs a registry lookup that was not available here. Pin it to a SHA before the first stable release if you want immutable action references.
 
+### M07 release preparation (after acceptance, PR against `dev`)
+
+- Changed: `docs/licensing.md` (AGPL and dependency licence review, verdict and findings), `THIRD-PARTY-NOTICES.md`, `scripts/generate-third-party-licenses.mjs` and both Dockerfiles (licence texts of production dependencies, `LICENSE` and the notices are now inside the images at `/app/licenses/`), `scripts/check-restore-reconciliation.mjs` and `npm run test:restore` (synthetic ledger dumped with `pg_dump`, restored with `pg_restore`, every reported figure compared; added to CI), `CHANGELOG.md` with the draft 0.1.0 notes and known limitations, `docs/release-drills.md` (owner checklist and commands for the drills and the release steps).
+- Secret scan: all 25 commits on every branch searched for common token and key patterns, credential assignments and key/env/dump files; only test fixtures matched. The owner should repeat it on the release commit and enable GitHub secret scanning.
+- Verified locally (Node 22.23, PostgreSQL 16.15 disposable): `npm ci`, `npm run build`, `npm run test:restore` (3 bills, 2 payments, identical figures after restore, migrate a no-op), the licence-text generator against a simulated `npm ci --omit=dev` stage. Not verified: the Docker builds of the changed Dockerfiles (no Docker daemon; CI's Compose smoke test builds them), the CI step that installs the PostgreSQL 17 client, real TLS, firewall, MCP client.
+- Owner only: everything in `docs/release-drills.md`, GitHub settings (default branch, `main` protection, public packages, vulnerability reporting), the release decision and tag.
+- Open dependency on other work: the admin trusted-proxy settings and the password reset flow are being built separately. When they land, update the known-limitations list in `CHANGELOG.md`, `docs/operations.md` and the proxy drill in `docs/release-drills.md`.
+
 ## First-run setup token handoff (owner request after M07)
 
 - Branch: `setup-token-first-admin`, PR against `dev` (head SHA on the PR). Replaces the local bootstrap CLI with a setup-token web setup page; see DECISIONS.md under First-run setup token decision.

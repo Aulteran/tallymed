@@ -30,4 +30,4 @@ Open http://localhost:3000. In another terminal, run `npm run dev:web` for the s
 
 Start with [Publish and initialize Claude Code Projects](docs/github-and-claude.md). See the [product specification](docs/product.md), [architecture](docs/architecture.md), [ledger rules](docs/ledger.md), [security and operations](docs/security.md), the [self-hosted operations guide](docs/operations.md), and [milestone index](.project/README.md).
 
-The TallyMed source is distributed under [GNU AGPL version 3 only](LICENSE), SPDX `AGPL-3.0-only`. Third-party packages retain their own licenses.
+The TallyMed source is distributed under [GNU AGPL version 3 only](LICENSE), SPDX `AGPL-3.0-only`. Third-party packages retain their own licenses; see [third-party notices](THIRD-PARTY-NOTICES.md) and the [licence review](docs/licensing.md). Release notes are in the [changelog](CHANGELOG.md).

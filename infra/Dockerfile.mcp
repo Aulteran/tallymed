@@ -4,10 +4,12 @@ FROM node:24-bookworm-slim AS deps
 WORKDIR /repo
 COPY package*.json ./
 COPY tsconfig.base.json ./
+COPY scripts/generate-third-party-licenses.mjs scripts/
 COPY apps/marketing/package.json apps/marketing/
 COPY apps/web/package.json apps/web/
 COPY packages/brand/package.json packages/brand/
-RUN npm ci --omit=dev --workspace @tallymed/web
+RUN npm ci --omit=dev --workspace @tallymed/web \
+ && node scripts/generate-third-party-licenses.mjs @tallymed/web > /repo/THIRD-PARTY-LICENSES.txt
 
 FROM node:24-bookworm-slim
 WORKDIR /app
@@ -18,6 +20,9 @@ COPY --chown=node:node apps/web/server apps/web/server
 COPY --chown=node:node apps/web/mcp apps/web/mcp
 COPY --chown=node:node apps/web/cli apps/web/cli
 COPY --chown=node:node apps/web/db apps/web/db
+# AGPL-3.0 licence, project notices and the dependency licence texts travel with the image.
+COPY --chown=node:node LICENSE THIRD-PARTY-NOTICES.md /app/licenses/
+COPY --from=deps --chown=node:node /repo/THIRD-PARTY-LICENSES.txt /app/licenses/
 USER node
 EXPOSE 8765
 CMD ["node", "apps/web/cli/mcp.ts"]

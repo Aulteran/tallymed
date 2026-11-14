@@ -159,6 +159,8 @@ Record each drill: date, release tag, backup identifier, who ran it, the results
 
 ## What a release must record
 
+The owner's step-by-step checklist for these drills is [release-drills.md](release-drills.md); notes and known limitations per version are in the [changelog](../CHANGELOG.md).
+
 Before a stable tag, the maintainer records in `.project/STATUS.md` and the release notes: the exact commit and image tag, supported upgrade paths, the CI run, the fresh-install, upgrade and isolated-restore drill results, the proxy and MCP negative tests (CI: `npm run test:proxy`, and the MCP suite), the dependency licence and secret-scan review, and the owner's release decision. Public site copy changes only after that evidence exists.
 
 To report a security issue, see [SECURITY.md](../SECURITY.md).
