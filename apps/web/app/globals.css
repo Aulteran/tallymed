@@ -383,3 +383,14 @@ main.auth .card > p { color: var(--fg-muted); }
 .signin-settings details.unlink > summary { font-weight: 600; color: var(--link); }
 .signin-settings details.unlink[open] > summary { margin-bottom: var(--space-2); }
 .signin-settings details.unlink p.muted { margin: var(--space-2) 0 0; }
+
+/* Undo bar: the administrator's one-slot undo, shown above the page while the server still holds it. */
+.undo-bar { max-width: 76rem; margin: 0 auto; padding: var(--space-4) var(--space-4) 0; }
+.undo-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); max-width: none; }
+.undo-status form { margin: 0; }
+.undo-status button { margin: 0; }
+.undo-time { color: inherit; }
+dialog.confirm-modal { width: min(34rem, calc(100vw - 2rem)); }
+.confirm-modal .modal-body :is(input, select, textarea) { max-width: none; }
+.confirm-modal .modal-body ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+.confirm-modal label:has(+ :required)::after { content: " *"; content: " *" / ""; color: var(--danger-fg); font-weight: 700; }
