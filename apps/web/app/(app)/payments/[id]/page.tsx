@@ -26,6 +26,7 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     <p className="crumb"><Link href="/payments">← Payments</Link></p>
     <h1>Payment of <Money cents={pm.amountCents} /> on {pm.paidOn}</h1>
     <p>{label(pm.method)}{pm.paidWithName ? ` · paid with ${methodName(pm.paidWithName, pm.paidWithLastFour)}${pm.paidWithArchived ? ' (archived)' : ''}` : ''}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
+    {pm.hsaAccountId && <div className="card" role="note"><strong>Paid directly from {pm.hsaAccountName}.</strong> This was paid with an HSA card at the point of service, so the HSA has already paid it. There is nothing to claim and no eligibility decision. A refund below returns cash to the HSA.</div>}
     {pm.note && <p>{pm.note}</p>}
     <Banner code={q.error} />
     {pm.voided && <div className="card" role="note"><strong>Voided on {pm.voidedOn}.</strong> {pm.voidReason}. A voided payment holds no cash and cannot be applied or refunded.</div>}
@@ -39,9 +40,9 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     {live && <form className="card" method="post" action="/api/expenses/payments/paid-with">
       {base}{key('paid-with')}
       <h2>Paid with</h2>
-      <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. <Link href="/payment-methods">Manage payment methods</Link></p>
+      <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. A card linked to an HSA account can be chosen only when the payment is recorded; a payment paid directly from an HSA can only change to another card of the same account. <Link href="/payment-methods">Manage payment methods</Link></p>
       <label htmlFor="paidWithId">Payment method</label>
-      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank="Not recorded" /></select>
+      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.filter((m) => (pm.hsaAccountId ? m.hsaAccountId === pm.hsaAccountId : !m.hsaAccountId)).map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank={pm.hsaAccountId ? undefined : 'Not recorded'} /></select>
       <button type="submit" className="secondary">Save</button>
     </form>}
     <div className="card"><h2>Applied to bills</h2>

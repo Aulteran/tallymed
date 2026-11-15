@@ -30,7 +30,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
     { items: [{ href: '/', label: 'Overview', icon: 'overview' }] },
     { label: 'Ledger', items: [
       { href: '/visits', label: 'Visits', icon: 'visits' }, { href: '/bills', label: 'Bills', icon: 'bills' },
-      { href: '/payments', label: 'Payments', icon: 'payments' }, { href: '/payment-methods', label: 'Payment methods', icon: 'payments' }, { href: '/plans', label: 'Payment Plans', icon: 'plans' },
+      { href: '/payments', label: 'Payments', icon: 'payments' }, { href: '/payment-methods', label: 'Payment methods', icon: 'payments' }, { href: '/hsa-accounts', label: 'HSA accounts', icon: 'hsa' }, { href: '/plans', label: 'Payment Plans', icon: 'plans' },
       { href: '/hsa', label: 'HSA', icon: 'hsa' },
     ] },
     { label: 'Records', items: [

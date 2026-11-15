@@ -18,6 +18,8 @@ export interface HsaAllocation {
   /** Eligible cents the person decided on. The ceiling is the lesser of this and the net cash. */
   decidedCents: string;
   ceilingCents: string; pendingCents: string; receivedCents: string; availableCents: string; needsReviewCents: string;
+  /** The payment was paid directly from an HSA at the point of service: nothing to claim, no eligibility decision. */
+  directHsa: boolean;
 }
 
 const ALLOCATION_SELECT = `select s.allocation_id as "allocationId", s.payment_id as "paymentId", s.bill_id as "billId", s.paid_on::text as "paidOn",
@@ -25,7 +27,7 @@ const ALLOCATION_SELECT = `select s.allocation_id as "allocationId", s.payment_i
     pr.name || coalesce(' ' || b.provider_reference, '') as "billLabel", s.net_cents::text as "netCents",
     s.decision_id as "decisionId", s.decision_status as "decisionStatus", s.decision_count as "decisionCount", s.decided_cents::text as "decidedCents",
     s.ceiling_cents::text as "ceilingCents", s.pending_cents::text as "pendingCents", s.received_cents::text as "receivedCents",
-    s.available_cents::text as "availableCents", s.needs_review_cents::text as "needsReviewCents"
+    s.available_cents::text as "availableCents", s.needs_review_cents::text as "needsReviewCents", s.direct_hsa as "directHsa"
   from hsa_allocation_status s
   join bills b on b.household_id = s.household_id and b.id = s.bill_id
   join providers pr on pr.household_id = b.household_id and pr.id = b.provider_id
@@ -57,7 +59,7 @@ function scopeWhere(f: HsaScope & { state?: string }, params: unknown[]): string
   if (f.from) where.push(`s.paid_on >= $${params.push(f.from)}`);
   if (f.to) where.push(`s.paid_on <= $${params.push(f.to)}`);
   switch (f.state) {
-    case 'undecided': where.push(`s.net_cents > 0 and (s.decision_status is null or s.decision_status = 'pending')`); break;
+    case 'undecided': where.push(`s.net_cents > 0 and not s.direct_hsa and (s.decision_status is null or s.decision_status = 'pending')`); break;
     case 'eligible': where.push(`s.ceiling_cents > 0`); break;
     case 'available': where.push(`s.available_cents > 0`); break;
     case 'pending': where.push(`s.pending_cents > 0`); break;
@@ -90,6 +92,8 @@ export async function allAllocations(db: Queryable, householdId: string, f: HsaS
 
 export interface HsaTotals {
   allocationCount: number; undecidedCount: number; needsReviewCount: number;
+  /** Net cash of payments paid directly from an HSA. It is outside the claim figures below: nothing on it can be claimed. */
+  directCount: number; paidDirectlyCents: string;
   eligibleCents: string; pendingCents: string; receivedCents: string; availableCents: string; needsReviewCents: string;
 }
 
@@ -99,7 +103,8 @@ export async function totals(db: Queryable, householdId: string, f: HsaScope): P
   const where = scopeWhere(f, params);
   const { rows } = await db.query<HsaTotals>(
     `select count(*)::int as "allocationCount",
-       (count(*) filter (where s.net_cents > 0 and (s.decision_status is null or s.decision_status = 'pending')))::int as "undecidedCount",
+       (count(*) filter (where s.net_cents > 0 and not s.direct_hsa and (s.decision_status is null or s.decision_status = 'pending')))::int as "undecidedCount",
+       (count(*) filter (where s.direct_hsa))::int as "directCount", coalesce(sum(s.net_cents) filter (where s.direct_hsa), 0)::text as "paidDirectlyCents",
        (count(*) filter (where s.needs_review_cents > 0))::int as "needsReviewCount",
        coalesce(sum(s.ceiling_cents), 0)::text as "eligibleCents", coalesce(sum(s.pending_cents), 0)::text as "pendingCents",
        coalesce(sum(s.received_cents), 0)::text as "receivedCents", coalesce(sum(s.available_cents), 0)::text as "availableCents",

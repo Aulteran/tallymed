@@ -16,6 +16,7 @@ import * as expenses from './services/expenses.ts';
 import * as assistant from './services/assistant.ts';
 import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
+import * as hsaAccounts from './services/hsa-accounts.ts';
 import * as paymentMethods from './services/payment-methods.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
@@ -660,9 +661,12 @@ const MONEY_ACTIONS: Record<string, {
   'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
   'payments/paid-with': { service: paymentMethods.setPaidWith, error: paymentOf, keep: ['paidWithId'], ok: paymentPath },
-  'payment-methods/create': { service: paymentMethods.createPaymentMethod, error: () => '/payment-methods', keep: ['nickname', 'kind', 'lastFour'], ok: entity('/payment-methods') },
+  'payment-methods/create': { service: paymentMethods.createPaymentMethod, error: () => '/payment-methods', keep: ['nickname', 'kind', 'lastFour', 'hsaAccountId'], ok: entity('/payment-methods') },
   'payment-methods/update': { service: paymentMethods.updatePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
   'payment-methods/archive': { service: paymentMethods.archivePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
+  'hsa-accounts/create': { service: hsaAccounts.createHsaAccount, error: () => '/hsa-accounts', keep: ['name', 'administrator', 'lastFour'], ok: entity('/hsa-accounts') },
+  'hsa-accounts/update': { service: hsaAccounts.updateHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
+  'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },

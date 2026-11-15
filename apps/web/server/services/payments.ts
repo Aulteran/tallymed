@@ -7,10 +7,12 @@ import { withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import * as expenseRepo from '../repositories/expenses.ts';
+import * as hsaAccountRepo from '../repositories/hsa-accounts.ts';
 import * as methodRepo from '../repositories/payment-methods.ts';
 import * as repo from '../repositories/payments.ts';
 import * as plans from '../repositories/plans.ts';
 import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
+import { requireActiveAccount } from './hsa-accounts.ts';
 import { requireActiveMethod } from './payment-methods.ts';
 import { idempotent, withRetry, type Detail } from './support.ts';
 
@@ -169,13 +171,20 @@ export async function recordPayment(pool: Pool, actor: Actor, input: unknown, re
     await repo.insertPayment(tx, { id, householdId: actor.householdId, userId: actor.userId, paidOn: fields.paidOn, amountCents: fields.amount, method: fields.method, reference: fields.reference, note: fields.note });
     const applied = sum(await applyAllocations(tx, actor, id, randomUUID(), allocations, fields.paidOn, requestId));
     // The saved payment method comes last in the lock order (after payments, bills and plans).
+    let hsaAccountId: string | null = null;
     if (fields.paidWithId) {
-      await requireActiveMethod(tx, actor, fields.paidWithId);
+      hsaAccountId = (await requireActiveMethod(tx, actor, fields.paidWithId)).hsaAccountId;
       await methodRepo.insertAssignment(tx, { id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId: id, methodId: fields.paidWithId });
+      // A card linked to an HSA account means the HSA paid at the point of service. If this cannot be recorded (archived account, lost
+      // race) the whole payment fails: it never falls back to an ordinary payment that could be claimed again. The account comes last.
+      if (hsaAccountId) {
+        await requireActiveAccount(tx, actor, hsaAccountId);
+        await hsaAccountRepo.insertFunding(tx, { householdId: actor.householdId, userId: actor.userId, paymentId: id, accountId: hsaAccountId });
+      }
     }
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.recorded', entityType: 'payment', entityId: id, requestId,
-      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paymentMethodId: fields.paidWithId, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
+      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paymentMethodId: fields.paidWithId, paidDirectlyFromHsa: hsaAccountId !== null, hsaAccountId, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
     });
     return { id, replayed: false };
   }));

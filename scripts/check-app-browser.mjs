@@ -325,6 +325,40 @@ try {
   assert.match(await text(), /No payments match/);
   ok('payment method saved, chosen as paid with, shown on the payment and bill, and totalled ($90.00 net)');
 
+  // HSA account, an HSA card linked to it, and a payment paid directly from the HSA (fabricated names and digits).
+  await page.goto(`${origin}/hsa-accounts?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await a11y('HSA accounts list and add form');
+  await page.fill('#name', 'Family HSA');
+  await page.fill('#administrator', 'Example HSA Bank');
+  await page.fill('#lastFour', '7788');
+  await page.click('form[action="/api/expenses/hsa-accounts/create"] button[type=submit]');
+  await page.waitForURL(/\/hsa-accounts\/[0-9a-f-]{36}$/);
+  await a11y('HSA account detail');
+  await page.goto(`${origin}/payment-methods?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#nickname', 'HSA Visa');
+  await page.selectOption('#kind', 'hsa_fsa_card');
+  await page.fill('#lastFour', '0042');
+  await page.selectOption('#hsaAccountId', { label: 'Family HSA' });
+  await page.click('form[action="/api/expenses/payment-methods/create"] button[type=submit]');
+  await page.waitForURL(/\/payment-methods\/[0-9a-f-]{36}$/);
+  await page.goto(`${origin}/payments?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#paidOn', '2026-03-06');
+  await page.fill('#amount', '15.00');
+  await page.selectOption('#paidWithId', { label: 'HSA Visa ••0042 (paid directly from Family HSA)' });
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /Paid directly from Family HSA/);
+  await a11y('payment detail, paid directly from an HSA');
+  await page.goto(`${origin}/payments`);
+  assert.match(await text(), /Paid from HSA/);
+  await page.goto(`${origin}/hsa-accounts`);
+  assert.match(await text(), /Family HSA ••7788[\s\S]*\$15\.00/);
+  await a11y('HSA accounts with a direct payment');
+  ok('HSA account created, HSA card linked, and a payment paid directly from the HSA is marked and totalled ($15.00)');
+
   // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
   await page.goto(`${origin}/plans`);
   await a11y('plans list');
@@ -714,7 +748,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/payment-methods`, `${origin}/payment-methods?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/payment-methods`, `${origin}/payment-methods?add=1`, `${origin}/hsa-accounts`, `${origin}/hsa-accounts?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);
