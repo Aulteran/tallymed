@@ -45,6 +45,16 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string }> = [
                              or coalesce(sum(e.amount_cents) filter (where e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) <> 0)`,
   },
   {
+    rule: 'a removed payment keeps no applied or refunded cash',
+    table: 'payment_removal_events',
+    sql: `select p.id from payments p
+           left join lateral (
+             select coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) as applied,
+                    -coalesce(sum(e.amount_cents) filter (where e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) as refunded
+               from payment_entries e where e.payment_id = p.id) s on true
+           where payment_is_removed(p.id) and (s.applied <> 0 or s.refunded <> 0)`,
+  },
+  {
     rule: 'an allocation stays between zero and its original amount',
     sql: `select e.allocation_id from payment_entries e where e.allocation_id is not null
            group by e.allocation_id
@@ -191,6 +201,10 @@ export async function ledgerSummary(db: Queryable): Promise<Record<string, strin
        (select count(*) from audit_events)::text as "auditEvents"`,
   );
   const s = r.rows[0]!;
+  // Only a database at migration 0017 or later knows about removed payments; an older one reports no such total.
+  if ((await db.query<{ present: boolean }>(`select to_regprocedure('payment_is_removed(uuid)') is not null as present`)).rows[0]!.present) {
+    s.removedPayments = (await db.query<{ n: string }>(`select count(*)::text as n from payments where payment_is_removed(id)`)).rows[0]!.n;
+  }
   // Open balance is derived, not stored: responsibility (base plus signed adjustments) minus net applied payments.
   s.openBalanceCents = (BigInt(s.baseResponsibilityCents!) + BigInt(s.adjustmentCents!) - BigInt(s.netAppliedCents!)).toString();
   return s;
