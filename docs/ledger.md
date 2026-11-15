@@ -6,7 +6,7 @@ TallyMed records household expenses and reconciliation. Use integer USD cents st
 
 - Base household responsibility comes from confirmed bill data. Record changes as signed adjustments with categories and provenance. An insurer adjustment changes responsibility and creates no household cash payment.
 - Bill balance equals responsibility minus net applied household payments. Net payments equal payment allocations less linked refunds and reversals. Preserve a negative balance as a provider credit. Surface unapplied cash separately.
-- Plan amounts and scheduled installments are obligations. A plan match references an actual payment allocation and creates no new cash event or additional bill payment. Late status is based on due date and unpaid amount. Schedule revisions preserve prior matched history.
+- Plan amounts and scheduled installments are obligations. A plan match references an actual payment allocation and creates no new cash event or additional bill payment. Late status is based on due date and unpaid amount. Schedule revisions preserve prior matched history. A plan may cover bills from several providers; matching, refunds releasing matches and the one-allocation-one-plan rule work over the plan's bills whatever their provider, and nothing about cash or balances depends on the plan's provider mix.
 - Keep original events immutable after posting. Corrections use linked reversals and replacements with a reason. Distinguish a billing credit from a cash refund. Never infer either from a lower statement total.
 
 ## HSA reconciliation

@@ -211,15 +211,17 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'plan.create', idempotencyKey, { ...d, lines: schedule.lines, idempotencyKey: undefined }, id);
     if (replayId) return { id: replayId, replayed: true };
-    await requireActive(tx, 'providers', actor.householdId, d.providerId);
     const lockedPayments = d.matchExisting ? await lockBillPayments(tx, actor, d.billIds) : new Set<string>();
     const locks = await expenseRepo.lockBills(tx, actor.householdId, d.billIds);
     if (locks.length !== d.billIds.length) throw new AppError('not_found');
+    // The bills may come from several providers (a hospital often bills one visit under different names). A plan has no provider
+    // of its own; every provider behind the bills must still be active.
+    const providerIds = [...new Set(locks.map((b) => b.providerId))].sort();
+    for (const pid of providerIds) await requireActive(tx, 'providers', actor.householdId, pid);
     for (const b of locks) {
-      if (b.providerId !== d.providerId) throw new AppError('invalid_input', 'Every bill in a plan must belong to the plan\'s provider');
       if (b.amountStatus !== 'confirmed') throw new AppError('conflict', 'A plan can only cover bills with confirmed amounts');
     }
-    await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, providerId: d.providerId, name: d.name, startedOn });
+    await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, name: d.name, startedOn });
     for (const b of [...d.billIds].sort()) await repo.insertPlanBill(tx, actor.householdId, id, b);
     const revisionId = randomUUID();
     const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
@@ -235,7 +237,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created', entityType: 'payment_plan', entityId: id, requestId,
       detail: {
-        planId: id, providerId: d.providerId, billCount: d.billIds.length, totalCents: cents(schedule.totalCents), cadence: schedule.cadence,
+        planId: id, providerIds: providerIds.join(','), providerCount: providerIds.length, billCount: d.billIds.length, totalCents: cents(schedule.totalCents), cadence: schedule.cadence,
         installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
         scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
         startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,

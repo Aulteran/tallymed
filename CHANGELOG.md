@@ -12,7 +12,7 @@ TallyMed is a self-hosted medical expense ledger for one household. Use fabricat
 
 - **Household and sign-in.** One household, an administrator created through a one-time setup token on first run, invited members, server-side sessions, CSRF protection, a sign-in throttle, an append-only audit log, and a reverse-proxy trust model that refuses spoofed proxy headers.
 - **Medical expenses.** Family members and providers, bills with confirmed amounts or estimates, insurer adjustments, idempotent writes, exact integer-cent money arithmetic.
-- **Payments and plans.** Payments applied across many bills (and bills paid by many payments), partial and unapplied cash, refunds and voids with reversal links, installment payment plans matched to payments.
+- **Payments and plans.** Payments applied across many bills (and bills paid by many payments), partial and unapplied cash, refunds and voids with reversal links, installment payment plans matched to payments. One plan can cover confirmed bills from several providers (migration 0013 removes the plan's single provider; existing plans keep working and still list under their provider).
 - **HSA reimbursements.** Eligibility decisions, claims with reserved amounts, receipts reconciled to allocations, and the eligible ceiling enforced.
 - **Documents.** Private document storage on a volume with content checks, versioning, checksums, `documents verify` and `documents cleanup` commands, attachment-only downloads.
 - **Optional assistant (off by default).** A separate, LAN-only MCP listener in its own image with scoped, expiring, revocable credentials. It can only create document-match proposals that a person approves in the app; it has no right to change any financial record.

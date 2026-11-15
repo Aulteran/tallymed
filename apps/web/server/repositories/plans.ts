@@ -6,13 +6,30 @@ import type { InstallmentFilter, PlanFilter } from '../validation.ts';
 export type InstallmentState = 'paid' | 'partial' | 'unpaid';
 
 export interface Plan {
-  id: string; name: string; providerId: string; providerName: string; status: 'active' | 'cancelled'; cancelReason: string | null;
+  id: string; name: string; providerNames: string[]; payee: string; status: 'active' | 'cancelled'; cancelReason: string | null;
   cancelledAt: Date | null; version: number; startedOn: string; createdAt: Date; createdSort: string; revisionId: string; revisionNo: number; totalCents: string;
   cadence: string; installmentCount: number; matchedCents: string; billCount: number; nextDueDate: string | null; overdueCount: number;
 }
 
+/** Names of the providers whose bills a plan covers, alphabetical and distinct. A plan has no provider of its own. */
+const PROVIDER_NAMES = (plan: string) => `coalesce((select array_agg(distinct pr.name order by pr.name) from payment_plan_bills pb
+  join bills b on b.household_id = pb.household_id and b.id = pb.bill_id
+  join providers pr on pr.household_id = b.household_id and pr.id = b.provider_id where pb.plan_id = ${plan}.id), '{}')`;
+
+/** True when a plan covers at least one bill of the provider bound at `param`. */
+const COVERS_PROVIDER = (plan: string, param: string) => `exists (select 1 from payment_plan_bills pb join bills b on b.household_id = pb.household_id and b.id = pb.bill_id
+  where pb.plan_id = ${plan}.id and b.provider_id = ${param}::uuid)`;
+
+/** One label for the plan's payee: the provider's name, or the first name (alphabetically) and a count of the others. */
+export function payeeLabel(names: string[]): string {
+  if (names.length === 0) return '';
+  return names.length === 1 ? names[0]! : `${names[0]} and ${names.length - 1} more`;
+}
+
+const withPayee = <T extends { providerNames: string[] }>(r: T): T & { payee: string } => ({ ...r, payee: payeeLabel(r.providerNames) });
+
 const MATCHED = `coalesce((select sum(m.amount_cents) from installment_matches m where m.installment_id = i.id), 0)`;
-const PLAN_SELECT = `select p.id, p.name, p.provider_id as "providerId", pr.name as "providerName", p.status, p.cancel_reason as "cancelReason",
+const PLAN_SELECT = `select p.id, p.name, ${PROVIDER_NAMES('p')} as "providerNames", p.status, p.cancel_reason as "cancelReason",
     p.cancelled_at as "cancelledAt", p.version, p.started_on::text as "startedOn", p.created_at as "createdAt", p.created_at::text as "createdSort", r.id as "revisionId",
     r.revision_no as "revisionNo", r.total_cents::text as "totalCents", r.cadence,
     (select count(*)::int from plan_installments i where i.revision_id = r.id) as "installmentCount",
@@ -21,12 +38,11 @@ const PLAN_SELECT = `select p.id, p.name, p.provider_id as "providerId", pr.name
     (select min(i.due_date) from plan_installments i where i.revision_id = r.id and i.amount_cents > ${MATCHED})::text as "nextDueDate",
     (select count(*)::int from plan_installments i where i.revision_id = r.id and i.amount_cents > ${MATCHED} and i.due_date < $2::date) as "overdueCount"
   from payment_plans p
-  join providers pr on pr.household_id = p.household_id and pr.id = p.provider_id
   join lateral (select x.* from plan_revisions x where x.plan_id = p.id order by x.revision_no desc limit 1) r on true`;
 
 export async function getPlan(db: Queryable, householdId: string, id: string, asOf: string): Promise<Plan | null> {
-  const { rows } = await db.query<Plan>(`${PLAN_SELECT} where p.household_id = $1 and p.id = $3`, [householdId, asOf, id]);
-  return rows[0] ?? null;
+  const { rows } = await db.query<Omit<Plan, 'payee'>>(`${PLAN_SELECT} where p.household_id = $1 and p.id = $3`, [householdId, asOf, id]);
+  return rows[0] ? withPayee(rows[0]) : null;
 }
 
 /** Locks plan rows (ascending id). */
@@ -40,12 +56,13 @@ export async function listPlans(db: Queryable, householdId: string, f: PlanFilte
   const params: unknown[] = [householdId, asOf];
   const where = ['p.household_id = $1'];
   if (f.status) where.push(`p.status = $${params.push(f.status)}`);
-  if (f.providerId) where.push(`p.provider_id = $${params.push(f.providerId)}`);
-  if (f.q) where.push(`(p.name ilike $${params.push(`%${f.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or pr.name ilike $${params.length})`);
+  // A plan is listed under every provider whose bills it covers.
+  if (f.providerId) where.push(COVERS_PROVIDER('p', `$${params.push(f.providerId)}`));
+  if (f.q) where.push(`(p.name ilike $${params.push(`%${f.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or exists (select 1 from unnest(${PROVIDER_NAMES('p')}) n where n ilike $${params.length}))`);
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(p.created_at, p.id) < ($${params.push(cur[0])}::timestamptz, $${params.push(cur[1])}::uuid)`);
-  const { rows } = await db.query<Plan>(`${PLAN_SELECT} where ${where.join(' and ')} order by p.created_at desc, p.id desc limit $${params.push(f.limit + 1)}`, params);
-  return pageOf(rows, f.limit, (r) => [r.createdSort, r.id]);
+  const { rows } = await db.query<Omit<Plan, 'payee'>>(`${PLAN_SELECT} where ${where.join(' and ')} order by p.created_at desc, p.id desc limit $${params.push(f.limit + 1)}`, params);
+  return pageOf(rows.map(withPayee), f.limit, (r) => [r.createdSort, r.id]);
 }
 
 export async function planBillIds(db: Queryable, householdId: string, planId: string): Promise<string[]> {
@@ -166,8 +183,8 @@ export async function matchedNet(db: Queryable, householdId: string, installment
   return BigInt(rows[0]!.total);
 }
 
-export async function insertPlan(db: Queryable, v: { id: string; householdId: string; userId: string; providerId: string; name: string; startedOn: string }): Promise<void> {
-  await db.query(`insert into payment_plans (id, household_id, provider_id, name, started_on, created_by) values ($1, $2, $3, $4, $5, $6)`, [v.id, v.householdId, v.providerId, v.name, v.startedOn, v.userId]);
+export async function insertPlan(db: Queryable, v: { id: string; householdId: string; userId: string; name: string; startedOn: string }): Promise<void> {
+  await db.query(`insert into payment_plans (id, household_id, name, started_on, created_by) values ($1, $2, $3, $4, $5)`, [v.id, v.householdId, v.name, v.startedOn, v.userId]);
 }
 
 export async function insertPlanBill(db: Queryable, householdId: string, planId: string, billId: string): Promise<void> {
@@ -208,7 +225,7 @@ export async function touchPlan(db: Queryable, householdId: string, id: string):
 }
 
 export interface QueueItem {
-  installmentId: string; planId: string; planName: string; providerName: string; memberNames: string; seq: number; dueDate: string;
+  installmentId: string; planId: string; planName: string; providerNames: string[]; payee: string; memberNames: string; seq: number; dueDate: string;
   amountCents: string; matchedCents: string; unpaidCents: string; state: InstallmentState; overdue: boolean;
 }
 
@@ -220,21 +237,20 @@ export async function installmentQueue(db: Queryable, householdId: string, f: In
   if (f.state === 'overdue') where.push('i.due_date < $2::date');
   if (f.state === 'upcoming') where.push('i.due_date >= $2::date');
   if (f.planId) where.push(`p.id = $${params.push(f.planId)}`);
-  if (f.providerId) where.push(`p.provider_id = $${params.push(f.providerId)}`);
+  if (f.providerId) where.push(COVERS_PROVIDER('p', `$${params.push(f.providerId)}`));
   if (f.memberId) where.push(`exists (select 1 from payment_plan_bills pb join bills b on b.household_id = pb.household_id and b.id = pb.bill_id
     where pb.plan_id = p.id and b.member_id = $${params.push(f.memberId)})`);
   const cur = decodeCursor(f.cursor, 2);
   if (cur) where.push(`(i.due_date, i.id) > ($${params.push(cur[0])}::date, $${params.push(cur[1])}::uuid)`);
-  const { rows } = await db.query<QueueItem>(
-    `select i.id as "installmentId", p.id as "planId", p.name as "planName", pr.name as "providerName",
+  const { rows } = await db.query<Omit<QueueItem, 'payee'>>(
+    `select i.id as "installmentId", p.id as "planId", p.name as "planName", ${PROVIDER_NAMES('p')} as "providerNames",
        coalesce((select string_agg(distinct m.name, ', ' order by m.name) from payment_plan_bills pb join bills b on b.household_id = pb.household_id and b.id = pb.bill_id
          join family_members m on m.household_id = b.household_id and m.id = b.member_id where pb.plan_id = p.id), '') as "memberNames",
        i.seq, i.due_date::text as "dueDate", i.amount_cents::text as "amountCents", ${MATCHED}::text as "matchedCents",
        (i.amount_cents - ${MATCHED})::text as "unpaidCents", (case when ${MATCHED} > 0 then 'partial' else 'unpaid' end) as state, (i.due_date < $2::date) as overdue
      from plan_installments i join payment_plans p on p.household_id = i.household_id and p.id = i.plan_id
-     join providers pr on pr.household_id = p.household_id and pr.id = p.provider_id
      where ${where.join(' and ')} order by i.due_date, i.id limit $${params.push(f.limit + 1)}`, params);
-  return pageOf(rows, f.limit, (r) => [r.dueDate, r.installmentId]);
+  return pageOf(rows.map(withPayee), f.limit, (r) => [r.dueDate, r.installmentId]);
 }
 
 export interface QueueTotals { overdueCount: number; overdueCents: string; upcomingCount: number; upcomingCents: string }
