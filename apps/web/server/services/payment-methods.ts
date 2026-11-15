@@ -2,6 +2,7 @@
 // A payment header is immutable, so "paid with" is an append-only history beside it; changing it never touches an amount, an allocation
 // or a balance. Lock order: payments, bills, plans, then the payment method row last.
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { authorize, type Actor } from '../authz.ts';
 import { isUniqueViolation, withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
@@ -16,13 +17,15 @@ const NICKNAME_TAKEN = 'You already have an active payment method with that nick
 export async function listPaymentMethods(pool: Pool, actor: Actor, o: { archived?: boolean } = {}) {
   authorize(actor, 'expenses:read');
   const [list, use] = await Promise.all([
-    repo.listMethods(pool, actor.householdId, { archived: o.archived ?? false }),
+    repo.listMethods(pool, actor.householdId, { archived: true }),
     repo.methodUse(pool, payRepo.PAYMENT_FROM, actor.householdId),
   ]);
   const byId = new Map(use.map((u) => [u.methodId, u]));
+  // An archived method stays listed while any payment is currently paid with it, so the per-method figures always add up to the cash summary.
+  const shown = list.items.filter((m) => !m.archivedAt || o.archived || (byId.get(m.id)?.paymentCount ?? 0) > 0);
   return {
     truncated: list.truncated,
-    items: list.items.map((m) => ({ ...m, paymentCount: byId.get(m.id)?.paymentCount ?? 0, netCashCents: byId.get(m.id)?.netCashCents ?? '0' })),
+    items: shown.map((m) => ({ ...m, paymentCount: byId.get(m.id)?.paymentCount ?? 0, netCashCents: byId.get(m.id)?.netCashCents ?? '0' })),
     /** Payments with no method recorded. */
     unassigned: byId.get(null) ?? { methodId: null, paymentCount: 0, netCashCents: '0' },
   };
@@ -31,7 +34,8 @@ export async function listPaymentMethods(pool: Pool, actor: Actor, o: { archived
 /** For a "paid with" select: active methods, plus the current choice even if it was archived since. */
 export async function pickPaymentMethods(pool: Pool, actor: Actor, currentId?: string | null) {
   authorize(actor, 'expenses:read');
-  return repo.listMethods(pool, actor.householdId, { archived: false, currentId: currentId && /^[0-9a-f-]{36}$/i.test(currentId) ? currentId : null });
+  const current = z.uuid().safeParse(currentId);
+  return repo.listMethods(pool, actor.householdId, { archived: false, currentId: current.success ? current.data : null });
 }
 
 export async function getPaymentMethod(pool: Pool, actor: Actor, id: string) {

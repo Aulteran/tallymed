@@ -296,6 +296,18 @@ try {
   assert.match(await text(), /Applied to bills\s*\n?\s*\$95\.00/);
   assert.match(await text(), /Unapplied\s*\n?\s*\$5\.00/);
   await a11y('payment detail');
+  // Change "Paid with" on an existing payment, then clear it; each change is listed in the history.
+  await page.goto(paymentUrl);
+  await page.selectOption('#paidWithId', { label: 'Not recorded' });
+  await page.click('form[action="/api/expenses/payments/paid-with"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  assert.doesNotMatch(await text(), /paid with Example Visa/);
+  await page.selectOption('#paidWithId', { label: 'Example Visa ••4242' });
+  await page.click('form[action="/api/expenses/payments/paid-with"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  assert.match(await text(), /paid with Example Visa ••4242/);
+  assert.equal((await text()).match(/Payment paid with changed/g)?.length, 2);
+  await a11y('payment detail after changing paid with');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '10.00');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Provider refund after review');
   await page.click('form[action="/api/expenses/payments/refund"] button[type=submit]');

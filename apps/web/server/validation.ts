@@ -138,6 +138,8 @@ const paymentMethod = z.enum(['card', 'bank_transfer', 'check', 'cash', 'portal'
 // A saved payment method (a named card or account). Only the last four digits are ever accepted, never a full number.
 const paymentMethodKind = z.enum(['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other']);
 const lastFour = z.string().trim().regex(/^[0-9]{4}$/);
+// A nickname is a label, so nine or more digits in a row (spaces and hyphens ignored) are refused: a pasted card or account number cannot be stored here either.
+const methodNickname = text(60).min(1).refine((v) => !/[0-9]{9,}/.test(v.replace(/[ -]/g, '')));
 const cadence = z.enum(['weekly', 'biweekly', 'monthly', 'custom']);
 const allocationLine = z.strictObject({ billId: uuid, amount: positiveUsd });
 const refundLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
@@ -203,8 +205,8 @@ export const paymentSchemas = {
   voidPayment: z.strictObject({ idempotencyKey, paymentId: uuid, voidedOn: isoDate, reason: text(500).min(1), ...csrf }),
   // An empty paidWithId clears the choice.
   setPaidWith: z.strictObject({ idempotencyKey, paymentId: uuid, paidWithId: optional(uuid), ...csrf }),
-  createPaymentMethod: z.strictObject({ nickname: text(60).min(1), kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
-  updatePaymentMethod: z.strictObject({ id: uuid, version, nickname: text(60).min(1), kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
+  createPaymentMethod: z.strictObject({ nickname: methodNickname, kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
+  updatePaymentMethod: z.strictObject({ id: uuid, version, nickname: methodNickname, kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
   archivePaymentMethod: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),
   createPlan: z.strictObject({
     idempotencyKey, name: text(120).min(1), billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), matchExisting: checkbox.optional(), startedOn: optional(isoDate), ...scheduleInput, ...csrf,

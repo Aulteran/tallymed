@@ -22,11 +22,16 @@ test('methods: create, validate, rename, archive and restore; only a nickname an
     await assert.rejects(method(t, { nickname: 'example visa', lastFour: '0002' }), code('conflict'), 'active nicknames are unique, ignoring case');
     for (const lastFour of ['4111111111111111', '12345', '12a4', '123'])
       await assert.rejects(method(t, { nickname: `Bad ${lastFour}`, lastFour }), code('invalid_input'), `refuses ${lastFour.length} characters`);
+    // A nickname is a label: a pasted card or account number is refused, with or without separators, by validation and by the table itself.
+    for (const nickname of ['4111111111111111', '4111 1111 1111 1111', '4111-1111-1111-1111', 'Visa 123456789'])
+      await assert.rejects(method(t, { nickname, lastFour: '' }), code('invalid_input'), `refuses ${nickname}`);
+    await assert.rejects(t.db.pool.query(`insert into payment_methods (household_id, nickname, kind, created_by) values ($1, '4111 1111 1111 1111', 'other', $2)`, [t.actor.householdId, t.actor.userId]), /check/);
+    await method(t, { nickname: 'Visa 4242 and 1234', lastFour: '' });
     await assert.rejects(method(t, { nickname: 'x', kind: 'gift_card' }), code('invalid_input'));
     await assert.rejects(method(t, { nickname: 'x', cvv: '123' }), code('invalid_input'), 'unknown fields are refused');
     const b = await method(t, { nickname: 'Joint Checking', kind: 'bank_account', lastFour: '' });
     const list = await pm.listPaymentMethods(t.db.pool, t.actor);
-    assert.deepEqual(list.items.map((m) => [m.nickname, m.lastFour, m.paymentCount, m.netCashCents]), [['Example Visa', '0001', 0, '0'], ['Joint Checking', null, 0, '0']]);
+    assert.deepEqual(list.items.map((m) => [m.nickname, m.lastFour, m.paymentCount, m.netCashCents]), [['Example Visa', '0001', 0, '0'], ['Joint Checking', null, 0, '0'], ['Visa 4242 and 1234', null, 0, '0']]);
 
     const cur = await pm.getPaymentMethod(t.db.pool, t.actor, a.id);
     await pm.updatePaymentMethod(t.db.pool, t.actor, { id: a.id, version: cur.version, nickname: 'Family Visa', kind: 'credit_card', lastFour: '0009' }, 'r');
@@ -35,8 +40,8 @@ test('methods: create, validate, rename, archive and restore; only a nickname an
 
     let v = (await pm.getPaymentMethod(t.db.pool, t.actor, b.id)).version;
     await pm.archivePaymentMethod(t.db.pool, t.actor, { id: b.id, version: v, archived: 'yes' }, 'r');
-    assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor)).items.length, 1, 'archived methods are hidden by default');
-    assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor, { archived: true })).items.length, 2);
+    assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor)).items.length, 2, 'archived methods with no payments are hidden by default');
+    assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor, { archived: true })).items.length, 3);
     // An archived nickname can be reused; restoring it then collides with the active one.
     await method(t, { nickname: 'Joint Checking', kind: 'bank_account' });
     v = (await pm.getPaymentMethod(t.db.pool, t.actor, b.id)).version;
@@ -86,7 +91,6 @@ test('recording a payment with a method: shown on the payment, list, filter, bil
     assert.deepEqual([use.unassigned.paymentCount, use.unassigned.netCashCents], [1, '1000']);
     const cash = await pay.cashSummary(t.db.pool, t.actor);
     assert.equal(BigInt(cash.netCashCents), 10000n + 0n + 1000n, 'method totals add up to the cash summary');
-
     // Replay of the same key does not record twice; a different method with the same key is refused.
     const key = t.key();
     const body = { idempotencyKey: key, paidOn: '2026-04-03', amount: '5.00', method: 'card', paidWithId: visa.id };
@@ -94,6 +98,17 @@ test('recording a payment with a method: shown on the payment, list, filter, bil
     assert.deepEqual([r1.replayed, r2.replayed, r1.id === r2.id], [false, true, true]);
     await assert.rejects(pay.recordPayment(t.db.pool, t.actor, { ...body, paidWithId: bank.id }, 'r'), code('conflict'));
     assert.equal(await t.count('payment_method_assignments'), 3);
+    // Archiving a method that holds cash keeps it listed, so the figures still add up to the cash summary.
+    const sum = (u) => u.items.reduce((s, x) => s + BigInt(x.netCashCents), 0n) + BigInt(u.unassigned.netCashCents);
+    assert.equal(sum(await pm.listPaymentMethods(t.db.pool, t.actor)), BigInt((await pay.cashSummary(t.db.pool, t.actor)).netCashCents));
+    await pm.archivePaymentMethod(t.db.pool, t.actor, { id: visa.id, version: (await pm.getPaymentMethod(t.db.pool, t.actor, visa.id)).version, archived: 'yes' }, 'r');
+    const after = await pm.listPaymentMethods(t.db.pool, t.actor);
+    assert.ok(after.items.some((x) => x.id === visa.id && x.archivedAt && x.netCashCents === '10500'), 'an archived method holding cash stays listed');
+    assert.equal(sum(after), BigInt((await pay.cashSummary(t.db.pool, t.actor)).netCashCents), 'totals still reconcile with an archived method');
+    // A crafted filter or current-choice value is refused or ignored, never a database error.
+    await assert.rejects(pay.listPayments(t.db.pool, t.actor, { paidWith: 'a'.repeat(36) }), code('invalid_input'));
+    assert.deepEqual((await pm.pickPaymentMethods(t.db.pool, t.actor, 'a'.repeat(36))).items.every((x) => x.archivedAt === null), true);
+
   } finally { await t.db.drop(); }
 });
 

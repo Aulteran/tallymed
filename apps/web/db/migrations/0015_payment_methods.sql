@@ -14,6 +14,8 @@ create table payment_methods (
   id uuid primary key default gen_random_uuid(),
   household_id uuid not null references households (id),
   nickname text not null check (char_length(nickname) between 1 and 60 and nickname = btrim(nickname)),
+  -- A nickname is a label, not a place to keep a card or account number: nine or more digits in a row (spaces and hyphens ignored) are refused.
+  check (regexp_replace(nickname, '[ -]', '', 'g') !~ '[0-9]{9,}'),
   kind text not null check (kind in ('credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other')),
   last_four text check (last_four is null or last_four ~ '^[0-9]{4}$'),
   archived_at timestamptz,

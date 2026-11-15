@@ -20,7 +20,7 @@ export default async function PaymentMethodsPage({ searchParams }: { searchParam
         {p.error && <Banner code={p.error} />}
         <form method="post" action="/api/expenses/payment-methods/create">
           <Csrf token={csrf} />
-          <p className="muted">Name the cards and accounts you pay bills with, then choose one when you record a payment. Enter only the last four digits, never a full card or account number.</p>
+          <p className="muted">Name the cards and accounts you pay bills with, then choose one when you record a payment. Enter only the last four digits, never a full card or account number. Each active nickname must be unique.</p>
           <label htmlFor="nickname">Nickname</label><input id="nickname" name="nickname" required maxLength={60} placeholder="Family Visa" defaultValue={p.nickname} />
           <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={p.kind ?? 'credit_card'}>{METHOD_KINDS.map((k) => <option key={k} value={k}>{label(k)}</option>)}</select>
           <label htmlFor="lastFour">Last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.lastFour} />
