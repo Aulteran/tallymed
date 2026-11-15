@@ -69,7 +69,7 @@ test('the database refuses allocations beyond a bill\'s open balance, even from 
   }
 });
 
-test('the database caps an installment under concurrent raw matches and refuses stale or foreign targets', { skip: skipDb }, async () => {
+test('the database caps an installment under concurrent raw matches and refuses stale or unconfirmed targets', { skip: skipDb }, async () => {
   const t = await setup();
   try {
     const m = await t.member();
@@ -77,7 +77,7 @@ test('the database caps an installment under concurrent raw matches and refuses 
     const other = await t.provider('Other Clinic');
     const b = await t.bill({ memberId: m, providerId: p, originalAmount: '400.00' });
     const plan = await plans.createPlan(t.db.pool, t.actor, {
-      idempotencyKey: t.key(), name: 'Plan', providerId: p, billId: b.id, totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-06-01', cadence: 'monthly',
+      idempotencyKey: t.key(), name: 'Plan', billId: b.id, totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-06-01', cadence: 'monthly',
     }, 'r');
     const hh = t.actor.householdId;
     const u = t.actor.userId;
@@ -102,9 +102,9 @@ test('the database caps an installment under concurrent raw matches and refuses 
     const after = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: '2026-07-15' });
     await plans.cancelPlan(t.db.pool, t.actor, { planId: plan.id, version: after.plan.version, reason: 'Done' }, 'r');
     await assert.rejects(rawMatch(after.installments[0], free[1], 1000), /current schedule of an active plan/);
-    // A plan cannot link a bill of another provider, or a bill without a confirmed amount, even by raw SQL.
-    const foreign = await t.bill({ memberId: m, providerId: other, originalAmount: '10.00' });
-    await assert.rejects(t.db.pool.query(`insert into payment_plan_bills (household_id, plan_id, bill_id) values ($1, $2, $3)`, [hh, plan.id, foreign.id]), /provider|confirmed/);
+    // A plan cannot link a bill without a confirmed amount, even by raw SQL (bills of any provider are otherwise allowed).
+    const estimate = await t.bill({ memberId: m, providerId: other, originalAmount: '10.00', amountStatus: 'estimate' });
+    await assert.rejects(t.db.pool.query(`insert into payment_plan_bills (household_id, plan_id, bill_id) values ($1, $2, $3)`, [hh, plan.id, estimate.id]), /confirmed/);
   } finally {
     await t.db.drop();
   }
@@ -121,7 +121,7 @@ test('one global lock order: opposing multi-payment writers do not deadlock and 
     for (let i = 0; i < 3; i++) pms.push(await t.pay1({ amount: '300.00', allocations: bills.map((b) => ({ billId: b.id, amount: '100.00' })) }));
     const allocsOf = async (pm) => (await t.payment(pm.id)).allocations;
     const plan = await plans.createPlan(t.db.pool, t.actor, {
-      idempotencyKey: t.key(), name: 'Plan', providerId: p, billIds: bills.map((b) => b.id), totalAmount: '900.00', installmentCount: '9', firstDueDate: '2026-06-01', cadence: 'monthly',
+      idempotencyKey: t.key(), name: 'Plan', billIds: bills.map((b) => b.id), totalAmount: '900.00', installmentCount: '9', firstDueDate: '2026-06-01', cadence: 'monthly',
     }, 'r');
     const d0 = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: '2026-07-15' });
     let k = 0;
@@ -189,7 +189,7 @@ test('a match for a new payment appearing under a held plan lock restarts the tr
     const p = await t.provider();
     const b = await t.bill({ memberId: m, providerId: p, originalAmount: '2000.00' });
     const plan = await plans.createPlan(t.db.pool, t.actor, {
-      idempotencyKey: t.key(), name: 'Plan', providerId: p, billId: b.id, totalAmount: '1500.00', installmentCount: '15', firstDueDate: '2026-06-01', cadence: 'monthly',
+      idempotencyKey: t.key(), name: 'Plan', billId: b.id, totalAmount: '1500.00', installmentCount: '15', firstDueDate: '2026-06-01', cadence: 'monthly',
     }, 'r');
     const hh = t.actor.householdId;
     const u = t.actor.userId;
