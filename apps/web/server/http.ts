@@ -468,6 +468,29 @@ const fromBase64Url = (value: string | null): string | null => {
 };
 
 /**
+ * A web stream over a Node stream that reads one chunk only when the client asks for one. `Readable.toWeb` pushes chunks as they arrive
+ * and throws an uncaught "Controller is already closed" when one arrives just after the client went away, which would stop the process.
+ * Here a chunk is only ever handed over inside `pull`, and a cancelled download destroys the source so the backup ends and is audited.
+ */
+function downloadBody(source: Readable): ReadableStream<Uint8Array> {
+  const chunks = source[Symbol.asyncIterator]();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await chunks.next();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value as Uint8Array);
+      } catch (error) {
+        try { controller.error(error); } catch { /* already closed by a cancel */ }
+      }
+    },
+    cancel() {
+      source.destroy(Object.assign(new Error('The download was cancelled'), { name: 'AbortError', code: 'ABORT_ERR' }));
+    },
+  }, { highWaterMark: 0 });
+}
+
+/**
  * Restore a backup into an installation that has never been set up. The body is the backup file itself (not a form), so it can be streamed
  * to disk instead of held in memory; the setup token and the optional passphrase travel in headers, base64url-encoded. Same transport and
  * origin checks as every other POST. Once an administrator exists this answers 404 like the setup route.
@@ -896,7 +919,7 @@ const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promi
     async run({ ctx, actor, body, requestId }) {
       const backup = await startBackup(ctx, actor!, body, requestId);
       return {
-        response: new Response(Readable.toWeb(backup.stream) as ReadableStream<Uint8Array>, {
+        response: new Response(downloadBody(backup.stream), {
           status: 200,
           headers: {
             ...BASE_HEADERS, 'Cache-Control': 'private, no-store', 'Content-Type': 'application/octet-stream',
