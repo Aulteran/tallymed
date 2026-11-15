@@ -1,8 +1,9 @@
 import Link from 'next/link';
+import { PlanScheduleFields } from '../../../components/PlanScheduleFields.tsx';
 import { formatCents } from '../../../../server/money.ts';
 import { getPlanDetail } from '../../../../server/services/plans.ts';
 import {
-  Banner, CADENCES, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, Options, requireSession, StatePill, todayUtc, type SearchParams,
+  Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, Options, requireSession, StatePill, todayUtc, type SearchParams,
 } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,19 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   }
   const matchedPairs = [...pairs.values()].filter((x) => x.cents > 0n);
   const open = installments.filter((i) => i.state !== 'paid');
+  const paid = installments.filter((i) => i.state === 'paid');
+  const paidCount = paid.length;
+  const paidCents = paid.reduce((t, i) => t + BigInt(i.amountCents), 0n);
+  // Advisory only: what the plan still schedules (total minus what is matched) against what the bills still owe. Never blocks anything.
+  const stillScheduled = BigInt(plan.totalCents) - BigInt(plan.matchedCents);
+  const billsOpen = bills.reduce((t, b) => t + BigInt(b.openBalanceCents), 0n);
+  const balanceGap = stillScheduled - billsOpen;
+  // Warnings recorded when the current schedule was saved (a total that did not match count x amount, installments that differ by rounding).
+  const saved = [...history].reverse().find((e) => e.action === 'plan.created' || e.action === 'plan.revised');
+  const enteredCents = saved?.detail.expectedTotalCents ? BigInt(String(saved.detail.expectedTotalCents)) : null;
+  const computedCents = saved?.detail.computedTotalCents ? BigInt(String(saved.detail.computedTotalCents)) : null;
+  const totalGap = enteredCents !== null && computedCents !== null ? computedCents - enteredCents : 0n;
+  const roundingNote = String(saved?.detail.warningCodes ?? '').split(',').includes('unequal_installments');
   const unmatched = allocations.filter((a) => BigInt(a.netCents) > BigInt(a.matchedCents));
   const unmatchedCents = unmatched.reduce((t, a) => t + BigInt(a.netCents) - BigInt(a.matchedCents), 0n);
   return <main id="main" className="wide">
@@ -36,6 +50,15 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
     <h1>{plan.name}</h1>
     <p>{plan.providerNames.length > 1 ? <span title="One plan covering bills from several providers">{plan.providerNames.join(', ')}</span> : plan.payee} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
     <Banner code={q.error} />
+    <form className="card" method="post" action="/api/expenses/plans/rename">
+      <h2>Plan name</h2>{base}
+      <p className="muted">The name is only a label. You can change it at any time, including after the plan is cancelled.</p>
+      <label htmlFor="plan-name">Name</label><input id="plan-name" name="name" required maxLength={120} defaultValue={q.name ?? plan.name} />
+      <button type="submit" className="secondary">Rename</button>
+    </form>
+    {totalGap !== 0n && enteredCents !== null && computedCents !== null && <div className="card" role="note"><strong>The entered total did not match the installments.</strong> When this schedule was saved you entered a total of {formatCents(enteredCents.toString())}, but the installments entered come to {formatCents(computedCents.toString())}, {formatCents((totalGap < 0n ? -totalGap : totalGap).toString())} {totalGap > 0n ? 'more' : 'less'}. The schedule was saved as the installments add up. Revise it if that is not what you meant.</div>}
+    {roundingNote && <div className="card" role="note"><strong>Some installments differ by a few cents.</strong> The total does not divide evenly, so the leftover cents were placed as you chose when the schedule was saved.</div>}
+    {active && balanceGap !== 0n && <div className="card" role="note"><strong>Check the plan against the bills.</strong> The plan still schedules {formatCents(stillScheduled.toString())} (its total minus what is matched), and the bills it covers still owe {formatCents(billsOpen.toString())}: the plan is {formatCents((balanceGap < 0n ? -balanceGap : balanceGap).toString())} {balanceGap > 0n ? 'above' : 'below'} the balance. {balanceGap > 0n ? 'Payments cannot be applied above a bill\'s open balance, so the last installments may not be payable in full.' : 'The installments will not clear the bills on their own.'} {unmatchedCents > 0n ? ` ${formatCents(unmatchedCents.toString())} of payments applied to these bills is not matched to any installment yet, which can explain it: use Match all existing payments.` : ''} This is only a warning. Revise the schedule or record a bill adjustment if it is not what you expect.</div>}
     {!active && <div className="card" role="note"><strong>Cancelled {plan.cancelledAt ? dateOf(plan.cancelledAt) : ''}.</strong> {plan.cancelReason}. History is kept; no new matches or revisions.</div>}
     <section className="metrics" aria-label="Plan totals">
       <div className="card"><span>Plan total</span><strong><Money cents={plan.totalCents} /></strong><span className="muted">{plan.installmentCount} installments, {label(plan.cadence)}</span></div>
@@ -85,10 +108,18 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
     {active && <form className="card" method="post" action="/api/expenses/plans/revise">
       <h2>Revise the schedule</h2>{base}{key()}<input type="hidden" name="version" value={plan.version} />
       <p className="muted">A revision replaces the schedule going forward. Earlier schedules and what was matched on them stay in the history, and matches carry onto the new installments in date order. The new total cannot be below what is already matched.</p>
-      <label htmlFor="rv-total">New total (USD)</label><input id="rv-total" name="totalAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={q.totalAmount ?? formatCents(plan.totalCents).replace(/[$,]/g, '')} />
-      <label htmlFor="rv-count">Number of installments</label><input id="rv-count" name="installmentCount" type="number" min={1} max={120} required defaultValue={q.installmentCount ?? plan.installmentCount} />
-      <label htmlFor="rv-first">First due date</label><input id="rv-first" name="firstDueDate" type="date" required defaultValue={q.firstDueDate} />
-      <label htmlFor="rv-cadence">Cadence</label><select id="rv-cadence" name="cadence" defaultValue={q.cadence ?? 'monthly'}>{CADENCES.map((c) => <option key={c} value={c}>{label(c)}</option>)}</select>
+      <fieldset>
+        <legend>What should the revision do?</legend>
+        <p><input id="rv-replace" type="radio" name="reviseMode" value="replace" defaultChecked={q.reviseMode !== 'keep_paid'} />{' '}
+          <label htmlFor="rv-replace">Replace the whole schedule</label></p>
+        <p><input id="rv-keep" type="radio" name="reviseMode" value="keep_paid" defaultChecked={q.reviseMode === 'keep_paid'} />{' '}
+          <label htmlFor="rv-keep">Keep the installments that are fully paid, and restart the rest from the date below</label></p>
+        <p className="muted">When keeping paid installments, the total and amounts below describe only the unpaid rest. The paid installments stay exactly as they are, with their own payments, and the plan total becomes what they hold plus the new rest.{' '}
+          {paidCount > 0 ? `Right now ${paidCount} installment${paidCount === 1 ? ' is' : 's are'} fully paid (${formatCents(paidCents.toString())}), so the part still to schedule is the plan total minus that: ${formatCents((BigInt(plan.totalCents) - paidCents).toString())}. The total box is filled with the whole plan total, so change it to that figure when keeping paid installments. The number of installments is also pre-filled: clear it if you want the count worked out from the total and an amount per installment.` : 'No installment is fully paid yet.'}</p>
+      </fieldset>
+      <PlanScheduleFields idPrefix="rv" restart={q.reviseMode === 'keep_paid'} defaults={{
+        inputMode: q.inputMode, totalAmount: q.totalAmount ?? formatCents(plan.totalCents).replace(/[$,]/g, ''), installmentCount: q.installmentCount ?? plan.installmentCount,
+        installmentAmount: q.installmentAmount, remainder: q.remainder, firstDueDate: q.firstDueDate, cadence: q.cadence }} />
       <label htmlFor="rv-why">Reason</label><input id="rv-why" name="reason" required maxLength={500} defaultValue={q.reason} />
       <button type="submit">Save new schedule</button>
     </form>}

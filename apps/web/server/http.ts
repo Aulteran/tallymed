@@ -648,7 +648,7 @@ const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str
 const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
 const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
-const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence'];
+const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
   service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string) => string; keep?: string[];
@@ -662,6 +662,7 @@ const MONEY_ACTIONS: Record<string, {
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
+  'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
   'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },
   'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },

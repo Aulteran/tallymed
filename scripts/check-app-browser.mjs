@@ -306,9 +306,9 @@ try {
   await page.check(`#bill_${billId}`);
   // The existing $85 of applied cash would otherwise be matched at creation; this flow matches by hand.
   await page.uncheck('#matchExisting');
-  await page.fill('#totalAmount', '30.00');
-  await page.fill('#installmentCount', '3');
-  await page.fill('#firstDueDate', '2026-01-15');
+  await page.fill('#new-total', '30.00');
+  await page.fill('#new-count', '3');
+  await page.fill('#new-first', '2026-01-15');
   await page.click('form[action="/api/expenses/plans/create"] button[type=submit]');
   await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
   const planUrl = page.url();

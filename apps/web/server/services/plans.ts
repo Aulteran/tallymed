@@ -19,8 +19,41 @@ const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
 
 // ---------- schedule building (pure) ----------
 
-export interface ScheduleLine { dueDate: string; amountCents: bigint }
-export interface Schedule { cadence: 'weekly' | 'biweekly' | 'monthly' | 'custom'; lines: ScheduleLine[]; totalCents: bigint }
+/** `keepFrom` (internal only, never accepted from a client) names the earlier installment a kept line continues. */
+export interface ScheduleLine { dueDate: string; amountCents: bigint; keepFrom?: string }
+export interface Schedule {
+  cadence: 'weekly' | 'biweekly' | 'monthly' | 'custom'; lines: ScheduleLine[]; totalCents: bigint;
+  /** True when the lines were generated from a total or an amount, false for an explicit list. */
+  generated: boolean;
+  /** How the lines were produced; the rounding warning only applies to a price-and-count split. */
+  inputMode: 'total' | 'per_installment' | 'list';
+  /** A total the person entered that the schedule did not use (installments x amount), for the mismatch warning. */
+  expectedTotalCents: bigint | null;
+}
+
+export type Remainder = 'earliest' | 'last_extra' | 'last_short';
+export const MAX_INSTALLMENTS = 120;
+
+/**
+ * Splits a total over n installments. `earliest` (the original behavior) puts one extra cent on each of the first (total mod n)
+ * installments. `last_extra` puts every leftover cent on the last one. `last_short` gives every installment the rounded-up
+ * amount and lets the last take what is left, so it is the smaller one. All bigint, no floats.
+ */
+export function splitTotal(total: bigint, n: number, remainder: Remainder): bigint[] {
+  const count = BigInt(n);
+  if (total < count) throw new AppError('invalid_input', 'Each installment must be at least one cent');
+  const base = total / count;
+  const extra = total % count;
+  if (extra === 0n) return Array.from({ length: n }, () => base);
+  if (remainder === 'last_extra') return Array.from({ length: n }, (_, i) => (i === n - 1 ? base + extra : base));
+  if (remainder === 'last_short') {
+    const each = base + 1n;
+    const last = total - each * (count - 1n);
+    if (last < 1n) throw new AppError('invalid_input', 'That split leaves nothing for the last installment; use fewer installments or another remainder choice');
+    return Array.from({ length: n }, (_, i) => (i === n - 1 ? last : each));
+  }
+  return Array.from({ length: n }, (_, i) => base + (i < Number(extra) ? 1n : 0n));
+}
 
 function parts(date: string): [number, number, number] {
   const [y, m, d] = date.split('-').map(Number) as [number, number, number];
@@ -47,28 +80,129 @@ export function dueDateAt(first: string, cadence: 'weekly' | 'biweekly' | 'month
  */
 export function buildSchedule(d: {
   cadence: 'weekly' | 'biweekly' | 'monthly' | 'custom'; totalAmount: bigint | null; installmentCount: number | null; firstDueDate: string | null;
-  installments?: Array<{ dueDate: string; amount: bigint }>;
+  installments?: Array<{ dueDate: string; amount: bigint; keepFrom?: string }>;
+  /** "total" (default): this many installments at this much price. "per_installment": at this much paid per installment. */
+  inputMode?: 'total' | 'per_installment'; installmentAmount?: bigint | null; remainder?: Remainder;
 }): Schedule {
+  const mode = d.inputMode ?? 'total';
+  const amount = d.installmentAmount ?? null;
   if (d.installments && d.installments.length > 0) {
-    if (d.totalAmount !== null || d.installmentCount !== null || d.firstDueDate !== null) throw new AppError('invalid_input', 'Give either a generated schedule or a list of installments');
+    if (d.totalAmount !== null || d.installmentCount !== null || d.firstDueDate !== null || amount !== null) throw new AppError('invalid_input', 'Give either a generated schedule or a list of installments');
     const lines = d.installments.map((i, n) => ({ ...i, n })).sort((a, b) => (a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : a.n - b.n))
-      .map((i) => ({ dueDate: i.dueDate, amountCents: i.amount }));
+      .map((i) => ({ dueDate: i.dueDate, amountCents: i.amount, ...(i.keepFrom ? { keepFrom: i.keepFrom } : {}) }));
     const totalCents = sum(lines.map((l) => l.amountCents));
     if (totalCents > MAX_CENTS) throw new AppError('invalid_input', 'Amount out of range');
-    return { cadence: 'custom', lines, totalCents };
+    return { cadence: 'custom', lines, totalCents, generated: false, inputMode: 'list', expectedTotalCents: null };
   }
-  if (d.cadence === 'custom' || d.totalAmount === null || d.installmentCount === null || d.firstDueDate === null) {
-    throw new AppError('invalid_input', 'Give a total, a number of installments, a first due date and a cadence');
+  if (d.cadence === 'custom' || d.firstDueDate === null) throw new AppError('invalid_input', 'Give a total or an amount per installment, a first due date and a cadence');
+  let amounts: bigint[];
+  let expectedTotalCents: bigint | null = null;
+  if (mode === 'per_installment') {
+    // At this much per installment. With a count the total is count x amount (a total that was also entered is only compared, in a warning).
+    // With a total and no count, the count is the total divided by the amount rounded up and the last installment takes what is left.
+    if (amount === null) throw new AppError('invalid_input', 'Give the amount paid per installment');
+    if (d.installmentCount === null && d.totalAmount === null) throw new AppError('invalid_input', 'Give a number of installments or a total');
+    if (d.installmentCount !== null) {
+      amounts = Array.from({ length: d.installmentCount }, () => amount);
+      expectedTotalCents = d.totalAmount;
+    } else {
+      const total = d.totalAmount!;
+      const n = (total + amount - 1n) / amount;
+      if (n > BigInt(MAX_INSTALLMENTS)) throw new AppError('invalid_input', `That needs ${n.toString()} installments; the most is ${MAX_INSTALLMENTS}`);
+      amounts = Array.from({ length: Number(n) }, (_, i) => (i === Number(n) - 1 ? total - amount * (n - 1n) : amount));
+    }
+  } else {
+    if (amount !== null) throw new AppError('invalid_input', 'An amount per installment needs the per-installment input mode');
+    if (d.totalAmount === null || d.installmentCount === null) throw new AppError('invalid_input', 'Give a total, a number of installments, a first due date and a cadence');
+    amounts = splitTotal(d.totalAmount, d.installmentCount, d.remainder ?? 'earliest');
   }
-  const n = BigInt(d.installmentCount);
-  if (d.totalAmount < n) throw new AppError('invalid_input', 'Each installment must be at least one cent');
-  const base = d.totalAmount / n;
-  const extra = Number(d.totalAmount % n);
-  const lines = Array.from({ length: d.installmentCount }, (_, i) => ({
-    dueDate: dueDateAt(d.firstDueDate!, d.cadence as 'weekly' | 'biweekly' | 'monthly', i), amountCents: base + (i < extra ? 1n : 0n),
-  }));
+  const totalCents = sum(amounts);
+  if (totalCents > MAX_CENTS) throw new AppError('invalid_input', 'Amount out of range');
+  const lines = amounts.map((amountCents, i) => ({ dueDate: dueDateAt(d.firstDueDate!, d.cadence as 'weekly' | 'biweekly' | 'monthly', i), amountCents }));
   if (lines[lines.length - 1]!.dueDate > '2100-01-01') throw new AppError('invalid_input', 'Due date out of range');
-  return { cadence: d.cadence, lines, totalCents: d.totalAmount };
+  return { cadence: d.cadence, lines, totalCents, generated: true, inputMode: mode, expectedTotalCents };
+}
+
+/**
+ * Keeps already paid installments exactly as they are and appends a generated schedule for the rest. Kept lines come first in the
+ * list so they win same-date ties. The result is a custom schedule; each kept line remembers the installment it continues.
+ */
+export function keepPaidSchedule(kept: Array<{ id: string; dueDate: string; amountCents: bigint }>, rest: Schedule): Schedule {
+  const built = buildSchedule({
+    cadence: 'custom', totalAmount: null, installmentCount: null, firstDueDate: null,
+    installments: [...kept.map((k) => ({ dueDate: k.dueDate, amount: k.amountCents, keepFrom: k.id })), ...rest.lines.map((l) => ({ dueDate: l.dueDate, amount: l.amountCents }))],
+  });
+  return { ...built, expectedTotalCents: rest.expectedTotalCents };
+}
+
+export interface MatchPair { installmentId: string; allocationId: string; paymentId: string; billId: string; cents: bigint }
+export interface CarriedMatch<P extends MatchPair> { installmentIndex: number; pair: P; amount: bigint; keptFrom: string | null }
+
+/**
+ * Decides where current matches land on a new schedule. A match on a kept installment follows that installment (identity), so its
+ * allocations stay on the same line. Every other match fills the non-kept installments in due-date order, as before. With no kept
+ * lines this is exactly the original greedy carry-forward.
+ */
+export function carryMatches<P extends MatchPair>(pairs: P[], installments: Array<{ amountCents: bigint; keepFrom?: string }>): CarriedMatch<P>[] {
+  const out: CarriedMatch<P>[] = [];
+  const filled = installments.map(() => 0n);
+  const keptIndex = new Map(installments.map((x, i) => [x.keepFrom, i] as const).filter(([k]) => k !== undefined));
+  const loose: P[] = [];
+  for (const pair of pairs) {
+    const i = keptIndex.get(pair.installmentId);
+    if (i === undefined) { loose.push(pair); continue; }
+    if (filled[i]! + pair.cents > installments[i]!.amountCents) throw new AppError('conflict', 'A kept installment holds more than its amount');
+    filled[i]! += pair.cents;
+    out.push({ installmentIndex: i, pair, amount: pair.cents, keptFrom: pair.installmentId });
+  }
+  let j = 0;
+  for (const pair of loose) {
+    let left = pair.cents;
+    while (left > 0n) {
+      while (j < installments.length && (installments[j]!.keepFrom !== undefined || filled[j]! >= installments[j]!.amountCents)) j++;
+      if (j >= installments.length) throw new AppError('conflict', 'The new schedule cannot hold what is already matched');
+      const room = installments[j]!.amountCents - filled[j]!;
+      const take = room < left ? room : left;
+      filled[j]! += take;
+      left -= take;
+      out.push({ installmentIndex: j, pair, amount: take, keptFrom: null });
+    }
+  }
+  return out;
+}
+
+export type PlanWarning =
+  | { code: 'total_mismatch'; expectedCents: string; computedCents: string; differenceCents: string }
+  | { code: 'bill_balance_mismatch'; planBasisCents: string; openBalanceCents: string; differenceCents: string; direction: 'above' | 'below' }
+  | { code: 'unequal_installments'; minCents: string; maxCents: string; distinct: number };
+
+/**
+ * Pure and advisory: never blocks a save. `matchedCents` is cash already matched to the plan, so the plan is compared with what
+ * is still unpaid rather than with a balance that already excludes that cash. `openBalanceCents` is signed (a credit can make it negative).
+ */
+export function planWarnings(d: { schedule: Schedule; openBalanceCents: bigint | null; matchedCents: bigint }): PlanWarning[] {
+  const out: PlanWarning[] = [];
+  const { schedule } = d;
+  if (schedule.expectedTotalCents !== null && schedule.expectedTotalCents !== schedule.totalCents) {
+    out.push({ code: 'total_mismatch', expectedCents: schedule.expectedTotalCents.toString(), computedCents: schedule.totalCents.toString(), differenceCents: (schedule.totalCents - schedule.expectedTotalCents).toString() });
+  }
+  if (d.openBalanceCents !== null) {
+    const basis = schedule.totalCents - d.matchedCents;
+    if (basis !== d.openBalanceCents) {
+      out.push({
+        code: 'bill_balance_mismatch', planBasisCents: basis.toString(), openBalanceCents: d.openBalanceCents.toString(),
+        differenceCents: (basis - d.openBalanceCents).toString(), direction: basis > d.openBalanceCents ? 'above' : 'below',
+      });
+    }
+  }
+  if (schedule.generated && schedule.inputMode === 'total') {
+    const amounts = schedule.lines.map((l) => l.amountCents);
+    const min = amounts.reduce((a, b) => (b < a ? b : a));
+    const max = amounts.reduce((a, b) => (b > a ? b : a));
+    // Only a difference that rounding explains (under one cent per installment). A deliberately smaller last installment is not rounding.
+    if (min !== max && max - min < BigInt(amounts.length)) out.push({ code: 'unequal_installments', minCents: min.toString(), maxCents: max.toString(), distinct: new Set(amounts.map(String)).size });
+  }
+  return out;
 }
 
 // ---------- reads ----------
@@ -241,6 +375,11 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
         installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
         scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
         startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
+        inputMode: d.inputMode, remainder: d.remainder, expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
+        warningCodes: planWarnings({
+          schedule, matchedCents: sum(fill.map((f) => f.amount)),
+          openBalanceCents: sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents)),
+        }).map((w) => w.code).join(','),
       },
     });
     return { id, replayed: false };
@@ -254,11 +393,14 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
  */
 export async function revisePlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
-  const { csrf: _csrf, idempotencyKey, planId, version, reason, ...rest } = parse(paymentSchemas.revisePlan, input);
-  const schedule = buildSchedule(rest);
+  const { csrf: _csrf, idempotencyKey, planId, version, reason, reviseMode, ...rest } = parse(paymentSchemas.revisePlan, input);
+  // In keep_paid mode this is the schedule for the unpaid rest only (firstDueDate is the restart date). Built before any lock to validate early.
+  const restSchedule = buildSchedule(rest);
   const revisionId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
-    const replayId = await idempotent(tx, actor, 'plan.revise', idempotencyKey, { planId, version, reason, lines: schedule.lines, cadence: schedule.cadence }, revisionId);
+    // The fingerprint of a plain replace stays exactly as it was; the mode joins it only when kept installments are involved.
+    const fingerprint = { planId, version, reason, lines: restSchedule.lines, cadence: restSchedule.cadence, ...(reviseMode === 'keep_paid' ? { reviseMode } : {}), ...(restSchedule.expectedTotalCents !== null ? { expectedTotalCents: cents(restSchedule.expectedTotalCents) } : {}) };
+    const replayId = await idempotent(tx, actor, 'plan.revise', idempotencyKey, fingerprint, revisionId);
     if (replayId) return { id: replayId, replayed: true };
     const lock = await lockPlanWithPayments(tx, actor, planId);
     if (lock.version !== version) throw new AppError('stale_version');
@@ -267,22 +409,26 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
     const before = await repo.getPlan(tx, actor.householdId, planId, todayUtc());
     const pairs = await repo.currentMatchPairs(tx, actor.householdId, planId);
     const matched = sum(pairs.map((p) => p.cents));
+    // Fully paid installments are read under the lock, so what is kept is exactly what is paid when the revision is written.
+    let kept: Array<{ id: string; dueDate: string; amountCents: bigint }> = [];
+    if (reviseMode === 'keep_paid') {
+      const current = await repo.listInstallments(tx, actor.householdId, cur.id, todayUtc());
+      kept = current.filter((i) => BigInt(i.unpaidCents) === 0n).map((i) => ({ id: i.id, dueDate: i.dueDate, amountCents: BigInt(i.amountCents) }));
+      if (kept.length === current.length) throw new AppError('conflict', 'Every installment is already paid, so there is nothing left to restart');
+    }
+    const schedule = kept.length > 0 ? keepPaidSchedule(kept, restSchedule) : restSchedule;
+    if (schedule.lines.length > MAX_INSTALLMENTS) throw new AppError('invalid_input', `A plan can have at most ${MAX_INSTALLMENTS} installments; kept and new installments together come to ${schedule.lines.length}`);
     if (matched > schedule.totalCents) throw new AppError('conflict', 'The new schedule total is less than what is already matched');
     const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
-    const filled = installments.map(() => 0n);
-    const carried: Array<{ installmentIndex: number; pair: (typeof pairs)[number]; amount: bigint }> = [];
-    let j = 0;
-    for (const pair of pairs) {
-      let left = pair.cents;
-      while (left > 0n) {
-        while (j < installments.length && filled[j]! >= installments[j]!.amountCents) j++;
-        if (j >= installments.length) throw new AppError('conflict', 'The new schedule cannot hold what is already matched');
-        const take = installments[j]!.amountCents - filled[j]! < left ? installments[j]!.amountCents - filled[j]! : left;
-        filled[j]! += take;
-        left -= take;
-        carried.push({ installmentIndex: j, pair, amount: take });
-      }
-    }
+    const carried = carryMatches(pairs, installments);
+    const keptCents = sum(kept.map((k) => k.amountCents));
+    // Advisory: the entered-total and rounding checks describe what was typed (the new rest); the balance check compares the whole plan with the bills.
+    const planBills = await expenseRepo.getBills(tx, actor.householdId, await repo.planBillIds(tx, actor.householdId, planId));
+    const billsOpen = sum(planBills.map((b) => BigInt(b.openBalanceCents)));
+    const revisionWarnings = [
+      ...planWarnings({ schedule: restSchedule, openBalanceCents: null, matchedCents: 0n }),
+      ...planWarnings({ schedule, openBalanceCents: billsOpen, matchedCents: matched }).filter((w) => w.code === 'bill_balance_mismatch'),
+    ];
     const revisionNo = cur.revisionNo + 1;
     await repo.insertRevision(tx, {
       id: revisionId, householdId: actor.householdId, userId: actor.userId, planId, revisionNo, totalCents: schedule.totalCents, cadence: schedule.cadence, reason, installments,
@@ -291,7 +437,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
       await repo.insertMatch(tx, {
         id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId, installmentId: installments[c.installmentIndex]!.id,
         paymentId: c.pair.paymentId, allocationId: c.pair.allocationId, billId: c.pair.billId, kind: 'match', amountCents: c.amount, carried: true,
-        reason: `Carried forward from revision ${cur.revisionNo}`,
+        reason: c.keptFrom ? `Kept from revision ${cur.revisionNo}` : `Carried forward from revision ${cur.revisionNo}`,
       });
     }
     await repo.touchPlan(tx, actor.householdId, planId);
@@ -301,6 +447,9 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
         planId, fromRevisionNo: cur.revisionNo, toRevisionNo: revisionNo, fromTotalCents: cents(cur.totalCents), toTotalCents: cents(schedule.totalCents),
         fromInstallmentCount: before!.installmentCount, toInstallmentCount: installments.length, fromCadence: cur.cadence, toCadence: schedule.cadence,
         carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
+        reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
+        inputMode: rest.inputMode, remainder: rest.remainder, expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
+        warningCodes: revisionWarnings.map((w) => w.code).join(','),
       },
     });
     return { id: planId, replayed: false };
@@ -320,6 +469,23 @@ export async function cancelPlan(pool: Pool, actor: Actor, input: unknown, reque
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.cancelled', entityType: 'payment_plan', entityId: d.planId, requestId,
       detail: { planId: d.planId, totalCents: plan.totalCents, matchedCents: plan.matchedCents, unpaidCents: cents(BigInt(plan.totalCents) - BigInt(plan.matchedCents)) },
+    });
+    return { id: d.planId };
+  }));
+}
+
+/** Renames a plan, active or cancelled. A label only: no schedule, match, payment or balance changes. Takes the plan lock alone, like cancel. */
+export async function renamePlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string }> {
+  authorize(actor, 'expenses:write');
+  const { csrf: _csrf, ...d } = parse(paymentSchemas.renamePlan, input);
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const [lock] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
+    if (!lock) throw new AppError('not_found');
+    const plan = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
+    await repo.renamePlan(tx, actor.householdId, d.planId, d.name);
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.renamed', entityType: 'payment_plan', entityId: d.planId, requestId,
+      detail: { planId: d.planId, renamed: plan.name !== d.name, status: lock.status },
     });
     return { id: d.planId };
   }));

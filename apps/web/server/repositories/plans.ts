@@ -220,6 +220,11 @@ export async function cancelPlan(db: Queryable, householdId: string, id: string,
   return r.rowCount === 1;
 }
 
+/** Changes only the label. The version is not bumped, so a schedule or cancel form that is already open is not made stale by a rename. */
+export async function renamePlan(db: Queryable, householdId: string, id: string, name: string): Promise<void> {
+  await db.query(`update payment_plans set name = $3, updated_at = now() where household_id = $1 and id = $2`, [householdId, id, name]);
+}
+
 export async function touchPlan(db: Queryable, householdId: string, id: string): Promise<void> {
   await db.query(`update payment_plans set version = version + 1, updated_at = now() where household_id = $1 and id = $2`, [householdId, id]);
 }
