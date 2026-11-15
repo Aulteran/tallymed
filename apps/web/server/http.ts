@@ -952,13 +952,16 @@ export function actionInventory(): { expenses: string[]; documents: string[]; as
 const SETTINGS_PAGES = { general: '/settings', documents: '/settings', proxy: '/settings/proxy', email: '/settings/email', signin: '/settings/signin' } as const;
 const SETTINGS_ACTIONS: Record<string, {
   service: (pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string) => Promise<void>; page: string; saved: string; keep?: string[];
+  /** Where a failed save goes back to, when that differs from the page (for example to reopen the dialog the form lives in). */
+  errorPage?: string;
 }> = {
   general: { service: settingsService.saveGeneral, page: SETTINGS_PAGES.general, saved: 'general', keep: ['sourceUrl', 'sessionAbsoluteMinutes', 'sessionIdleMinutes', 'invitationMinutes'] },
   documents: { service: settingsService.saveDocuments, page: SETTINGS_PAGES.documents, saved: 'documents', keep: ['documentMaxMb', 'documentQuotaMb', 'documentRetentionDays'] },
   proxy: { service: settingsService.saveProxy, page: SETTINGS_PAGES.proxy, saved: 'proxy', keep: ['trustedProxies'] },
   email: { service: settingsService.saveEmail, page: SETTINGS_PAGES.email, saved: 'email', keep: ['host', 'port', 'security', 'username', 'fromAddress', 'fromName'] },
   'email/clear': { service: settingsService.clearEmail, page: SETTINGS_PAGES.email, saved: 'email_cleared' },
-  signin: { service: signin.saveSignin, page: SETTINGS_PAGES.signin, saved: 'signin', keep: ['provider', 'issuer', 'tenant', 'clientId', 'scopes', 'buttonLabel', 'allowedDomains'] },
+  // `add=1` reopens the provider dialog on the Sign-in page, so the message appears next to the form it belongs to.
+  signin: { service: signin.saveSignin, page: SETTINGS_PAGES.signin, errorPage: `${SETTINGS_PAGES.signin}?add=1`, saved: 'signin', keep: ['provider', 'issuer', 'tenant', 'clientId', 'scopes', 'buttonLabel', 'allowedDomains'] },
   'signin/unlink': { service: signin.unlinkIdentity, page: SETTINGS_PAGES.signin, saved: 'signin_unlinked' },
 };
 
@@ -966,7 +969,7 @@ const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promi
   ...Object.entries(SETTINGS_ACTIONS).map(([name, a]) => [name, route({
     name: `settings.${name}`,
     session: true,
-    errorPath: () => a.page,
+    errorPath: () => a.errorPage ?? a.page,
     keepFields: a.keep,
     async run({ ctx, actor, body, requestId, req }) {
       await a.service(ctx.pool, ctx.config, actor!, body, requestId);

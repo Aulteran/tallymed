@@ -14,7 +14,8 @@ export function flashSetCookie(config: Pick<AppConfig, 'secureCookies'>, path: s
   const v: Record<string, string> = {};
   for (const f of fields) if (typeof body[f] === 'string' && body[f] !== '') v[f] = (body[f] as string).slice(0, MAX_VALUE);
   if (Object.keys(v).length === 0) return null;
-  const value = Buffer.from(JSON.stringify({ p: path, v }), 'utf8').toString('base64url');
+  // The page the values belong to, without any query (an error path such as `/settings/signin?add=1` reopens a dialog there).
+  const value = Buffer.from(JSON.stringify({ p: path.split('?')[0], v }), 'utf8').toString('base64url');
   if (value.length > MAX_COOKIE_BYTES) return null;
   return [`${flashCookieName(config)}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${FLASH_MAX_AGE_SECONDS}`,
     ...(config.secureCookies ? ['Secure'] : [])].join('; ');

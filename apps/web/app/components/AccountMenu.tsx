@@ -6,11 +6,14 @@ import { Icon } from './icons.tsx';
 import { THEMES, THEME_ICON, THEME_LABEL, useTheme, type Theme } from './ThemeToggle.tsx';
 
 /**
- * The signed-in person's corner of the sidebar: who they are, a settings button, a sign-out button, and quick links.
+ * The signed-in person's corner of the sidebar on one row: avatar, name with the role beneath it, and a settings button.
+ * Signing out is in the settings dialog.
  * Both pop-ups are native modal dialogs, so the browser centres them, traps focus, closes on Escape and returns focus
- * to the button that opened them. Sign out stays a real form post: without JavaScript the button signs out directly.
+ * to the button that opened them. Sign out stays a real form post after the confirmation.
  */
-export function AccountMenu({ displayName, initials, csrf, initialTheme }: { displayName: string; initials: string; csrf: string; initialTheme: Theme }) {
+export function AccountMenu({ displayName, roleLabel, initials, csrf, initialTheme }: {
+  displayName: string; roleLabel: string; initials: string; csrf: string; initialTheme: Theme;
+}) {
   const settings = useRef<HTMLDialogElement>(null);
   const confirm = useRef<HTMLDialogElement>(null);
   const [theme, setTheme] = useTheme(initialTheme);
@@ -18,16 +21,10 @@ export function AccountMenu({ displayName, initials, csrf, initialTheme }: { dis
   return <div className="account">
     <div className="account-id">
       <span className="avatar" aria-hidden="true">{initials}</span>
-      <span className="account-who"><span className="account-name">{displayName}</span></span>
+      <span className="account-who"><span className="account-name">{displayName}</span><span className="account-role">{roleLabel}</span></span>
       <button type="button" className="icon-button" aria-label="User settings" title="User settings" aria-haspopup="dialog" onClick={() => settings.current?.showModal()}>
         <Icon name="gear" />
       </button>
-      <form method="post" action="/api/auth/logout">
-        <input type="hidden" name="csrf" value={csrf} />
-        <button type="submit" className="icon-button danger" aria-label="Sign out" title="Sign out" aria-haspopup="dialog" onClick={(e) => { e.preventDefault(); askSignOut(); }}>
-          <Icon name="logout" />
-        </button>
-      </form>
     </div>
 
     <dialog ref={settings} className="modal" aria-labelledby="user-settings-title" onClick={closeOnBackdrop}>

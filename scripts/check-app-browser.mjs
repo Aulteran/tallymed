@@ -538,6 +538,9 @@ try {
     await page.goto(`${origin}/settings/signin`);
     await a11y('sign-in settings');
     assert.match(await text(), new RegExp(`${origin.replace(/[.]/g, '\\.')}/api/auth/oidc/callback`), 'the redirect address to register is shown');
+    // The provider settings live in a dialog opened from the page header.
+    await page.click('button:has-text("Set up provider")');
+    await a11y('sign-in provider dialog');
     await page.check('input[name="enabled"]');
     await page.fill('#issuer', issuer);
     await page.fill('#clientId', 'tallymed-ui');
@@ -550,6 +553,7 @@ try {
     await page.click('button:has-text("Test connection")');
     assert.match(await text(), /The provider answered/);
     // Passwords cannot be turned off before this administrator has signed in through the provider.
+    await page.click('button:has-text("Edit provider")');
     await page.check('input[name="passwordLoginDisabled"]');
     await page.fill('#signin-pw', password);
     await page.click('button:has-text("Save sign-in settings")');
@@ -567,6 +571,7 @@ try {
     // Now the same administrator, signed in through the provider, may turn passwords off; the sign-in page then shows only the button.
     await viaProvider.goto(`${origin}/settings/signin`);
     assert.match(await viaProvider.locator('main').innerText(), /Alex Example[\s\S]*matched by verified email/);
+    await viaProvider.click('button:has-text("Edit provider")');
     await viaProvider.check('input[name="passwordLoginDisabled"]');
     await viaProvider.fill('#signin-pw', password);
     await viaProvider.click('button:has-text("Save sign-in settings")');
@@ -578,6 +583,7 @@ try {
     assert.equal((await noPassword.request.post(`${origin}/api/auth/login`, { headers: { origin }, data: { email: 'admin@example.test', password } })).status(), 403);
     await noPassword.close();
     // Back on for the rest of this check, which signs other people in with passwords.
+    await viaProvider.click('button:has-text("Edit provider")');
     await viaProvider.uncheck('input[name="passwordLoginDisabled"]');
     await viaProvider.fill('#signin-pw', password);
     await viaProvider.click('button:has-text("Save sign-in settings")');
@@ -672,7 +678,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/backup`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);
@@ -746,7 +752,10 @@ try {
   await page.keyboard.press('Escape');
   await settingsDialog.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'User settings', 'focus returns to the button that opened the dialog');
-  await page.click('.account-id button[aria-label="Sign out"]');
+  assert.equal(await page.locator('.account-id button[aria-label="Sign out"]').count(), 0, 'signing out is only in the settings dialog');
+  assert.match(await page.locator('.account-role').innerText(), /^Admin$/, 'the role shows beneath the name');
+  await page.click('button[aria-label="User settings"]');
+  await settingsDialog.locator('button', { hasText: 'Sign out' }).click();
   const confirmDialog = page.locator('dialog[aria-labelledby="sign-out-title"]');
   await confirmDialog.waitFor({ state: 'visible' });
   await a11y('sign out confirmation');
