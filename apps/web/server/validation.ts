@@ -217,6 +217,8 @@ export const paymentSchemas = {
     ...csrf,
   }),
   cancelPlan: z.strictObject({ planId: uuid, version, reason: text(500).min(1), ...csrf }),
+  // A plan's name is a label, so it can change at any time, including after the plan is cancelled.
+  renamePlan: z.strictObject({ planId: uuid, name: text(120).min(1), ...csrf }),
   matchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, ...csrf }),
   unmatchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, reason: text(500).min(1), ...csrf }),
 };

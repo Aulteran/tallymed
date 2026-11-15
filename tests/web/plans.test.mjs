@@ -7,6 +7,7 @@ import { csrfFor } from '../../apps/web/server/tokens.ts';
 import * as pay from '../../apps/web/server/services/payments.ts';
 import * as plans from '../../apps/web/server/services/plans.ts';
 import { AppError } from '../../apps/web/server/errors.ts';
+import { retryStats } from '../../apps/web/server/services/support.ts';
 import { post, skipDb } from './helpers.mjs';
 import { setup } from './money-helpers.mjs';
 
@@ -733,6 +734,11 @@ test('plans can be created per installment, with the leftover on the last one, a
     const audit = (await t.audit('plan.created')).find((a) => a.detail.planId === created.id).detail;
     assert.equal(audit.inputMode, 'per_installment');
     assert.equal(audit.warningCodes, 'bill_balance_mismatch');
+    assert.deepEqual([audit.expectedTotalCents, audit.computedTotalCents], [null, '40000']);
+    // A count and a total that disagree are saved as count x amount, and both figures are recorded so the plan page can show the difference.
+    const off = await plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), name: 'Off by a cent', installmentAmount: '33.33', installmentCount: '3', totalAmount: '100.00' }, 'r');
+    const offAudit = (await t.audit('plan.created')).find((a) => a.detail.planId === off.id).detail;
+    assert.deepEqual([offAudit.expectedTotalCents, offAudit.computedTotalCents, offAudit.warningCodes.includes('total_mismatch')], ['10000', '9999', true]);
     // A total and an amount with no count: three full installments and a smaller last one, and no warning when it equals the open balance.
     const derived = await plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), name: 'Derived', installmentCount: '', totalAmount: '300.00', installmentAmount: '110.00' }, 'r');
     const dd = await s.detail(derived.id);
@@ -788,7 +794,7 @@ test('keep-paid revision keeps paid installments with their own payments and res
     assert.equal(await s.ledgerSnapshot(), snapshot, 'revising moved no cash and changed no balance');
     const a = (await t.audit('plan.revised'))[0].detail;
     assert.deepEqual([a.reviseMode, a.keptInstallmentCount, a.keptCents, a.rescheduledCount, a.rescheduledCents, a.inputMode], ['keep_paid', 1, '10000', 4, '20000', 'per_installment']);
-    // A stale form, and a total below what is matched, are refused and leave nothing behind.
+    // A stale form is refused and leaves nothing behind.
     await assert.rejects(revise({ version: d0.plan.version, totalAmount: '200.00', installmentCount: '2', firstDueDate: '2026-12-01' }), code('stale_version'));
     assert.equal(await t.count('plan_revisions'), 2);
     // Keeping paid installments in a plan whose installments are all paid is refused.
@@ -798,8 +804,115 @@ test('keep-paid revision keeps paid installments with their own payments and res
     const df = await s.detail(full.id);
     await s.match(df.installments[0].id, alloc2, '100.00');
     await assert.rejects(plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: full.id, version: df.plan.version, reason: 'x', reviseMode: 'keep_paid', totalAmount: '50.00', installmentCount: '1', firstDueDate: '2026-09-01' }, 'r'), code('conflict'));
-    // Another household's plan is not found.
-    assert.equal(typeof (await t.audit('plan.revised'))[0].detail.keptCents, 'string');
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('a plan can be renamed at any time, including after it is cancelled, without touching money or the schedule', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t);
+    const d0 = await s.detail();
+    const snapshot = await s.ledgerSnapshot();
+    const rename = (name, planId = s.plan.id) => plans.renamePlan(t.db.pool, t.actor, { planId, name }, 'r');
+    await rename('Hospital plan, first version');
+    assert.equal((await s.detail()).plan.name, 'Hospital plan, first version');
+    await plans.cancelPlan(t.db.pool, t.actor, { planId: s.plan.id, version: (await s.detail()).plan.version, reason: 'Provider restructured the plan' }, 'r');
+    const cancelled = await s.detail();
+    assert.equal(cancelled.plan.status, 'cancelled');
+    await rename('Cancelled: replaced by the March plan');
+    const after = await s.detail();
+    assert.equal(after.plan.name, 'Cancelled: replaced by the March plan');
+    assert.equal(after.plan.status, 'cancelled');
+    assert.equal(after.plan.version, cancelled.plan.version, 'a rename does not make open forms stale');
+    assert.deepEqual(after.installments.map((i) => i.amountCents), d0.installments.map((i) => i.amountCents));
+    assert.equal(await s.ledgerSnapshot(), snapshot);
+    const audits = await t.audit('plan.renamed');
+    assert.equal(audits.length, 2);
+    assert.equal(audits[0].detail.status === 'active' || audits[0].detail.status === 'cancelled', true);
+    await assert.rejects(rename('   '), (e) => e instanceof AppError);
+    await assert.rejects(rename('Nobody\'s plan', randomUUID()), code('not_found'));
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('restructuring a plan after payments: keep the first installment, restart the rest, then match the payments already made', { skip: skipDb }, async () => {
+  // Fabricated figures with the same shape as a real restructure: one payment at the original rate, then smaller monthly payments,
+  // and a last installment that is only the remainder. The bill is $720.50.
+  const t = await setup();
+  try {
+    const m = await t.member();
+    const p = await t.provider();
+    const b = await t.bill({ memberId: m, providerId: p, originalAmount: '720.50' });
+    const pays = [['2026-01-21', '60.00'], ['2026-02-21', '55.00'], ['2026-03-21', '55.00'], ['2026-04-21', '55.00'], ['2026-05-21', '55.00'], ['2026-06-21', '55.00']];
+    for (const [paidOn, amount] of pays) await t.pay1({ paidOn, amount, billId: b.id });
+    // The original plan: $60.00 x 12 from January 21, matching nothing automatically.
+    const plan = await plans.createPlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), name: 'Original plan', billId: b.id, inputMode: 'per_installment', installmentAmount: '60.00', installmentCount: '12',
+      firstDueDate: '2026-01-21', cadence: 'monthly', startedOn: '2026-01-01',
+    }, 'r');
+    const detail = () => plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
+    const d0 = await detail();
+    assert.equal(d0.plan.matchedCents, '0');
+    // Hand-match the January payment to installment 1 (60.00 equals it exactly).
+    const jan = d0.allocations.find((a) => a.paidOn === '2026-01-21');
+    await plans.matchInstallment(t.db.pool, t.actor, { idempotencyKey: t.key(), installmentId: d0.installments[0].id, allocationId: jan.allocationId, amount: '60.00' }, 'r');
+    const d1 = await detail();
+    assert.equal(d1.installments[0].state, 'paid');
+    // Keep installment 1, and schedule the rest: $660.50 still to schedule at $55.00 each, count worked out, restarting Feb 21.
+    await plans.revisePlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), planId: plan.id, version: d1.plan.version, reason: 'Provider restructured', reviseMode: 'keep_paid', inputMode: 'per_installment',
+      installmentAmount: '55.00', totalAmount: '660.50', firstDueDate: '2026-02-21', cadence: 'monthly',
+    }, 'r');
+    const d2 = await detail();
+    assert.equal(d2.plan.totalCents, '72050', 'the plan total equals the bill');
+    assert.equal(d2.installments.length, 14);
+    assert.deepEqual([d2.installments[0].dueDate, d2.installments[0].amountCents, d2.installments[0].state], ['2026-01-21', '6000', 'paid']);
+    assert.deepEqual([d2.installments[1].dueDate, d2.installments[1].amountCents, d2.installments[12].dueDate, d2.installments[13].dueDate, d2.installments[13].amountCents],
+      ['2026-02-21', '5500', '2027-01-21', '2027-02-21', '50']);
+    // Until the payments are matched, the plan schedules more than the bill owes, and the page says so (the gap is the cash already paid).
+    assert.equal(d2.plan.matchedCents, '6000');
+    // Match the payments already made, oldest first onto the earliest installments that still owe.
+    await plans.matchExistingPayments(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: plan.id, version: d2.plan.version }, 'r');
+    const d3 = await detail();
+    assert.deepEqual(d3.installments.slice(0, 7).map((i) => i.state), ['paid', 'paid', 'paid', 'paid', 'paid', 'paid', 'unpaid']);
+    assert.deepEqual(d3.installments.slice(0, 6).map((i) => i.matchedCents), ['6000', '5500', '5500', '5500', '5500', '5500']);
+    assert.equal(d3.plan.matchedCents, '33500');
+    // The plan now schedules exactly what the bill still owes: no balance gap.
+    assert.equal(String(BigInt(d3.plan.totalCents) - BigInt(d3.plan.matchedCents)), (await t.detail(b.id)).openBalanceCents);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('a keep-paid revision racing matches never double counts cash and causes no lock-order retries', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t);
+    const pm = await t.pay1({ amount: '150.00', billId: s.b.id });
+    const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+    const d0 = await s.detail();
+    await s.match(d0.installments[0].id, alloc, '100.00');
+    retryStats.lockConflicts = 0;
+    const revise = plans.revisePlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), planId: s.plan.id, version: d0.plan.version, reason: 'Restructured', reviseMode: 'keep_paid', inputMode: 'per_installment',
+      installmentAmount: '60.00', totalAmount: '200.00', firstDueDate: '2026-09-01', cadence: 'monthly',
+    }, 'r');
+    // Several matches of the same $50.00 left on the allocation, aimed at the old second installment, race the revision.
+    const matches = [1, 2, 3].map(() => s.match(d0.installments[1].id, alloc, '50.00'));
+    const results = await Promise.allSettled([revise, ...matches]);
+    for (const r of results.slice(1)) if (r.status === 'rejected') assert.ok(['conflict'].includes(r.reason.code), `unexpected ${r.reason?.code}`);
+    assert.equal(results[0].status, 'fulfilled', String(results[0].reason?.code));
+    assert.equal(retryStats.lockConflicts, 0, 'no lock-cycle retries');
+    // However the race fell, the current schedule never holds more than the cash, nor more than an installment's amount.
+    const d1 = await s.detail();
+    const matched = d1.installments.reduce((a, i) => a + BigInt(i.matchedCents), 0n);
+    assert.ok(matched <= 15000n, `matched ${matched} exceeds the $150.00 applied`);
+    for (const i of d1.installments) assert.ok(BigInt(i.matchedCents) <= BigInt(i.amountCents));
+    assert.equal(d1.installments[0].state, 'paid');
+    assert.equal((await t.detail(s.b.id)).openBalanceCents, '15000');
   } finally {
     await t.db.drop();
   }

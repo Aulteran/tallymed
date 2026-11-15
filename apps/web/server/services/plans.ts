@@ -373,7 +373,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
         installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
         scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
         startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
-        inputMode: d.inputMode, remainder: d.remainder,
+        inputMode: d.inputMode, remainder: d.remainder, expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
         warningCodes: planWarnings({
           schedule, matchedCents: sum(fill.map((f) => f.amount)),
           openBalanceCents: sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents)),
@@ -438,7 +438,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
         fromInstallmentCount: before!.installmentCount, toInstallmentCount: installments.length, fromCadence: cur.cadence, toCadence: schedule.cadence,
         carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
         reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
-        inputMode: rest.inputMode, remainder: rest.remainder,
+        inputMode: rest.inputMode, remainder: rest.remainder, expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
         warningCodes: planWarnings({ schedule: restSchedule, openBalanceCents: null, matchedCents: 0n }).map((w) => w.code).join(','),
       },
     });
@@ -459,6 +459,23 @@ export async function cancelPlan(pool: Pool, actor: Actor, input: unknown, reque
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.cancelled', entityType: 'payment_plan', entityId: d.planId, requestId,
       detail: { planId: d.planId, totalCents: plan.totalCents, matchedCents: plan.matchedCents, unpaidCents: cents(BigInt(plan.totalCents) - BigInt(plan.matchedCents)) },
+    });
+    return { id: d.planId };
+  }));
+}
+
+/** Renames a plan, active or cancelled. A label only: no schedule, match, payment or balance changes. Takes the plan lock alone, like cancel. */
+export async function renamePlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string }> {
+  authorize(actor, 'expenses:write');
+  const { csrf: _csrf, ...d } = parse(paymentSchemas.renamePlan, input);
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const [lock] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
+    if (!lock) throw new AppError('not_found');
+    const plan = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
+    await repo.renamePlan(tx, actor.householdId, d.planId, d.name);
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.renamed', entityType: 'payment_plan', entityId: d.planId, requestId,
+      detail: { planId: d.planId, renamed: plan.name !== d.name, status: lock.status },
     });
     return { id: d.planId };
   }));
