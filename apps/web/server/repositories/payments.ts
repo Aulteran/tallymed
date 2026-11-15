@@ -8,7 +8,7 @@ export type EntryKind = 'allocation' | 'allocation_reversal' | 'refund' | 'unapp
 
 export interface Payment {
   id: string; paidOn: string; amountCents: string; method: string; reference: string | null; note: string;
-  createdByName: string | null; createdAt: Date; voided: boolean; voidReason: string | null; voidedOn: string | null;
+  createdByName: string | null; createdAt: Date; voided: boolean; removed: boolean; voidReason: string | null; voidedOn: string | null;
   /** The saved payment method this was paid with, when one is recorded (it can be archived since). */
   paidWithId: string | null; paidWithName: string | null; paidWithLastFour: string | null; paidWithArchived: boolean;
   /** Set when the payment was paid directly from an HSA at the point of service (see docs/contracts.md). */
@@ -23,26 +23,35 @@ export interface Payment {
   netCashCents: string;
 }
 
-export const PAYMENT_FROM = `from payments p
+/**
+ * The payments query without the removed filter: only getPayment's includeRemoved path (remove, restore, undo and the services that must
+ * refuse a removed payment) reads this. Everything else reads PAYMENT_FROM, which excludes removed payments, so lists, summaries and
+ * per-method and per-account totals all agree.
+ */
+const PAYMENT_FROM_ANY = `from payments p
   left join users u on u.id = p.created_by
   left join lateral (select a.method_id from payment_method_assignments a where a.household_id = p.household_id and a.payment_id = p.id order by a.seq desc limit 1) cur on true
   left join payment_methods pm on pm.household_id = p.household_id and pm.id = cur.method_id
-  left join payment_hsa_funding hf on hf.household_id = p.household_id and hf.payment_id = p.id
+  left join payment_hsa_funding hf on hf.household_id = p.household_id and hf.payment_id = p.id and payment_is_direct_hsa(p.id)
   left join hsa_accounts ha on ha.household_id = hf.household_id and ha.id = hf.hsa_account_id
   left join payment_voids v on v.household_id = p.household_id and v.payment_id = p.id
   left join lateral (select
       coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) as applied,
       -coalesce(sum(e.amount_cents) filter (where e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) as refunded
     from payment_entries e where e.household_id = p.household_id and e.payment_id = p.id) c on true`;
+export const PAYMENT_FROM = `${PAYMENT_FROM_ANY}
+  join lateral (select payment_is_removed(p.id) as removed) rm on not rm.removed`;
 const PAYMENT_COLS = `p.id, p.paid_on::text as "paidOn", p.amount_cents::text as "amountCents", p.method, p.reference, p.note,
-  u.display_name as "createdByName", p.created_at as "createdAt", (v.payment_id is not null) as voided, v.reason as "voidReason",
+  u.display_name as "createdByName", p.created_at as "createdAt", (v.payment_id is not null) as voided, payment_is_removed(p.id) as removed, v.reason as "voidReason",
   v.voided_on::text as "voidedOn", cur.method_id as "paidWithId", pm.nickname as "paidWithName", pm.last_four as "paidWithLastFour",
   (pm.archived_at is not null) as "paidWithArchived", hf.hsa_account_id as "hsaAccountId", ha.name as "hsaAccountName", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded - c.applied else 0 end)::text as "unappliedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded else 0 end)::text as "netCashCents"`;
 
-export async function getPayment(db: Queryable, householdId: string, id: string): Promise<Payment | null> {
-  const { rows } = await db.query<Payment>(`select ${PAYMENT_COLS} ${PAYMENT_FROM} where p.household_id = $1 and p.id = $2`, [householdId, id]);
+/** A removed payment is not found unless `includeRemoved` (only remove, restore and undo, and the guards that refuse a removed payment, pass it). */
+export async function getPayment(db: Queryable, householdId: string, id: string, o: { includeRemoved?: boolean } = {}): Promise<Payment | null> {
+  const { rows } = await db.query<Payment>(
+    `select ${PAYMENT_COLS} ${o.includeRemoved ? PAYMENT_FROM_ANY : PAYMENT_FROM} where p.household_id = $1 and p.id = $2`, [householdId, id]);
   return rows[0] ?? null;
 }
 
@@ -195,7 +204,7 @@ export async function listBillLedger(db: Queryable, householdId: string, billId:
      left join lateral (select a.method_id from payment_method_assignments a where a.household_id = p.household_id and a.payment_id = p.id order by a.seq desc limit 1) cur on true
      left join payment_methods pm on pm.household_id = p.household_id and pm.id = cur.method_id
      left join users u on u.id = e.created_by
-     where e.household_id = $1 and e.bill_id = $2 order by e.seq`, [householdId, billId]);
+     where e.household_id = $1 and e.bill_id = $2 and not payment_is_removed(p.id) order by e.seq`, [householdId, billId]);
   return rows;
 }
 
@@ -215,6 +224,28 @@ export async function insertEntry(db: Queryable, v: {
     `insert into payment_entries (id, household_id, payment_id, event_id, kind, bill_id, allocation_id, reverses_entry_id, amount_cents, effective_date, reason, created_by)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [v.id, v.householdId, v.paymentId, v.eventId, v.kind, v.billId, v.allocationId, v.reversesEntryId ?? null, v.amountCents.toString(), v.effectiveDate, v.reason, v.userId]);
+}
+
+export async function insertRemovalEvent(db: Queryable, v: { householdId: string; userId: string; paymentId: string; action: 'remove' | 'restore'; reason: string }): Promise<void> {
+  await db.query(`insert into payment_removal_events (household_id, payment_id, action, reason, created_by) values ($1, $2, $3, $4, $5)`,
+    [v.householdId, v.paymentId, v.action, v.reason, v.userId]);
+}
+
+/** What stands in the way of removing a payment: refunded cash that is still out (a refund that was reversed again no longer counts), any HSA entry, any HSA eligibility decision. */
+export async function removalBlockers(db: Queryable, householdId: string, paymentId: string): Promise<{ refunds: boolean; hsa: boolean }> {
+  const { rows } = await db.query<{ refunds: boolean; hsa: boolean }>(
+    `select coalesce((select sum(e.amount_cents) from payment_entries e where e.household_id = $1 and e.payment_id = $2 and e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) <> 0 as refunds,
+       (exists (select 1 from hsa_entries h where h.household_id = $1 and h.payment_id = $2)
+        or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where d.household_id = $1 and a.payment_id = $2)) as hsa`,
+    [householdId, paymentId]);
+  return rows[0]!;
+}
+
+/** Effective dates of the given allocation entries, so a restore can re-post each one on its original date. */
+export async function allocationDates(db: Queryable, householdId: string, ids: string[]): Promise<Map<string, string>> {
+  const { rows } = await db.query<{ id: string; date: string }>(
+    `select id, effective_date::text as date from payment_entries where household_id = $1 and kind = 'allocation' and id = any($2::uuid[])`, [householdId, ids]);
+  return new Map(rows.map((r) => [r.id, r.date]));
 }
 
 export async function insertVoid(db: Queryable, v: { householdId: string; userId: string; paymentId: string; reason: string; voidedOn: string }): Promise<void> {

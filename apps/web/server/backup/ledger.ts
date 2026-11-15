@@ -13,10 +13,20 @@ import type { Queryable } from '../db.ts';
 const MAX_CENTS = '10000000000000';
 
 /** `table`: the check applies only where that table exists, so a database restored from an older version can still be checked before it is upgraded. */
-const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string }> = [
+const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessTable?: string }> = [
+  {
+    rule: 'a payment paid directly from an HSA has no HSA claim, reimbursement or eligibility decision',
+    table: 'payment_hsa_funding_events',
+    // From 0017 a funding can be released, after which the payment is an ordinary one that may be claimed.
+    sql: `select f.payment_id from payment_hsa_funding f
+           where payment_is_direct_hsa(f.payment_id)
+             and (exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
+              or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id))`,
+  },
   {
     rule: 'a payment paid directly from an HSA has no HSA claim, reimbursement or eligibility decision',
     table: 'payment_hsa_funding',
+    unlessTable: 'payment_hsa_funding_events',
     sql: `select f.payment_id from payment_hsa_funding f
            where exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
               or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id)`,
@@ -164,6 +174,7 @@ export async function ledgerViolations(db: Queryable): Promise<string[]> {
   const broken: string[] = [];
   for (const check of CHECKS) {
     if (check.table && !(await db.query(`select to_regclass($1) is not null as present`, [`public.${check.table}`])).rows[0]!.present) continue;
+    if (check.unlessTable && (await db.query(`select to_regclass($1) is not null as present`, [`public.${check.unlessTable}`])).rows[0]!.present) continue;
     const r = await db.query<{ n: string }>(`select count(*) as n from (${check.sql}) v`);
     const n = Number(r.rows[0]!.n);
     if (n > 0) broken.push(`${check.rule} (${n} record${n === 1 ? '' : 's'})`);

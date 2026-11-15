@@ -33,6 +33,7 @@ export type ErrorCode =
   | 'backup_incompatible'
   | 'backup_failed'
   | 'restore_not_empty'
+  | 'not_implemented'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -70,6 +71,7 @@ const STATUS: Record<ErrorCode, number> = {
   backup_incompatible: 409,
   backup_failed: 409,
   restore_not_empty: 409,
+  not_implemented: 501,
   internal: 500,
 };
 
