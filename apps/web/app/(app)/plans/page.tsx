@@ -41,16 +41,14 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
             <legend>Bills covered by the plan</legend>
             {bills.items.length === 0 ? <p className="muted">No bills with an open balance. Enter and confirm a bill first.</p> : byProvider.map(([providerName, items]) => <div key={providerName} role="group" aria-label={providerName}>
               <h3>{providerName}</h3>
-              {items.map((b) => <p key={b.id}>
-                <input id={`bill_${b.id}`} type="checkbox" name={`bill_${b.id}`} value="on" defaultChecked={p.billId === b.id} />{' '}
-                <label htmlFor={`bill_${b.id}`}>{b.label} · {b.statementDate} · open {formatCents(b.openBalanceCents)}</label></p>)}
+              {items.map((b) => <label key={b.id} className="checkbox">
+                <input id={`bill_${b.id}`} type="checkbox" name={`bill_${b.id}`} value="on" defaultChecked={p.billId === b.id} /> {b.label} · {b.statementDate} · open {formatCents(b.openBalanceCents)}</label>)}
             </div>)}
             <p className="muted">Tick every bill the plan covers, from one provider or several (a hospital often bills one visit under different names). All of them must have confirmed amounts. The plan is listed under each provider it covers.</p>
           </fieldset>
           <label htmlFor="startedOn">Plan start date (optional)</label><input id="startedOn" name="startedOn" type="date" max={asOf} defaultValue={p.startedOn} />
           <p className="muted">When the plan began, if that was before today. Leave empty for today. It is a label only; the real time of entry is kept in the history.</p>
-          <p><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error ? p.matchExisting !== undefined : true} />{' '}
-            <label htmlFor="matchExisting">Match payments made since the start date</label></p>
+          <label className="checkbox"><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error ? p.matchExisting !== undefined : true} /> Match payments made since the start date</label>
           <p className="muted">Payments made on or after the start date and already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
           <PlanScheduleFields idPrefix="new" defaults={{ inputMode: p.inputMode, totalAmount: p.totalAmount, installmentCount: p.installmentCount, installmentAmount: p.installmentAmount, remainder: p.remainder, firstDueDate: p.firstDueDate, cadence: p.cadence }} />
           <button type="submit">Create plan</button>

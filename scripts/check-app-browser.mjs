@@ -321,6 +321,13 @@ try {
   assert.match(await text(), /Matched to payments\s*\n?\s*\$5\.00/);
   assert.match(await text(), /Partial/);
   await a11y('plan detail');
+  // Renaming happens in a pop-up opened from the page header.
+  await openAdd('Rename');
+  await a11y('plan detail with the rename dialog');
+  await page.fill('#plan-name', 'Renamed test plan');
+  await page.click('dialog form[action="/api/expenses/plans/rename"] button[type=submit]');
+  await page.waitForURL(planUrl);
+  assert.match(await text(), /Renamed test plan/);
   await page.goto(billUrl);
   assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
   await page.goto(`${origin}/`);

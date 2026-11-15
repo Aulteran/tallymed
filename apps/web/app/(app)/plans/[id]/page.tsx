@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { AddDialog } from '../../../components/AddDialog.tsx';
 import { PlanScheduleFields } from '../../../components/PlanScheduleFields.tsx';
 import { formatCents } from '../../../../server/money.ts';
 import { getPlanDetail } from '../../../../server/services/plans.ts';
@@ -16,6 +17,9 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   const { data } = await load(() => getPlanDetail(ctx.pool, actor, id, { allocationId: q.allocationId }), null);
   const { plan, bills, revisions, installments, matches, history, allocations, allocationsTruncated } = data!;
   const active = plan.status === 'active';
+  // A refused rename comes back with the typed name; the pop-up reopens with its message. Other errors show on the page.
+  const renameFailed = !!q.error && q.name !== undefined;
+  const renameOpen = renameFailed || q.add === '1';
   const base = (<><Csrf token={csrf} /><input type="hidden" name="planId" value={plan.id} /></>);
   const key = () => <input type="hidden" name="idempotencyKey" value={newKey()} />;
   // Net matched per installment and allocation in the current schedule, for the remove-match form.
@@ -47,15 +51,20 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   const unmatchedCents = unmatched.reduce((t, a) => t + BigInt(a.netCents) - BigInt(a.matchedCents), 0n);
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/plans">← Payment plans</Link></p>
-    <h1>{plan.name}</h1>
+    <div className="page-head">
+      <h1>{plan.name}</h1>
+      <AddDialog label="Rename" title="Rename payment plan" icon={null} secondary requiredNote={false} open={renameOpen}>
+        {renameFailed && <Banner code={q.error} />}
+        <form method="post" action="/api/expenses/plans/rename">
+          {base}
+          <p className="muted">The name is only a label. You can change it at any time, including after the plan is cancelled.</p>
+          <label htmlFor="plan-name">Plan name</label><input id="plan-name" name="name" required maxLength={120} defaultValue={q.name ?? plan.name} />
+          <button type="submit">Rename</button>
+        </form>
+      </AddDialog>
+    </div>
     <p>{plan.providerNames.length > 1 ? <span title="One plan covering bills from several providers">{plan.providerNames.join(', ')}</span> : plan.payee} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
-    <Banner code={q.error} />
-    <form className="card" method="post" action="/api/expenses/plans/rename">
-      <h2>Plan name</h2>{base}
-      <p className="muted">The name is only a label. You can change it at any time, including after the plan is cancelled.</p>
-      <label htmlFor="plan-name">Name</label><input id="plan-name" name="name" required maxLength={120} defaultValue={q.name ?? plan.name} />
-      <button type="submit" className="secondary">Rename</button>
-    </form>
+    {!renameFailed && <Banner code={q.error} />}
     {totalGap !== 0n && enteredCents !== null && computedCents !== null && <div className="card" role="note"><strong>The entered total did not match the installments.</strong> When this schedule was saved you entered a total of {formatCents(enteredCents.toString())}, but the installments entered come to {formatCents(computedCents.toString())}, {formatCents((totalGap < 0n ? -totalGap : totalGap).toString())} {totalGap > 0n ? 'more' : 'less'}. The schedule was saved as the installments add up. Revise it if that is not what you meant.</div>}
     {roundingNote && <div className="card" role="note"><strong>Some installments differ by a few cents.</strong> The total does not divide evenly, so the leftover cents were placed as you chose when the schedule was saved.</div>}
     {active && balanceGap !== 0n && <div className="card" role="note"><strong>Check the plan against the bills.</strong> The plan still schedules {formatCents(stillScheduled.toString())} (its total minus what is matched), and the bills it covers still owe {formatCents(billsOpen.toString())}: the plan is {formatCents((balanceGap < 0n ? -balanceGap : balanceGap).toString())} {balanceGap > 0n ? 'above' : 'below'} the balance. {balanceGap > 0n ? 'Payments cannot be applied above a bill\'s open balance, so the last installments may not be payable in full.' : 'The installments will not clear the bills on their own.'} {unmatchedCents > 0n ? ` ${formatCents(unmatchedCents.toString())} of payments applied to these bills is not matched to any installment yet, which can explain it: use Match all existing payments.` : ''} This is only a warning. Revise the schedule or record a bill adjustment if it is not what you expect.</div>}
@@ -110,10 +119,8 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
       <p className="muted">A revision replaces the schedule going forward. Earlier schedules and what was matched on them stay in the history, and matches carry onto the new installments in date order. The new total cannot be below what is already matched.</p>
       <fieldset>
         <legend>What should the revision do?</legend>
-        <p><input id="rv-replace" type="radio" name="reviseMode" value="replace" defaultChecked={q.reviseMode !== 'keep_paid'} />{' '}
-          <label htmlFor="rv-replace">Replace the whole schedule</label></p>
-        <p><input id="rv-keep" type="radio" name="reviseMode" value="keep_paid" defaultChecked={q.reviseMode === 'keep_paid'} />{' '}
-          <label htmlFor="rv-keep">Keep the installments that are fully paid, and restart the rest from the date below</label></p>
+        <label className="checkbox"><input id="rv-replace" type="radio" name="reviseMode" value="replace" defaultChecked={q.reviseMode !== 'keep_paid'} /> Replace the whole schedule</label>
+        <label className="checkbox"><input id="rv-keep" type="radio" name="reviseMode" value="keep_paid" defaultChecked={q.reviseMode === 'keep_paid'} /> Keep the installments that are fully paid, and restart the rest from the date below</label>
         <p className="muted">When keeping paid installments, the total and amounts below describe only the unpaid rest. The paid installments stay exactly as they are, with their own payments, and the plan total becomes what they hold plus the new rest.{' '}
           {paidCount > 0 ? `Right now ${paidCount} installment${paidCount === 1 ? ' is' : 's are'} fully paid (${formatCents(paidCents.toString())}), so the part still to schedule is the plan total minus that: ${formatCents((BigInt(plan.totalCents) - paidCents).toString())}. The total box is filled with the whole plan total, so change it to that figure when keeping paid installments. The number of installments is also pre-filled: clear it if you want the count worked out from the total and an amount per installment.` : 'No installment is fully paid yet.'}</p>
       </fieldset>

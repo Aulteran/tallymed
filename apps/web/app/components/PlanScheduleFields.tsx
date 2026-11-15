@@ -14,10 +14,8 @@ export function PlanScheduleFields({ idPrefix, defaults, restart = false }: { id
   return <>
     <fieldset>
       <legend>How do you want to set the amounts?</legend>
-      <p><input id={id('mode-total')} type="radio" name="inputMode" value="total" defaultChecked={mode === 'total'} />{' '}
-        <label htmlFor={id('mode-total')}>It's going to be this many installments and at this much price</label></p>
-      <p><input id={id('mode-per')} type="radio" name="inputMode" value="per_installment" defaultChecked={mode === 'per_installment'} />{' '}
-        <label htmlFor={id('mode-per')}>At this much paid per installment</label></p>
+      <label className="checkbox"><input id={id('mode-total')} type="radio" name="inputMode" value="total" defaultChecked={mode === 'total'} /> It's going to be this many installments and at this much price</label>
+      <label className="checkbox"><input id={id('mode-per')} type="radio" name="inputMode" value="per_installment" defaultChecked={mode === 'per_installment'} /> At this much paid per installment</label>
       <p className="muted">
         First choice: give the total price and the number of installments, and the total is divided exactly.
         Second choice: give the amount paid each time, and either the number of installments (the total is the count times the amount) or the total
