@@ -13,7 +13,7 @@ These gaps are known and are not fixed in this release line. Decide whether you 
 - **MCP role setup is a separate step.** The optional assistant listener needs a restricted database role created with `setup-role` before it starts, and again after any upgrade that adds tables, and again after a restore (roles are not part of a database dump). See [MCP](mcp.md).
 - **PDF scanning is best-effort.** Uploads are checked by content, but the PDF scan is not a malware scanner. Downloads are attachment-only with `nosniff`, which are the real controls.
 - **Upload rate limit.** 30 upload attempts per person per minute, counted per process.
-- **Not yet done:** pruning of expired sessions, a global cap on unauthenticated password-hashing work, and automated backups. Back up by the procedure below.
+- **Not yet done:** pruning of expired sessions, a global cap on unauthenticated password-hashing work, and scheduled (automatic) backups. Back up with the Backup page or the backup command below, on your own schedule.
 
 ## Images and versions
 
@@ -122,7 +122,7 @@ The TallyMed server must be able to reach the provider over https (discovery, ke
 
 ## Upgrade
 
-1. Run a backup (below) and confirm it decrypts and its manifest verifies.
+1. Run a backup (the Backup page or one of the procedures below) and confirm it verifies: `backup.ts verify <file>` for an app backup, or decrypt and check the manifest for a dump.
 2. Read the release notes for the target version, including migrations and any operator step.
 3. Set `TALLYMED_WEB_IMAGE` (and `TALLYMED_MCP_IMAGE` if used) in `deploy/.env` to the new reference, then:
 
@@ -139,6 +139,38 @@ The TallyMed server must be able to reach the provider over https (discovery, ke
 4. Sign in, open the Overview and compare its totals with the figures you recorded before the upgrade.
 
 **Rollback limits.** Migrations only go forward; there are no down migrations. Pointing `TALLYMED_WEB_IMAGE` back at an older reference is safe only if the release notes say the schema is compatible, otherwise restore the pre-upgrade backup into a fresh database. Anything entered after the backup is lost by a restore, so upgrade when you can pause entry.
+
+## Backup from the app
+
+An administrator can download one file that holds the whole installation and restore it into a new one. This is the simplest way to back up and to move TallyMed to another server. The procedure in [Encrypted backup](#encrypted-backup) further down (database dump plus volume copy) still works and additionally carries your environment file; the two are independent.
+
+**Make a backup.** Open **Server settings > Backup**, optionally type a passphrase twice, confirm your own password and press **Download backup**. The browser saves `tallymed-backup-<UTC time>.tar.gz`, or `.tar.gz.enc` with a passphrase. The app keeps running: the file is made from one consistent database snapshot. The page lists recent backups with the size and SHA-256 of each file as it was downloaded; compare that with `sha256sum` of your copy.
+
+- *What is in it:* every record (household, people, providers, visits, bills and adjustments, payments, refunds, payment plans, HSA decisions, claims and receipts, documents with versions and attachments, assistant proposals, the full audit log), the file of every stored document version, user accounts with their password hashes, the General and Documents settings, and a manifest with the database version, per-table row counts and SHA-256, per-file SHA-256 and the ledger totals.
+- *What is never in it:* sign-in sessions, invitation links, temporary passwords and reset counters, sign-in throttle data, the email (SMTP) settings and password, the sign-in provider settings and client secret (the links between accounts and provider identities are kept, and work again once the same provider is entered on the restored server), the reverse proxy list, assistant credentials (the client entries are kept for history, with their token digest replaced by an unusable value), and anything from the environment (`deploy/.env`: database password, secrets key, proxy secret, setup token). Keep a copy of `deploy/.env` and your proxy configuration separately.
+- *Passphrase:* with one, the file is encrypted with AES-256-GCM under a key derived from the passphrase by scrypt. It is not stored anywhere; a lost passphrase means a lost backup. Without one the file is a plain compressed archive (`tar -tzf` lists it) that anyone holding it can read, so store it like the records themselves. The file always contains medical and financial information.
+- *If the download stops:* an incomplete file has no manifest and is refused by verify and restore. The page records it as "did not finish". A backup also refuses to start a file it cannot vouch for: if a stored document is missing or does not match its checksum, the backup fails and tells you to run `documents verify`.
+
+**Restore into a new installation.** A backup is only restored into an installation that has never been set up; nothing can be restored over existing data.
+
+1. Install the same TallyMed version on the new server as in [First installation](#first-installation), up to and including the migration command. Do not create the first administrator.
+2. Open `https://<your origin>/setup`, choose **Restore from a backup**, and enter the setup token, the file and the passphrase if there is one. The upload limit is 4096 MB (`TALLYMED_RESTORE_MAX_MB`); your reverse proxy may have a lower limit of its own (for nginx, `client_max_body_size`). For larger files use the command below.
+3. The server verifies every checksum before it writes anything, loads all records in one database transaction, then exports each table again and compares it with the backup, re-checks the ledger rules and totals, and compares every document with its recorded checksum. If anything differs, nothing is restored and the installation stays empty.
+4. Sign in with an account from the backup (same email and password as on the old server). Then enter the email and reverse proxy settings again, create new assistant credentials if you use the assistant (and run `setup-role`), and run `documents verify`.
+
+Accounts that were waiting to choose a new password after a reset need a new reset from an administrator. The restore is recorded in the audit log (`backup.restored`), after all the restored history.
+
+**Command line.** The same archive, for scripts, large files and version upgrades:
+
+```sh
+dc run --rm -v "$PWD/backups:/backups" web node apps/web/cli/backup.ts create /backups/tallymed-$(date -u +%Y%m%dT%H%M%SZ).tar.gz
+dc run --rm -v "$PWD/backups:/backups" web node apps/web/cli/backup.ts verify /backups/<file>
+dc run --rm -v "$PWD/backups:/backups" web node apps/web/cli/backup.ts restore /backups/<file>
+```
+
+The `backups` directory must be writable by uid 1000 (the image's `node` user). `create` refuses to overwrite a file, reads the finished file back and verifies it before reporting success. `verify` needs no database and exits 1 if the file is not complete and unchanged; it prints counts, checksums and ledger totals, never record content. For an encrypted file put the passphrase in the `TALLYMED_BACKUP_PASSPHRASE` environment variable of that one command (`-e TALLYMED_BACKUP_PASSPHRASE`, with the variable exported in your shell), never on the command line. `restore` needs an empty database: either one with no tables at all or one that was migrated but never set up. If the backup was made by an older TallyMed, `restore` brings an empty database to the backup's own version, loads the backup, and then applies the newer migrations; the web page only accepts a backup of exactly its own database version and tells you to use the command otherwise. A backup from a newer TallyMed than the one installed is refused: upgrade first.
+
+Rehearse a restore with fabricated data, or into an isolated project as in [Restore and drill](#restore-and-drill), before you rely on it. `npm run test` covers the round trip on synthetic data (`tests/web/backup.test.mjs`).
 
 ## Encrypted backup
 

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { appContext } from '../../server/context.ts';
 import { isBootstrapped } from '../../server/services/bootstrap.ts';
@@ -34,6 +35,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
       <label htmlFor="password">Password (12 to 128 characters)</label>
       <input id="password" name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" />
       <button type="submit">Create administrator</button>
+      <p className="muted">Moving from another TallyMed? <Link href="/setup/restore">Restore from a backup</Link> instead.</p>
     </form>
   </AuthShell>;
 }

@@ -5,6 +5,7 @@ const TABS = [
   { href: '/settings/proxy', label: 'Reverse proxy' },
   { href: '/settings/email', label: 'Email (SMTP)' },
   { href: '/settings/signin', label: 'Sign-in' },
+  { href: '/settings/backup', label: 'Backup' },
 ] as const;
 
 export function SettingsTabs({ current }: { current: (typeof TABS)[number]['href'] }) {

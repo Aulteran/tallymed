@@ -293,7 +293,7 @@ function routeFiles(dir = routeDir, base = '') {
 
 // Every API route and what the password-change gate does to it. A new route fails the inventory test until it is classified here.
 const CLASSIFIED = {
-  '/auth/login': 'public', '/auth/oidc/start': 'public', '/auth/oidc/callback': 'public', '/auth/forgot-password': 'public', '/invitations/accept': 'public', '/setup': 'public',
+  '/auth/login': 'public', '/auth/oidc/start': 'public', '/auth/oidc/callback': 'public', '/auth/forgot-password': 'public', '/invitations/accept': 'public', '/setup': 'public', '/setup/restore': 'public',
   '/auth/logout': 'allowed', '/auth/change-password': 'allowed',
   '/operators/invite': 'gated', '/operators/update': 'gated', '/operators/reset-password': 'gated', '/operators/invitations/revoke': 'gated',
   '/expenses/[...action]': 'gated', '/documents/[...action]': 'gated', '/assistant/[...action]': 'gated', '/settings/[...action]': 'gated',

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { AppConfig } from './config.ts';
 import type { Pool } from './db.ts';
 import type { ObjectStore } from './storage.ts';
@@ -21,6 +22,7 @@ import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import * as settingsService from './services/settings.ts';
 import * as signin from './services/signin.ts';
+import { restoreFromSetup, startBackup } from './services/backup.ts';
 import { refreshRuntimeConfig } from './settings.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
@@ -531,6 +533,65 @@ export const handleSetup = route({
   },
 });
 
+const fromBase64Url = (value: string | null): string | null => {
+  if (value === null || value === '') return null;
+  if (!/^[A-Za-z0-9_-]{1,2048}$/.test(value)) throw new AppError('invalid_input');
+  return Buffer.from(value, 'base64url').toString('utf8');
+};
+
+/**
+ * A web stream over a Node stream that reads one chunk only when the client asks for one. `Readable.toWeb` pushes chunks as they arrive
+ * and throws an uncaught "Controller is already closed" when one arrives just after the client went away, which would stop the process.
+ * Here a chunk is only ever handed over inside `pull`, and a cancelled download destroys the source so the backup ends and is audited.
+ */
+function downloadBody(source: Readable): ReadableStream<Uint8Array> {
+  const chunks = source[Symbol.asyncIterator]();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await chunks.next();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value as Uint8Array);
+      } catch (error) {
+        try { controller.error(error); } catch { /* already closed by a cancel */ }
+      }
+    },
+    cancel() {
+      source.destroy(Object.assign(new Error('The download was cancelled'), { name: 'AbortError', code: 'ABORT_ERR' }));
+    },
+  }, { highWaterMark: 0 });
+}
+
+/**
+ * Restore a backup into an installation that has never been set up. The body is the backup file itself (not a form), so it can be streamed
+ * to disk instead of held in memory; the setup token and the optional passphrase travel in headers, base64url-encoded. Same transport and
+ * origin checks as every other POST. Once an administrator exists this answers 404 like the setup route.
+ */
+export async function handleSetupRestore(req: Request, ctx: AppContext): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    if (req.method !== 'POST') throw new AppError('invalid_input', 'POST required');
+    await refreshRuntimeConfig(ctx.config, ctx.pool);
+    const client = clientInfo(req.headers, ctx.config);
+    assertTransport(req.headers, ctx.config, client);
+    assertSameOrigin(req.headers, ctx.config);
+    if ((req.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase() !== 'application/octet-stream') throw new AppError('unsupported_media_type');
+    const declared = req.headers.get('content-length');
+    if (declared !== null && !/^\d+$/.test(declared)) throw new AppError('invalid_input');
+    const result = await restoreFromSetup(ctx, {
+      setupToken: fromBase64Url(req.headers.get('x-setup-token')) ?? '', passphrase: fromBase64Url(req.headers.get('x-backup-passphrase')),
+      body: req.body, declaredLength: declared === null ? null : Number(declared), ip: client.ip, requestId,
+    });
+    return Response.json({
+      ok: true, backupCreatedAt: result.createdAt, records: result.rows, documents: result.documents, openBalanceCents: result.ledger.openBalanceCents ?? null,
+    }, { status: 201, headers: BASE_HEADERS });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code === 'internal') logError('http.setup.restore', error, { requestId });
+    else log('info', 'http.setup.restore.rejected', { requestId, code: error.code });
+    return errorResponse(req, null, error, null);
+  }
+}
+
 /**
  * The signed-in session for a page or a GET route, including an account that must still replace a temporary password. Only the
  * sign-in, shell and change-password pages use this directly; everything else goes through `pageActor`, which refuses that state.
@@ -932,6 +993,24 @@ const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promi
       const result = await signin.testSignin(ctx.pool, ctx.config, actor!, body, requestId);
       if (wantsHtml(req)) return { response: redirect(ctx.config, `/settings/signin?tested=${result}`) };
       return { json: { ok: result === 'ok', result } };
+    },
+  })],
+  // Server-wide backup: answers with the archive itself, streamed as it is produced. The service re-checks the role and the password.
+  ['backup', route({
+    name: 'settings.backup',
+    session: true,
+    errorPath: () => '/settings/backup',
+    async run({ ctx, actor, body, requestId }) {
+      const backup = await startBackup(ctx, actor!, body, requestId);
+      return {
+        response: new Response(downloadBody(backup.stream), {
+          status: 200,
+          headers: {
+            ...BASE_HEADERS, 'Cache-Control': 'private, no-store', 'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${backup.filename}"`, 'X-TallyMed-Backup-Id': backup.backupId,
+          },
+        }),
+      };
     },
   })],
 ]);

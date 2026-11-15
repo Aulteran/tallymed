@@ -33,6 +33,8 @@ services:
       TALLYMED_OIDC_ALLOW_INSECURE_ISSUER: ${TALLYMED_OIDC_ALLOW_INSECURE_ISSUER:-}
       # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
       TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
+      # Optional: largest backup file (MB) accepted by Restore from a backup on the setup page. Empty uses 4096.
+      TALLYMED_RESTORE_MAX_MB: ${TALLYMED_RESTORE_MAX_MB:-}
       # Private document volume (outside the web root). Backed up together with PostgreSQL.
       TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
     volumes:

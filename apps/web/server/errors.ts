@@ -28,6 +28,11 @@ export type ErrorCode =
   | 'sso_no_account'
   | 'sso_not_proven'
   | 'password_login_disabled'
+  | 'backup_invalid'
+  | 'backup_passphrase'
+  | 'backup_incompatible'
+  | 'backup_failed'
+  | 'restore_not_empty'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -60,6 +65,11 @@ const STATUS: Record<ErrorCode, number> = {
   sso_no_account: 403,
   sso_not_proven: 409,
   password_login_disabled: 403,
+  backup_invalid: 400,
+  backup_passphrase: 400,
+  backup_incompatible: 409,
+  backup_failed: 409,
+  restore_not_empty: 409,
   internal: 500,
 };
 
