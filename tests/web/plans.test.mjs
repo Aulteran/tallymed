@@ -632,3 +632,175 @@ test('migration 0013 keeps existing single-provider plans, their matches and the
     await db.drop();
   }
 });
+
+// ---------- input modes, remainder choices, warnings and keep-paid scheduling (pure, no database) ----------
+
+test('a total can be split with the cents on the earliest, on the last, or with a smaller last installment', () => {
+  assert.deepEqual(plans.splitTotal(10000n, 3, 'earliest'), [3334n, 3333n, 3333n]);
+  assert.deepEqual(plans.splitTotal(10000n, 3, 'last_extra'), [3333n, 3333n, 3334n]);
+  assert.deepEqual(plans.splitTotal(10000n, 3, 'last_short'), [3334n, 3334n, 3332n]);
+  for (const r of ['earliest', 'last_extra', 'last_short']) {
+    assert.deepEqual(plans.splitTotal(900n, 3, r), [300n, 300n, 300n]);
+    assert.equal(plans.splitTotal(10001n, 7, r).reduce((a, b) => a + b, 0n), 10001n);
+  }
+  assert.deepEqual(plans.splitTotal(777n, 1, 'last_short'), [777n]);
+  // Rounding up would leave nothing for the last installment.
+  assert.throws(() => plans.splitTotal(5n, 4, 'last_short'), AppError);
+  assert.throws(() => plans.splitTotal(3n, 4, 'earliest'), AppError);
+  // The default stays the original behavior.
+  const s = plans.buildSchedule({ cadence: 'monthly', totalAmount: 10000n, installmentCount: 3, firstDueDate: '2026-01-31' });
+  assert.deepEqual(s.lines.map((l) => l.amountCents), [3334n, 3333n, 3333n]);
+  assert.equal(s.generated, true);
+  assert.equal(plans.buildSchedule({ cadence: 'monthly', totalAmount: 10000n, installmentCount: 3, firstDueDate: '2026-01-31', remainder: 'last_short' }).lines[2].amountCents, 3332n);
+});
+
+test('paid per installment: count times amount, or a total with a smaller last installment, and a mismatch is reported', () => {
+  const base = { cadence: 'monthly', firstDueDate: '2026-03-21', inputMode: 'per_installment' };
+  const counted = plans.buildSchedule({ ...base, totalAmount: null, installmentCount: 3, installmentAmount: 3333n });
+  assert.equal(counted.totalCents, 9999n); // no rounding: 3 x 33.33
+  assert.equal(counted.expectedTotalCents, null);
+  assert.deepEqual(plans.planWarnings({ schedule: counted, openBalanceCents: null, matchedCents: 0n }), []);
+  // The count and a total are both given and do not agree: still saved as count x amount, with a warning that shows the difference.
+  const both = plans.buildSchedule({ ...base, totalAmount: 10000n, installmentCount: 3, installmentAmount: 3333n });
+  assert.equal(both.totalCents, 9999n);
+  assert.deepEqual(plans.planWarnings({ schedule: both, openBalanceCents: null, matchedCents: 0n }), [{ code: 'total_mismatch', expectedCents: '10000', computedCents: '9999', differenceCents: '-1' }]);
+  // A total and an amount, no count: as many full installments as fit and a smaller last one for the rest.
+  const derived = plans.buildSchedule({ ...base, totalAmount: 68293n, installmentCount: null, installmentAmount: 10000n });
+  assert.deepEqual(derived.lines.map((l) => l.amountCents), [10000n, 10000n, 10000n, 10000n, 10000n, 10000n, 8293n]);
+  assert.equal(derived.lines[6].dueDate, '2026-09-21');
+  assert.equal(derived.totalCents, 68293n);
+  assert.throws(() => plans.buildSchedule({ ...base, totalAmount: null, installmentCount: null, installmentAmount: 10000n }), AppError);
+  assert.throws(() => plans.buildSchedule({ ...base, totalAmount: null, installmentCount: 3, installmentAmount: null }), AppError);
+  assert.throws(() => plans.buildSchedule({ ...base, totalAmount: 1_000_000n, installmentCount: null, installmentAmount: 100n }), AppError); // more than 120 installments
+  assert.throws(() => plans.buildSchedule({ cadence: 'monthly', firstDueDate: '2026-03-21', totalAmount: 100n, installmentCount: 2, installmentAmount: 50n }), AppError); // amount needs its mode
+});
+
+test('warnings compare the plan with the bills without ever blocking, and show the signed difference', () => {
+  const sched = plans.buildSchedule({ cadence: 'monthly', totalAmount: 10000n, installmentCount: 3, firstDueDate: '2026-01-01' });
+  const codes = (d) => plans.planWarnings({ schedule: sched, ...d }).map((w) => w.code);
+  assert.deepEqual(codes({ openBalanceCents: 10000n, matchedCents: 0n }), ['unequal_installments']); // only the one-cent rounding
+  assert.deepEqual(codes({ openBalanceCents: null, matchedCents: 0n }), ['unequal_installments']);
+  // Cash already matched is compared with what is left, not with a balance that already excludes it.
+  assert.deepEqual(codes({ openBalanceCents: 7500n, matchedCents: 2500n }), ['unequal_installments']);
+  const above = plans.planWarnings({ schedule: sched, openBalanceCents: 9000n, matchedCents: 0n }).find((w) => w.code === 'bill_balance_mismatch');
+  assert.deepEqual(above, { code: 'bill_balance_mismatch', planBasisCents: '10000', openBalanceCents: '9000', differenceCents: '1000', direction: 'above' });
+  const below = plans.planWarnings({ schedule: sched, openBalanceCents: 12000n, matchedCents: 0n }).find((w) => w.code === 'bill_balance_mismatch');
+  assert.equal(below.direction, 'below');
+  assert.equal(below.differenceCents, '-2000');
+  // A credit can make the balance negative.
+  assert.equal(plans.planWarnings({ schedule: sched, openBalanceCents: -500n, matchedCents: 0n }).find((w) => w.code === 'bill_balance_mismatch').direction, 'above');
+  const exact = plans.buildSchedule({ cadence: 'monthly', totalAmount: 9000n, installmentCount: 3, firstDueDate: '2026-01-01' });
+  assert.deepEqual(plans.planWarnings({ schedule: exact, openBalanceCents: 9000n, matchedCents: 0n }), []);
+});
+
+test('keeping paid installments carries each kept installment\'s own payments, not whatever fits first', () => {
+  const kept = [{ id: 'a', dueDate: '2026-06-01', amountCents: 25000n }, { id: 'c', dueDate: '2026-08-01', amountCents: 25000n }];
+  const rest = plans.buildSchedule({ cadence: 'monthly', totalAmount: 50000n, installmentCount: 3, firstDueDate: '2026-10-01', remainder: 'last_short' });
+  const s = plans.keepPaidSchedule(kept, rest);
+  assert.deepEqual(s.lines.map((l) => [l.dueDate, l.amountCents]), [['2026-06-01', 25000n], ['2026-08-01', 25000n], ['2026-10-01', 16667n], ['2026-11-01', 16667n], ['2026-12-01', 16666n]]);
+  assert.equal(s.totalCents, 100000n);
+  assert.equal(s.cadence, 'custom');
+  assert.deepEqual(s.lines.map((l) => l.keepFrom), ['a', 'c', undefined, undefined, undefined]);
+  // Old schedule: four installments of 250.00. #a and #c are paid in full and #b holds a 40.00 partial match.
+  const pair = (installmentId, allocationId, cents) => ({ installmentId, allocationId, paymentId: `p-${allocationId}`, billId: 'bill', cents });
+  const pairs = [pair('a', 'A1', 25000n), pair('b', 'B1', 4000n), pair('c', 'C1', 25000n)];
+  const placed = plans.carryMatches(pairs, s.lines).map((c) => [c.pair.allocationId, c.installmentIndex, c.amount]);
+  assert.deepEqual(placed, [['A1', 0, 25000n], ['C1', 1, 25000n], ['B1', 2, 4000n]]);
+  // Without the identity link the partial match would take room on the kept 08-01 line and push a paid payment onto a new one.
+  const naive = plans.carryMatches(pairs, s.lines.map(({ amountCents }) => ({ amountCents }))).map((c) => [c.pair.allocationId, c.installmentIndex, c.amount]);
+  assert.notDeepEqual(naive, placed);
+  assert.deepEqual(naive.filter((x) => x[0] === 'C1').map((x) => x[1]), [1, 2]);
+  // Replacing the whole schedule (nothing kept) is unchanged: matches fill from the first installment in due order.
+  const replaced = plans.carryMatches(pairs, plans.buildSchedule({ cadence: 'monthly', totalAmount: 100000n, installmentCount: 4, firstDueDate: '2026-06-01' }).lines)
+    .map((c) => [c.pair.allocationId, c.installmentIndex, c.amount]);
+  assert.deepEqual(replaced, [['A1', 0, 25000n], ['B1', 1, 4000n], ['C1', 1, 21000n], ['C1', 2, 4000n]]);
+  // Matches that do not fit the loose installments are refused, never dropped.
+  assert.throws(() => plans.carryMatches([pair('x', 'X1', 90000n)], s.lines), AppError);
+});
+
+test('plans can be created per installment, with the leftover on the last one, and warn without blocking', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    // Bill is $300.00 (a fabricated household). The plan says $100.00 per installment for 4 installments: $400.00, more than the bill.
+    const s = await planSetup(t, { installments: 3, total: '300.00' });
+    const key = t.key();
+    const body = { idempotencyKey: key, name: 'Per installment', billId: s.b.id, inputMode: 'per_installment', installmentAmount: '100.00', installmentCount: '4', totalAmount: '', firstDueDate: '2026-09-01', startedOn: '2026-01-01', matchExisting: 'off' };
+    const created = await plans.createPlan(t.db.pool, t.actor, body, 'r');
+    assert.equal((await plans.createPlan(t.db.pool, t.actor, body, 'r')).replayed, true);
+    const d = await s.detail(created.id);
+    assert.equal(d.plan.totalCents, '40000'); // saved even though it is above the bill's open balance
+    assert.deepEqual(d.installments.map((i) => i.amountCents), ['10000', '10000', '10000', '10000']);
+    const audit = (await t.audit('plan.created')).find((a) => a.detail.planId === created.id).detail;
+    assert.equal(audit.inputMode, 'per_installment');
+    assert.equal(audit.warningCodes, 'bill_balance_mismatch');
+    // A total and an amount with no count: three full installments and a smaller last one, and no warning when it equals the open balance.
+    const derived = await plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), name: 'Derived', installmentCount: '', totalAmount: '300.00', installmentAmount: '110.00' }, 'r');
+    const dd = await s.detail(derived.id);
+    assert.deepEqual(dd.installments.map((i) => i.amountCents), ['11000', '11000', '8000']);
+    assert.equal((await t.audit('plan.created')).find((a) => a.detail.planId === derived.id).detail.warningCodes, '');
+    // The leftover cents on the last installment instead of the first ones.
+    const last = await plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), name: 'Last', inputMode: 'total', installmentAmount: '', installmentCount: '7', totalAmount: '300.00', remainder: 'last_extra' }, 'r');
+    const dl = await s.detail(last.id);
+    assert.equal(dl.installments.reduce((a, i) => a + BigInt(i.amountCents), 0n), 30000n);
+    assert.equal(dl.installments[6].amountCents, '4290');
+    assert.equal(dl.installments[0].amountCents, '4285');
+    // An amount per installment with the total mode is refused.
+    await assert.rejects(plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), inputMode: 'total', totalAmount: '300.00' }, 'r'), code('invalid_input'));
+    assert.equal(await t.count('payments'), 0, 'no mode of plan creation moves cash');
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('keep-paid revision keeps paid installments with their own payments and restarts the rest from a date', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t); // $300.00 as 3 x $100.00 due 06-01, 07-01, 08-01
+    const pm = await t.pay1({ amount: '150.00', billId: s.b.id });
+    const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+    const d0 = await s.detail();
+    await s.match(d0.installments[0].id, alloc, '100.00'); // #1 paid in full
+    await s.match(d0.installments[1].id, alloc, '50.00'); // #2 half paid
+    const snapshot = await s.ledgerSnapshot();
+    const revise = (o) => plans.revisePlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), planId: s.plan.id, version: d0.plan.version, reason: 'Provider restructured', reviseMode: 'keep_paid', cadence: 'monthly', ...o,
+    }, 'r');
+    // The rest: $200.00 owed at $60.00 per installment from 2026-09-01 -> 60, 60, 60, 20.
+    const body = { idempotencyKey: t.key(), planId: s.plan.id, version: d0.plan.version, reason: 'Provider restructured', reviseMode: 'keep_paid', cadence: 'monthly', inputMode: 'per_installment', installmentAmount: '60.00', totalAmount: '200.00', firstDueDate: '2026-09-01' };
+    const rev = await plans.revisePlan(t.db.pool, t.actor, body, 'r');
+    assert.equal((await plans.revisePlan(t.db.pool, t.actor, body, 'r')).replayed, true);
+    assert.equal(rev.replayed, false);
+    assert.equal(await t.count('plan_revisions'), 2, 'a replayed revision is one revision');
+    const d1 = await s.detail();
+    assert.deepEqual(d1.installments.map((i) => [i.dueDate, i.amountCents, i.matchedCents, i.state]), [
+      ['2026-06-01', '10000', '10000', 'paid'], ['2026-09-01', '6000', '5000', 'partial'], ['2026-10-01', '6000', '0', 'unpaid'],
+      ['2026-11-01', '6000', '0', 'unpaid'], ['2026-12-01', '2000', '0', 'unpaid'],
+    ]);
+    assert.equal(d1.plan.totalCents, '30000');
+    assert.equal(d1.plan.cadence, 'custom');
+    // The kept installment holds the same payment, and the partial match followed into the first new installment. Revision 1 is untouched.
+    const carried = d1.matches.filter((m) => m.revisionNo === 2);
+    assert.deepEqual(carried.map((m) => [m.installmentSeq, m.amountCents, m.carried, m.reason]), [
+      [1, '10000', true, 'Kept from revision 1'], [2, '5000', true, 'Carried forward from revision 1'],
+    ]);
+    assert.equal(d1.revisions[0].installmentCount, 3);
+    assert.equal(d1.matches.filter((m) => m.revisionNo === 1).length, 2);
+    assert.equal(await s.ledgerSnapshot(), snapshot, 'revising moved no cash and changed no balance');
+    const a = (await t.audit('plan.revised'))[0].detail;
+    assert.deepEqual([a.reviseMode, a.keptInstallmentCount, a.keptCents, a.rescheduledCount, a.rescheduledCents, a.inputMode], ['keep_paid', 1, '10000', 4, '20000', 'per_installment']);
+    // A stale form, and a total below what is matched, are refused and leave nothing behind.
+    await assert.rejects(revise({ version: d0.plan.version, totalAmount: '200.00', installmentCount: '2', firstDueDate: '2026-12-01' }), code('stale_version'));
+    assert.equal(await t.count('plan_revisions'), 2);
+    // Keeping paid installments in a plan whose installments are all paid is refused.
+    const full = await s.create({ name: 'All paid', totalAmount: '100.00', installmentCount: '1', firstDueDate: '2026-06-01' });
+    const pm2 = await t.pay1({ amount: '100.00', billId: s.b.id });
+    const alloc2 = (await t.payment(pm2.id)).allocations[0].allocationId;
+    const df = await s.detail(full.id);
+    await s.match(df.installments[0].id, alloc2, '100.00');
+    await assert.rejects(plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: full.id, version: df.plan.version, reason: 'x', reviseMode: 'keep_paid', totalAmount: '50.00', installmentCount: '1', firstDueDate: '2026-09-01' }, 'r'), code('conflict'));
+    // Another household's plan is not found.
+    assert.equal(typeof (await t.audit('plan.revised'))[0].detail.keptCents, 'string');
+  } finally {
+    await t.db.drop();
+  }
+});

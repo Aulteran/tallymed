@@ -161,6 +161,11 @@ const scheduleInput = {
   cadence: z.preprocess(blank, cadence.default('monthly')),
   totalAmount: optional(positiveUsd), installmentCount: intField(1, 120), firstDueDate: optional(isoDate),
   installments: z.array(installmentLine).max(120).optional(),
+  // "total": this many installments at this much price. "per_installment": this many installments at this much paid per installment.
+  inputMode: z.preprocess(blank, z.enum(['total', 'per_installment']).default('total')),
+  installmentAmount: optional(positiveUsd),
+  // Where the leftover cents of a generated "total" split go. The default keeps the original behavior.
+  remainder: z.preprocess(blank, z.enum(['earliest', 'last_extra', 'last_short']).default('earliest')),
 };
 
 export const paymentSchemas = {
@@ -205,7 +210,12 @@ export const paymentSchemas = {
     return { ...rest, billIds };
   }),
   matchExistingPayments: z.strictObject({ idempotencyKey, planId: uuid, version, ...csrf }),
-  revisePlan: z.strictObject({ idempotencyKey, planId: uuid, version, reason: text(500).min(1), ...scheduleInput, ...csrf }),
+  revisePlan: z.strictObject({
+    idempotencyKey, planId: uuid, version, reason: text(500).min(1), ...scheduleInput,
+    // "replace" swaps the whole schedule. "keep_paid" keeps fully paid installments and restarts the rest from firstDueDate.
+    reviseMode: z.preprocess(blank, z.enum(['replace', 'keep_paid']).default('replace')),
+    ...csrf,
+  }),
   cancelPlan: z.strictObject({ planId: uuid, version, reason: text(500).min(1), ...csrf }),
   matchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, ...csrf }),
   unmatchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, reason: text(500).min(1), ...csrf }),
