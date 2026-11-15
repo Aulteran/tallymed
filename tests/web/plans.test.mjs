@@ -18,7 +18,7 @@ async function planSetup(t, { bill = '300.00', installments = 3, total = '300.00
   const p = await t.provider();
   const b = await t.bill({ memberId: m, providerId: p, originalAmount: bill });
   const create = (o = {}) => plans.createPlan(t.db.pool, t.actor, {
-    idempotencyKey: t.key(), name: 'Clinic plan', providerId: p, billId: b.id, totalAmount: total, installmentCount: String(installments), firstDueDate: first, cadence, startedOn: '2026-01-01', ...o,
+    idempotencyKey: t.key(), name: 'Clinic plan', billId: b.id, totalAmount: total, installmentCount: String(installments), firstDueDate: first, cadence, startedOn: '2026-01-01', ...o,
   }, 'r');
   const plan = await create();
   const detail = (id = plan.id, o = {}) => plans.getPlanDetail(t.db.pool, t.actor, id, { asOf: AS_OF, ...o });
@@ -249,15 +249,14 @@ test('plan creation rules, idempotency, rollback and database guards on schedule
     const b = await t.bill({ memberId: m, providerId: p, originalAmount: '100.00' });
     const other = await t.bill({ memberId: m, providerId: p2, originalAmount: '100.00' });
     const est = await t.bill({ memberId: m, providerId: p, originalAmount: '100.00', amountStatus: 'estimate' });
-    const base = { name: 'Plan', providerId: p, billId: b.id, totalAmount: '100.00', installmentCount: '4', firstDueDate: '2026-06-01', cadence: 'monthly' };
+    const base = { name: 'Plan', billId: b.id, totalAmount: '100.00', installmentCount: '4', firstDueDate: '2026-06-01', cadence: 'monthly' };
     const create = (o = {}) => plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, ...o }, 'r');
-    // Rules: provider match, confirmed bills, known records, at least one bill, positive installments.
-    await assert.rejects(create({ billId: other.id }), code('invalid_input'));
+    // Rules: confirmed bills, known records, at least one bill, positive installments. Bills of other providers are allowed.
     await assert.rejects(create({ billId: est.id }), code('conflict'));
     await assert.rejects(create({ billId: randomUUID() }), code('not_found'));
     await assert.rejects(create({ billId: undefined }), code('invalid_input'));
     await assert.rejects(create({ totalAmount: '0.03' }), code('invalid_input'));
-    await assert.rejects(create({ providerId: randomUUID() }), code('not_found'));
+    await assert.rejects(create({ providerId: p }), code('invalid_input'), 'a plan no longer takes a provider of its own');
     await assert.rejects(create({ billId: undefined, billIds: [b.id, b.id] }), code('invalid_input'));
     await assert.rejects(create({ installmentCount: '121' }), code('invalid_input'));
     await assert.rejects(create({ installmentCount: undefined }), code('invalid_input'));
@@ -285,6 +284,8 @@ test('plan creation rules, idempotency, rollback and database guards on schedule
     // A plan can be listed with paging and filters.
     assert.equal((await plans.listPlans(t.db.pool, t.actor, { q: 'plan', limit: 1 }, AS_OF)).nextCursor !== null, true);
     assert.equal((await plans.listPlans(t.db.pool, t.actor, { providerId: p2 }, AS_OF)).items.length, 0);
+    assert.equal((await plans.listPlans(t.db.pool, t.actor, { providerId: p }, AS_OF)).items.length, 2);
+    void other;
     // Database guards: revisions must total their installments; schedule rows are append-only.
     const pool = t.db.pool;
     const hh = t.actor.householdId;
@@ -324,17 +325,17 @@ test('plan access boundaries, form posts and the overview and bill figures', { s
     const d = await s.detail();
     await assert.rejects(plans.revisePlan(t.db.pool, outsider, { idempotencyKey: t.key(), planId: s.plan.id, version: 1, reason: 'x', totalAmount: '10', installmentCount: '1', firstDueDate: '2026-09-01' }, 'r'), code('not_found'));
     await assert.rejects(plans.cancelPlan(t.db.pool, outsider, { planId: s.plan.id, version: 1, reason: 'x' }, 'r'), code('not_found'));
-    await assert.rejects(plans.createPlan(t.db.pool, outsider, { idempotencyKey: t.key(), name: 'x', providerId: s.p, billId: s.b.id, totalAmount: '10', installmentCount: '1', firstDueDate: '2026-09-01' }, 'r'), code('not_found'));
+    await assert.rejects(plans.createPlan(t.db.pool, outsider, { idempotencyKey: t.key(), name: 'x', billId: s.b.id, totalAmount: '10', installmentCount: '1', firstDueDate: '2026-09-01' }, 'r'), code('not_found'));
     // A plan cannot reference another household's bill (database level).
     const spare = await t.bill({ memberId: s.m, providerId: s.p, originalAmount: '10.00' });
     await assert.rejects(t.db.pool.query(`insert into payment_plan_bills (household_id, plan_id, bill_id) values ($1, $2, $3)`, [h2, s.plan.id, spare.id]), /foreign key/);
     // Forms.
     const token = t.cookie.split('=')[1];
     const form = (action, b) => handlers.handleExpenseAction(post(`/api/expenses/${action}`, { ...b, csrf: csrfFor(token) }, { cookie: t.cookie, html: true }), t.ctx, action);
-    const ok = await form('plans/create', { idempotencyKey: t.key(), name: 'Second plan', providerId: s.p, billId: s.b.id, totalAmount: '90.00', installmentCount: '3', firstDueDate: '2026-09-01', cadence: 'monthly' });
+    const ok = await form('plans/create', { idempotencyKey: t.key(), name: 'Second plan', billId: s.b.id, totalAmount: '90.00', installmentCount: '3', firstDueDate: '2026-09-01', cadence: 'monthly' });
     assert.equal(ok.status, 303);
     assert.match(ok.headers.get('location'), /\/plans\/[0-9a-f-]{36}$/);
-    const bad = await form('plans/create', { idempotencyKey: t.key(), name: 'Bad plan', providerId: s.p, billId: s.b.id, totalAmount: '90.005', installmentCount: '3', firstDueDate: '2026-09-01' });
+    const bad = await form('plans/create', { idempotencyKey: t.key(), name: 'Bad plan', billId: s.b.id, totalAmount: '90.005', installmentCount: '3', firstDueDate: '2026-09-01' });
     const loc = new URL(bad.headers.get('location'));
     assert.deepEqual([loc.pathname, [...loc.searchParams.keys()]], ['/plans', ['error']]);
     const matchBad = await form('plans/match', { idempotencyKey: t.key(), planId: s.plan.id, installmentId: d.installments[0].id, allocationId: randomUUID(), amount: '1.00' });
@@ -388,7 +389,7 @@ test('creating a plan can match payments already made on several bills, as refer
     ]);
     const before = await snapshot();
     const key = t.key();
-    const input = { idempotencyKey: key, name: 'ER visit plan', providerId: p, [`bill_${b1.id}`]: 'on', [`bill_${b2.id}`]: 'on', matchExisting: 'on', startedOn: '2026-01-01', totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-04-01', cadence: 'monthly' };
+    const input = { idempotencyKey: key, name: 'ER visit plan', [`bill_${b1.id}`]: 'on', [`bill_${b2.id}`]: 'on', matchExisting: 'on', startedOn: '2026-01-01', totalAmount: '400.00', installmentCount: '4', firstDueDate: '2026-04-01', cadence: 'monthly' };
     const plan = await plans.createPlan(t.db.pool, t.actor, input, 'r');
     assert.equal(await snapshot(), before, 'matching existing cash creates no cash and changes no balance');
     const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
@@ -418,12 +419,6 @@ test('creating a plan can match payments already made on several bills, as refer
     assert.deepEqual([ds.plan.matchedCents, ds.installments.map((i) => i.state)], ['20000', ['paid', 'paid']]);
     assert.equal(ds.allocations[0].netCents, '50000');
     assert.equal(BigInt(ds.allocations[0].netCents) - BigInt(ds.allocations[0].matchedCents), 30000n);
-    // A bill from another provider is still refused, and a refused request leaves no plan or match behind.
-    const p2 = await t.provider('Example Physicians');
-    const phys = await t.bill({ memberId: m, providerId: p2, originalAmount: '80.00' });
-    const plansBefore = await t.count('payment_plans');
-    await assert.rejects(plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), [`bill_${phys.id}`]: 'on' }, 'r'), code('invalid_input'));
-    assert.equal(await t.count('payment_plans'), plansBefore);
     assert.equal(await t.count('installment_matches'), 7);
   } finally {
     await t.db.drop();
@@ -495,7 +490,7 @@ test('a plan can carry its own start date, and only payments made since then are
     await t.pay1({ paidOn: '2026-01-10', amount: '100.00', billId: b.id });
     await t.pay1({ paidOn: '2026-03-05', amount: '60.00', billId: b.id });
     await t.pay1({ paidOn: '2026-03-05', amount: '40.00', billId: b.id });
-    const base = { name: 'Dated plan', providerId: p, billId: b.id, totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-03-01', cadence: 'monthly', matchExisting: 'on' };
+    const base = { name: 'Dated plan', billId: b.id, totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-03-01', cadence: 'monthly', matchExisting: 'on' };
     const plan = await plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), ...base, startedOn: '2026-03-01' }, 'r');
     const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
     // The January payment predates the plan and stays out; the two March payments are matched.
@@ -519,5 +514,121 @@ test('a plan can carry its own start date, and only payments made since then are
     assert.equal(await t.count('payment_plans'), 2);
   } finally {
     await t.db.drop();
+  }
+});
+
+test('one plan covers bills from several providers: label, filters, matching across all its bills, refunds release matches', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member();
+    const hospital = await t.provider('Example Hospital Services');
+    const physicians = await t.provider('Example Physician Group');
+    const lab = await t.provider('Unrelated Lab');
+    const facility = await t.bill({ memberId: m, providerId: hospital, originalAmount: '300.00' });
+    const doctor = await t.bill({ memberId: m, providerId: physicians, originalAmount: '200.00' });
+    const unrelated = await t.bill({ memberId: m, providerId: lab, originalAmount: '50.00' });
+    const estimate = await t.bill({ memberId: m, providerId: physicians, originalAmount: '90.00', amountStatus: 'estimate' });
+    const p1 = await t.pay1({ paidOn: '2026-03-01', amount: '100.00', billId: facility.id });
+    const p2 = await t.pay1({ paidOn: '2026-03-10', amount: '80.00', billId: doctor.id });
+    await t.pay1({ paidOn: '2026-03-12', amount: '50.00', billId: unrelated.id });
+    const snapshot = async () => JSON.stringify([
+      (await t.db.pool.query(`select id, amount_cents::text from payments order by id`)).rows,
+      (await t.db.pool.query(`select id, kind, amount_cents::text from payment_entries order by seq`)).rows,
+      (await t.detail(facility.id)).openBalanceCents, (await t.detail(doctor.id)).openBalanceCents,
+    ]);
+    const before = await snapshot();
+    const input = { idempotencyKey: t.key(), name: 'ER visit plan', [`bill_${facility.id}`]: 'on', [`bill_${doctor.id}`]: 'on', matchExisting: 'on', startedOn: '2026-01-01', totalAmount: '500.00', installmentCount: '5', firstDueDate: '2026-04-01', cadence: 'monthly' };
+    // Still only confirmed bills, and every named bill must exist.
+    await assert.rejects(plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), [`bill_${estimate.id}`]: 'on' }, 'r'), code('conflict'));
+    assert.equal(await t.count('payment_plans'), 0);
+    const plan = await plans.createPlan(t.db.pool, t.actor, input, 'r');
+    assert.equal(await snapshot(), before, 'a cross-provider plan creates no cash and changes no balance');
+    const d = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
+    assert.deepEqual(d.plan.providerNames, ['Example Hospital Services', 'Example Physician Group']);
+    assert.equal(d.plan.payee, 'Example Hospital Services and 1 more');
+    assert.equal(d.plan.billCount, 2);
+    // Payments on both providers' bills match, oldest first: $100 pays #1.
+    assert.deepEqual(d.installments.map((i) => i.matchedCents), ['10000', '8000', '0', '0', '0']);
+    assert.deepEqual([...new Set(d.matches.map((x) => x.billId))].sort(), [facility.id, doctor.id].sort());
+    const created = (await t.audit('plan.created'))[0].detail;
+    assert.deepEqual([created.providerCount, created.billCount, created.matchedExistingCents], [2, 2, '18000']);
+    // The plan is listed under each provider it covers and under none it does not; search finds it by either name.
+    const list = (o) => plans.listPlans(t.db.pool, t.actor, o, AS_OF).then((r) => r.items.map((x) => x.id));
+    assert.deepEqual(await list({ providerId: hospital }), [plan.id]);
+    assert.deepEqual(await list({ providerId: physicians }), [plan.id]);
+    assert.deepEqual(await list({ providerId: lab }), []);
+    assert.deepEqual(await list({ q: 'physician' }), [plan.id]);
+    const queue = await plans.listInstallmentQueue(t.db.pool, t.actor, { providerId: physicians, asOf: AS_OF });
+    assert.equal(queue.items.length > 0 && queue.items.every((i) => i.planId === plan.id), true);
+    assert.equal(queue.items[0].payee, 'Example Hospital Services and 1 more');
+    assert.equal((await plans.listInstallmentQueue(t.db.pool, t.actor, { providerId: lab, asOf: AS_OF })).items.length, 0);
+    // Cash applied later to either provider's bill can be matched, and the bulk action sees both providers' bills.
+    await t.pay1({ paidOn: '2026-05-01', amount: '60.00', billId: doctor.id });
+    await plans.matchExistingPayments(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: plan.id, version: d.plan.version }, 'r');
+    assert.deepEqual((await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF })).installments.map((i) => i.matchedCents), ['10000', '10000', '4000', '0', '0']);
+    // A cash match is still never over-counted: the other plan cannot take already matched cash.
+    const rival = await plans.createPlan(t.db.pool, t.actor, { ...input, idempotencyKey: t.key(), name: 'Second view' }, 'r');
+    assert.equal((await plans.getPlanDetail(t.db.pool, t.actor, rival.id, { asOf: AS_OF })).plan.matchedCents, '0');
+    // A refund on the physician payment releases matches (latest due first), whichever provider's bill it was applied to.
+    const alloc2 = (await t.payment(p2.id)).allocations[0].allocationId;
+    await t.refund(p2.id, { allocationId: alloc2, amount: '50.00' });
+    const after = await plans.getPlanDetail(t.db.pool, t.actor, plan.id, { asOf: AS_OF });
+    assert.equal(after.installments.reduce((a, i) => a + BigInt(i.matchedCents), 0n), 24000n - 5000n, 'matches never exceed the cash that is left');
+    assert.equal((await t.audit('plan.match_released')).length > 0, true);
+    // The facility payment is untouched by that refund.
+    const alloc1 = (await t.payment(p1.id)).allocations[0].allocationId;
+    assert.equal(after.matches.filter((x) => x.allocationId === alloc1).reduce((a, x) => a + BigInt(x.amountCents), 0n), 10000n);
+    // The database accepts bills of any provider for a plan, but still only confirmed ones, even by raw SQL.
+    await assert.rejects(t.db.pool.query(`insert into payment_plan_bills (household_id, plan_id, bill_id) values ($1, $2, $3)`, [t.actor.householdId, plan.id, estimate.id]), /confirmed/);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('migration 0013 keeps existing single-provider plans, their matches and their provider listing', { skip: skipDb }, async () => {
+  const { freshDatabase, seedHousehold } = await import('./helpers.mjs');
+  const { migrate } = await import('../../apps/web/server/migrate.ts');
+  const svc = await import('../../apps/web/server/services/expenses.ts');
+  const db = await freshDatabase({ migrateAll: false });
+  try {
+    await migrate(db.pool, { upTo: '0012' });
+    const { householdId, adminUserId } = await seedHousehold(db.pool);
+    const actor = { userId: adminUserId, householdId, role: 'admin', displayName: 'Alex Example', sessionId: randomUUID(), mustChangePassword: false };
+    const m = (await svc.createMember(db.pool, actor, { name: 'Pat Example' }, 'r')).id;
+    const p = (await svc.createProvider(db.pool, actor, { name: 'Example Clinic', kind: 'clinician' }, 'r')).id;
+    const other = (await svc.createProvider(db.pool, actor, { name: 'Other Lab', kind: 'clinician' }, 'r')).id;
+    const b = await svc.createBill(db.pool, actor, { idempotencyKey: randomUUID(), memberId: m, providerId: p, statementDate: '2026-01-05', originalAmount: '200.00', amountStatus: 'confirmed', amountSource: 'statement' }, 'r');
+    const pm = await pay.recordPayment(db.pool, actor, { idempotencyKey: randomUUID(), paidOn: '2026-03-01', amount: '50.00', method: 'card', billId: b.id }, 'r');
+    const alloc = (await pay.getPaymentDetail(db.pool, actor, pm.id)).allocations[0].allocationId;
+    // An existing plan as the previous schema stored it: one provider on the plan, bills of that provider, one matched installment.
+    const planId = randomUUID(), revId = randomUUID(), instId = randomUUID(), instId2 = randomUUID();
+    const c = await db.pool.connect();
+    try {
+      await c.query('begin');
+      await c.query(`insert into payment_plans (id, household_id, provider_id, name, started_on, created_by) values ($1, $2, $3, 'Old plan', '2026-01-01', $4)`, [planId, householdId, p, adminUserId]);
+      await c.query(`insert into payment_plan_bills (household_id, plan_id, bill_id) values ($1, $2, $3)`, [householdId, planId, b.id]);
+      await c.query(`insert into plan_revisions (id, household_id, plan_id, revision_no, total_cents, cadence, reason, created_by) values ($1, $2, $3, 1, 20000, 'monthly', 'Initial schedule', $4)`, [revId, householdId, planId, adminUserId]);
+      await c.query(`insert into plan_installments (id, household_id, plan_id, revision_id, seq, due_date, amount_cents) values ($1, $2, $3, $4, 1, '2026-04-01', 10000), ($5, $2, $3, $4, 2, '2026-05-01', 10000)`, [instId, householdId, planId, revId, instId2]);
+      await c.query(`insert into installment_matches (id, household_id, plan_id, revision_id, installment_id, payment_id, allocation_id, bill_id, kind, amount_cents, created_by) values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'match', 5000, $8)`, [householdId, planId, revId, instId, pm.id, alloc, b.id, adminUserId]);
+      await c.query('commit');
+    } finally {
+      c.release();
+    }
+    assert.deepEqual(await migrate(db.pool), ['0013']);
+    // Nothing in the ledger changed, and the plan still reads the same.
+    assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from installment_matches`)).rows[0], { n: 1, s: '5000' });
+    assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from payment_entries`)).rows[0], { n: 1, s: '5000' });
+    assert.equal((await db.pool.query(`select 1 from information_schema.columns where table_name = 'payment_plans' and column_name = 'provider_id'`)).rowCount, 0);
+    const d = await plans.getPlanDetail(db.pool, actor, planId, { asOf: AS_OF });
+    assert.deepEqual([d.plan.payee, d.plan.providerNames, d.plan.matchedCents, d.plan.totalCents], ['Example Clinic', ['Example Clinic'], '5000', '20000']);
+    assert.deepEqual(d.installments.map((i) => [i.matchedCents, i.state]), [['5000', 'partial'], ['0', 'unpaid']]);
+    const listed = (id) => plans.listPlans(db.pool, actor, { providerId: id }, AS_OF).then((r) => r.items.map((x) => x.id));
+    assert.deepEqual([await listed(p), await listed(other)], [[planId], []]);
+    // After the upgrade a bill of another provider can join a new plan, and the old rules about amounts still hold.
+    const b2 = await svc.createBill(db.pool, actor, { idempotencyKey: randomUUID(), memberId: m, providerId: other, statementDate: '2026-01-06', originalAmount: '40.00', amountStatus: 'confirmed', amountSource: 'statement' }, 'r');
+    const np = await plans.createPlan(db.pool, actor, { idempotencyKey: randomUUID(), name: 'New plan', billIds: [b.id, b2.id], totalAmount: '240.00', installmentCount: '2', firstDueDate: '2026-06-01', startedOn: '2026-01-01', cadence: 'monthly' }, 'r');
+    assert.equal((await plans.getPlanDetail(db.pool, actor, np.id, { asOf: AS_OF })).plan.payee, 'Example Clinic and 1 more');
+  } finally {
+    await db.drop();
   }
 });
