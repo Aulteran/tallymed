@@ -201,3 +201,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, a real reverse proxy with its own upload limit, an archive of several gigabytes.
 - Reviewer focus: nothing secret in the archive, archive parsing (path names, sizes, decompression), restore only into an empty installation, setup-token handling on the restore route, table and ledger verification before commit, trigger handling during the load.
 - Follow-up: a pull request that adds a table must classify it in `server/backup/tables.ts` (the completeness test fails otherwise). The OIDC sign-in work adds tables and needs this whichever merges second.
+
+## Plan input modes, warnings and keep-paid revision handoff (owner request, 2026-11-15)
+
+- Branch: `plan-input-modes-warnings-and-keep-paid-revise` (local; head SHA on the PR once pushed). No migration; `backup/tables.ts` unchanged. Independent financial review pending.
+- Changed: `services/plans.ts` (`splitTotal`, per-installment `buildSchedule`, `keepPaidSchedule`, identity `carryMatches`, `planWarnings`, `revisePlan` keep_paid), `validation.ts`, shared `PlanScheduleFields`, create and revise forms, live balance warning on the plan page, `tests/web/plans.test.mjs` (8 new tests, fabricated figures), docs and decisions.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable): typecheck, `npm test` (273 pass), `npm run build`, `npm run test:export`, `npm run test:app-browser`. Not run: Node 24, Docker/Compose, `test:proxy`, a real screen reader.
+- Not built yet: a preview-before-save panel (warnings are shown on the plan page and recorded in the audit, not before saving).
