@@ -362,6 +362,10 @@ try {
   await page.goto(`${origin}/hsa`);
   assert.match(await text(), /Family HSA ••7788[\s\S]*\$15\.00/);
   await a11y('HSA page with an account and a direct payment');
+  await page.goto(`${origin}/hsa?accountsArchived=yes`); // the accounts toggle must not disturb the payments table
+  assert.doesNotMatch(await text(), /could not be used|invalid/i);
+  assert.match(await text(), /Hide archived accounts/);
+  assert.match(await text(), /Family HSA ••7788/);
   // A direct payment applied to a new bill: the HSA page, the allocation page and the list show it as settled, with nothing to claim or decide.
   await page.goto(`${origin}/bills/new`);
   await enterBill({ provider: 'Example Clinic', reference: 'HSA-DIRECT-1', amount: '40.00', responsibility: '40.00', status: 'confirmed', visit: true });

@@ -218,7 +218,7 @@ export const paymentSchemas = {
   // fields are read only when the box is ticked, so an unticked form with stale card text behaves as a plain account.
   createHsaAccount: z.strictObject({
     name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour),
-    hasCard: checkbox, cardNickname: optionalText(60), cardLastFour: optional(lastFour), ...csrf,
+    hasCard: checkbox, cardNickname: optionalText(60), cardLastFour: z.string().optional(), ...csrf,
   }).transform((d, ctx) => {
     const { hasCard, cardNickname, cardLastFour, ...rest } = d;
     if (!hasCard) return { ...rest, card: null };
@@ -227,7 +227,12 @@ export const paymentSchemas = {
       ctx.addIssue({ code: 'custom', message: 'a spending card needs a nickname' });
       return z.NEVER;
     }
-    return { ...rest, card: { nickname: nickname.data, kind: 'hsa_fsa_card' as const, lastFour: cardLastFour } };
+    const four = cardLastFour === undefined || blank(cardLastFour) === null ? { success: true as const, data: null } : lastFour.safeParse(cardLastFour);
+    if (!four.success) {
+      ctx.addIssue({ code: 'custom', message: 'card last four must be four digits' });
+      return z.NEVER;
+    }
+    return { ...rest, card: { nickname: nickname.data, kind: 'hsa_fsa_card' as const, lastFour: four.data } };
   }),
   updateHsaAccount: z.strictObject({ id: uuid, version, name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour), ...csrf }),
   archiveHsaAccount: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),

@@ -22,7 +22,9 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
   ]);
   const scope = Object.fromEntries(['memberId', 'providerId', 'from', 'to'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const showArchived = p.accountsArchived === 'yes';
-  const filters = { ...scope, ...(p.state ? { state: p.state } : {}), ...(showArchived ? { accountsArchived: 'yes' } : {}) };
+  const filters = { ...scope, ...(p.state ? { state: p.state } : {}) };
+  /** The address of this page: the payment filters plus the accounts toggle (the toggle is not a payment filter, so it never reaches the service). */
+  const view = { ...filters, ...(showArchived ? { accountsArchived: 'yes' } : {}) };
   const accounts = await load(() => listHsaAccounts(ctx.pool, actor, { archived: showArchived }), { items: [], truncated: false });
   const open = !!p.error || p.add === '1';
   const totals = await load(() => hsaSummary(ctx.pool, actor, scope), null);
@@ -35,7 +37,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
   return <main id="main" className="wide">
     <div className="page-head">
       <h1>HSA</h1>
-      <AddDialog label="Add HSA account" open={open} keep={filters}>
+      <AddDialog label="Add HSA account" open={open} keep={view}>
         {p.error && <Banner code={p.error} />}
         <form method="post" action="/api/expenses/hsa-accounts/create">
           <Csrf token={csrf} />
@@ -47,7 +49,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
           <div className="conditional-fields">
             <label htmlFor="cardNickname">Card nickname</label><input id="cardNickname" name="cardNickname" maxLength={60} placeholder="HSA Visa" defaultValue={p.cardNickname} />
             <label htmlFor="cardLastFour">Card last four digits (optional)</label><input id="cardLastFour" name="cardLastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.cardLastFour} />
-            <p className="muted">The card is saved as an HSA/FSA card payment method. A nickname is required when this box is ticked.</p>
+            <p className="muted">The card is saved as an HSA/FSA card payment method. A nickname is required when this box is ticked, and it must not match an active payment method's nickname.</p>
           </div>
           <button type="submit">Add HSA account</button>
         </form>
@@ -67,7 +69,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
           <td data-label="Status">{a.archivedAt ? <span className="pill warn">Archived</span> : <span className="pill">Active</span>}</td>
         </tr>)}</tbody>
       </table>}
-      <p className="muted">Net cash follows the cash summary: refunds are subtracted and voided payments count zero. <Link href={archivedToggle}>{showArchived ? 'Hide archived accounts' : 'Show archived accounts'}</Link></p>
+      <p className="muted">Paid directly and net cash count whole payments made with this account's cards, whether or not they are applied to bills, and ignore the filters below; the "Paid directly from HSA" total further down counts only cash applied to bills in the filtered view. Net cash follows the cash summary: refunds are subtracted and voided payments count zero. <Link href={archivedToggle}>{showArchived ? 'Hide archived accounts' : 'Show archived accounts'}</Link></p>
     </section>
     <h2>Reimbursements</h2>
     <p className="muted">Eligibility is your decision, with a reason and evidence. Claims reserve amounts and receipts reconcile to specific payments. Received reimbursements are not household cash and never change a provider balance. TallyMed does not submit claims to an administrator or decide tax treatment.</p>
@@ -98,7 +100,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
         <td data-label="Available" className="num"><Money cents={a.availableCents} /></td><td data-label="Needs review" className="num"><Money cents={a.needsReviewCents} /></td>
       </tr>)}</tbody>
     </table>}
-    <Pager base="/hsa" params={filters} next={list.data.nextCursor} />
+    <Pager base="/hsa" params={view} next={list.data.nextCursor} />
     <div className="card"><h2>Claims and receipts</h2>
       <p className="actions"><Link className="button secondary" href="/hsa/claims">Claims and reimbursements received</Link></p>
       <h3>Export this view (CSV)</h3>

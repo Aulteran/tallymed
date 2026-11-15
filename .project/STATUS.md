@@ -230,5 +230,5 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 ## HSA accounts merged into the HSA page (branch `feature/merge-hsa-accounts-into-hsa-page-with-spending-card`)
 
 - Changed: `/hsa` now lists, adds and archives-through-detail HSA accounts; `/hsa-accounts` redirects; detail at `/hsa/accounts/<id>`; add form has a spending-card option that creates and links an HSA/FSA payment method in one transaction (`createHsaAccount`, `insertMethodWithLink`, `hsa-account-guard.ts`). No migration. Decisions in DECISIONS.md.
-- Checks run locally (Node 22.23, PostgreSQL 16 disposable): `npm run typecheck`, `npm test` (297, including three new HSA account tests), `npm run build`, `npm run test:export`, `npm run test:app-browser` (includes axe checks and the redirect). Not run: Node 24, Docker/Compose, `test:proxy`, `test:browser`, `test:performance`.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable): `npm run typecheck`, `npm test` (297, including two new HSA account tests), `npm run build`, `npm run test:export`, `npm run test:app-browser` (includes axe checks and the redirect). Not run: Node 24, Docker/Compose, `test:proxy`, `test:browser`, `test:performance`.
 - Review: touches direct-payment funding setup, so a financial review on the head SHA is expected before merge. PR and SHA are recorded on the PR.
