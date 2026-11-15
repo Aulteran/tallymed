@@ -830,7 +830,8 @@ test('a plan can be renamed at any time, including after it is cancelled, withou
     assert.equal(await s.ledgerSnapshot(), snapshot);
     const audits = await t.audit('plan.renamed');
     assert.equal(audits.length, 2);
-    assert.equal(audits[0].detail.status === 'active' || audits[0].detail.status === 'cancelled', true);
+    assert.deepEqual(audits.map((a) => [a.detail.renamed, a.detail.status]).sort(), [[true, 'active'], [true, 'cancelled']]);
+    assert.equal(JSON.stringify(audits).includes('Cancelled: replaced'), false, 'no name text is copied into the audit');
     await assert.rejects(rename('   '), (e) => e instanceof AppError);
     await assert.rejects(rename('Nobody\'s plan', randomUUID()), code('not_found'));
   } finally {
@@ -913,6 +914,86 @@ test('a keep-paid revision racing matches never double counts cash and causes no
     for (const i of d1.installments) assert.ok(BigInt(i.matchedCents) <= BigInt(i.amountCents));
     assert.equal(d1.installments[0].state, 'paid');
     assert.equal((await t.detail(s.b.id)).openBalanceCents, '15000');
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('rounding is only warned about for a price and count split, not for a worked-out last installment', () => {
+  const warn = (sched) => plans.planWarnings({ schedule: sched, openBalanceCents: null, matchedCents: 0n }).map((w) => w.code);
+  const derived = plans.buildSchedule({ cadence: 'monthly', firstDueDate: '2026-03-21', inputMode: 'per_installment', totalAmount: 29999n, installmentCount: null, installmentAmount: 10000n });
+  assert.deepEqual(derived.lines.map((l) => l.amountCents), [10000n, 10000n, 9999n]);
+  assert.deepEqual(warn(derived), []);
+  assert.deepEqual(warn(plans.buildSchedule({ cadence: 'monthly', firstDueDate: '2026-03-21', totalAmount: 10000n, installmentCount: 3 })), ['unequal_installments']);
+  // Explicit and kept lists are never flagged for rounding.
+  assert.deepEqual(warn(plans.keepPaidSchedule([{ id: 'a', dueDate: '2026-01-01', amountCents: 5000n }], plans.buildSchedule({ cadence: 'monthly', firstDueDate: '2026-02-01', totalAmount: 10000n, installmentCount: 3 }))), []);
+});
+
+test('revisions record every warning in the audit, refuse more than 120 installments, and tie the replay key to the entered total', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t); // $300.00 bill, 3 x $100.00
+    const d0 = await s.detail();
+    const revise = (o) => plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s.plan.id, version: d0.plan.version, reason: 'Change', cadence: 'monthly', ...o }, 'r');
+    const lastCodes = async () => (await t.audit('plan.revised')).at(-1).detail.warningCodes;
+    // A replacement schedule of $900.00 on a $300.00 bill: the balance warning is recorded, and the save still succeeds.
+    await revise({ totalAmount: '900.00', installmentCount: '3', firstDueDate: '2026-09-01' });
+    assert.equal(await lastCodes(), 'bill_balance_mismatch');
+    // A schedule that equals the balance records nothing.
+    const d1 = await s.detail();
+    await plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s.plan.id, version: d1.plan.version, reason: 'Back', totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-09-01', cadence: 'monthly' }, 'r');
+    assert.equal(await lastCodes(), '');
+    // Keeping a paid installment and leaving the pre-filled whole total makes the plan exceed the bill, and that is recorded.
+    const pm = await t.pay1({ amount: '100.00', billId: s.b.id });
+    const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+    const d2 = await s.detail();
+    await s.match(d2.installments[0].id, alloc, '100.00');
+    const d3 = await s.detail();
+    await plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s.plan.id, version: d3.plan.version, reason: 'Keep', reviseMode: 'keep_paid', totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-12-01', cadence: 'monthly' }, 'r');
+    assert.equal(await lastCodes(), 'bill_balance_mismatch');
+    assert.equal((await s.detail()).plan.totalCents, '40000');
+    // More than 120 installments in total (kept plus new) is refused and nothing is written.
+    const before = await t.count('plan_revisions');
+    const d4 = await s.detail();
+    await assert.rejects(plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: s.plan.id, version: d4.plan.version, reason: 'Too many', reviseMode: 'keep_paid', totalAmount: '1200.00', installmentCount: '120', firstDueDate: '2027-06-01', cadence: 'monthly' }, 'r'), code('invalid_input'));
+    assert.equal(await t.count('plan_revisions'), before);
+    // The same key with a different entered total is a conflict, not a replay that hides the mismatch.
+    const key = t.key();
+    const base = { idempotencyKey: key, planId: s.plan.id, version: d4.plan.version, reason: 'Per', inputMode: 'per_installment', installmentAmount: '100.00', installmentCount: '3', firstDueDate: '2027-01-01', cadence: 'monthly' };
+    await plans.revisePlan(t.db.pool, t.actor, { ...base, totalAmount: '300.00' }, 'r');
+    assert.equal((await plans.revisePlan(t.db.pool, t.actor, { ...base, totalAmount: '300.00' }, 'r')).replayed, true);
+    await assert.rejects(plans.revisePlan(t.db.pool, t.actor, { ...base, totalAmount: '250.00' }, 'r'), code('conflict'));
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('what a keep-paid revision keeps is decided under the lock when an installment becomes paid at the same moment', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t);
+    const pm = await t.pay1({ amount: '200.00', billId: s.b.id });
+    const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+    const d0 = await s.detail();
+    await s.match(d0.installments[0].id, alloc, '100.00');
+    retryStats.lockConflicts = 0;
+    const revise = plans.revisePlan(t.db.pool, t.actor, {
+      idempotencyKey: t.key(), planId: s.plan.id, version: d0.plan.version, reason: 'Restructured', reviseMode: 'keep_paid', inputMode: 'per_installment',
+      installmentAmount: '60.00', totalAmount: '200.00', firstDueDate: '2026-09-01', cadence: 'monthly',
+    }, 'r');
+    const results = await Promise.allSettled([revise, s.match(d0.installments[1].id, alloc, '100.00')]);
+    assert.equal(results[0].status, 'fulfilled', String(results[0].reason?.code));
+    if (results[1].status === 'rejected') assert.equal(results[1].reason.code, 'conflict');
+    assert.equal(retryStats.lockConflicts, 0);
+    const kept = (await t.audit('plan.revised')).at(-1).detail.keptInstallmentCount;
+    const d1 = await s.detail();
+    // Whatever the order, the installments kept are exactly those fully paid at the moment of the revision, and every one of them is still paid.
+    assert.ok(kept === 1 || kept === 2, `kept ${kept}`);
+    for (let i = 0; i < kept; i++) assert.equal(d1.installments[i].state, 'paid');
+    assert.equal(d1.installments.length, kept + 4);
+    const matched = d1.installments.reduce((a, i) => a + BigInt(i.matchedCents), 0n);
+    assert.ok(matched <= 20000n);
+    assert.equal(d1.plan.totalCents, String(BigInt(kept) * 10000n + 20000n));
   } finally {
     await t.db.drop();
   }

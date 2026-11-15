@@ -25,6 +25,8 @@ export interface Schedule {
   cadence: 'weekly' | 'biweekly' | 'monthly' | 'custom'; lines: ScheduleLine[]; totalCents: bigint;
   /** True when the lines were generated from a total or an amount, false for an explicit list. */
   generated: boolean;
+  /** How the lines were produced; the rounding warning only applies to a price-and-count split. */
+  inputMode: 'total' | 'per_installment' | 'list';
   /** A total the person entered that the schedule did not use (installments x amount), for the mismatch warning. */
   expectedTotalCents: bigint | null;
 }
@@ -90,7 +92,7 @@ export function buildSchedule(d: {
       .map((i) => ({ dueDate: i.dueDate, amountCents: i.amount, ...(i.keepFrom ? { keepFrom: i.keepFrom } : {}) }));
     const totalCents = sum(lines.map((l) => l.amountCents));
     if (totalCents > MAX_CENTS) throw new AppError('invalid_input', 'Amount out of range');
-    return { cadence: 'custom', lines, totalCents, generated: false, expectedTotalCents: null };
+    return { cadence: 'custom', lines, totalCents, generated: false, inputMode: 'list', expectedTotalCents: null };
   }
   if (d.cadence === 'custom' || d.firstDueDate === null) throw new AppError('invalid_input', 'Give a total or an amount per installment, a first due date and a cadence');
   let amounts: bigint[];
@@ -118,7 +120,7 @@ export function buildSchedule(d: {
   if (totalCents > MAX_CENTS) throw new AppError('invalid_input', 'Amount out of range');
   const lines = amounts.map((amountCents, i) => ({ dueDate: dueDateAt(d.firstDueDate!, d.cadence as 'weekly' | 'biweekly' | 'monthly', i), amountCents }));
   if (lines[lines.length - 1]!.dueDate > '2100-01-01') throw new AppError('invalid_input', 'Due date out of range');
-  return { cadence: d.cadence, lines, totalCents, generated: true, expectedTotalCents };
+  return { cadence: d.cadence, lines, totalCents, generated: true, inputMode: mode, expectedTotalCents };
 }
 
 /**
@@ -193,7 +195,7 @@ export function planWarnings(d: { schedule: Schedule; openBalanceCents: bigint |
       });
     }
   }
-  if (schedule.generated) {
+  if (schedule.generated && schedule.inputMode === 'total') {
     const amounts = schedule.lines.map((l) => l.amountCents);
     const min = amounts.reduce((a, b) => (b < a ? b : a));
     const max = amounts.reduce((a, b) => (b > a ? b : a));
@@ -397,7 +399,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
   const revisionId = randomUUID();
   return withRetry(() => withTransaction(pool, async (tx) => {
     // The fingerprint of a plain replace stays exactly as it was; the mode joins it only when kept installments are involved.
-    const fingerprint = { planId, version, reason, lines: restSchedule.lines, cadence: restSchedule.cadence, ...(reviseMode === 'keep_paid' ? { reviseMode } : {}) };
+    const fingerprint = { planId, version, reason, lines: restSchedule.lines, cadence: restSchedule.cadence, ...(reviseMode === 'keep_paid' ? { reviseMode } : {}), ...(restSchedule.expectedTotalCents !== null ? { expectedTotalCents: cents(restSchedule.expectedTotalCents) } : {}) };
     const replayId = await idempotent(tx, actor, 'plan.revise', idempotencyKey, fingerprint, revisionId);
     if (replayId) return { id: replayId, replayed: true };
     const lock = await lockPlanWithPayments(tx, actor, planId);
@@ -415,10 +417,18 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
       if (kept.length === current.length) throw new AppError('conflict', 'Every installment is already paid, so there is nothing left to restart');
     }
     const schedule = kept.length > 0 ? keepPaidSchedule(kept, restSchedule) : restSchedule;
+    if (schedule.lines.length > MAX_INSTALLMENTS) throw new AppError('invalid_input', `A plan can have at most ${MAX_INSTALLMENTS} installments; kept and new installments together come to ${schedule.lines.length}`);
     if (matched > schedule.totalCents) throw new AppError('conflict', 'The new schedule total is less than what is already matched');
     const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
     const carried = carryMatches(pairs, installments);
     const keptCents = sum(kept.map((k) => k.amountCents));
+    // Advisory: the entered-total and rounding checks describe what was typed (the new rest); the balance check compares the whole plan with the bills.
+    const planBills = await expenseRepo.getBills(tx, actor.householdId, await repo.planBillIds(tx, actor.householdId, planId));
+    const billsOpen = sum(planBills.map((b) => BigInt(b.openBalanceCents)));
+    const revisionWarnings = [
+      ...planWarnings({ schedule: restSchedule, openBalanceCents: null, matchedCents: 0n }),
+      ...planWarnings({ schedule, openBalanceCents: billsOpen, matchedCents: matched }).filter((w) => w.code === 'bill_balance_mismatch'),
+    ];
     const revisionNo = cur.revisionNo + 1;
     await repo.insertRevision(tx, {
       id: revisionId, householdId: actor.householdId, userId: actor.userId, planId, revisionNo, totalCents: schedule.totalCents, cadence: schedule.cadence, reason, installments,
@@ -439,7 +449,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
         carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
         reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
         inputMode: rest.inputMode, remainder: rest.remainder, expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
-        warningCodes: planWarnings({ schedule: restSchedule, openBalanceCents: null, matchedCents: 0n }).map((w) => w.code).join(','),
+        warningCodes: revisionWarnings.map((w) => w.code).join(','),
       },
     });
     return { id: planId, replayed: false };
