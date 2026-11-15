@@ -219,3 +219,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Checks run locally (Node 22.23, PostgreSQL 16 disposable): typecheck, `npm test`, `npm run build`, `npm run test:export`, `npm run test:app-browser`, `npm run test:restore`; CI covered Node 24, PostgreSQL 17 and Compose. Not run: `test:proxy` and a real screen reader.
 - Reviewer focus: no field that could hold a full card number; the archive-versus-record race; append-only history and totals reconciling with the cash summary; audit holding ids only; household scoping.
 
+## HSA accounts and direct HSA card payments handoff (owner request, 2026-11-15)
+
+- Branch: `feature/hsa-accounts-direct-card-payments` (PR against `dev`; head SHA, CI and review are on the PR). Migration `0016_hsa_accounts_direct_payments.sql`. Changes HSA arithmetic, so an independent financial review is required on the head SHA before merge.
+- Changed: `hsa_accounts`, `payment_method_hsa_links`, append-only `payment_hsa_funding`; commit-time guards in both directions; `hsa_allocation_status` (only `available_cents` changed, plus a trailing `direct_hsa` column); `repositories/hsa-accounts.ts`, `services/hsa-accounts.ts`; HSA card link on payment methods; direct funding written in `recordPayment`; paid-with rules for direct payments; HSA accounts pages and nav entry; HSA page and allocation page; backup tables and ledger check (only where the table exists); docs and decisions; `tests/web/hsa-accounts.test.mjs` (7 tests, including the original 0006 view definition compared row for row with the new view).
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable): typecheck, `npm test`, `npm run build`, `npm run test:export`, `npm run test:app-browser`, `npm run test:restore`. Not run: Node 24, PostgreSQL 17, Docker/Compose, `test:proxy`, the dark-theme browser pass, a real screen reader.
+- Reviewer focus: the view change leaves every ordinary row identical; both guards are race-safe; no direct payment can ever be claimed, decided or reimbursed; paid-with cannot disagree with the funding; backup of older databases; no field holds a number that could move money.
+

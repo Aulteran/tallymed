@@ -34,6 +34,7 @@ import * as docs from '../../apps/web/server/services/documents.ts';
 import * as svc from '../../apps/web/server/services/expenses.ts';
 import * as hsa from '../../apps/web/server/services/hsa.ts';
 import * as hsaRepo from '../../apps/web/server/repositories/hsa.ts';
+import * as hsaAcc from '../../apps/web/server/services/hsa-accounts.ts';
 import * as pm from '../../apps/web/server/services/payment-methods.ts';
 import * as pay from '../../apps/web/server/services/payments.ts';
 import * as plans from '../../apps/web/server/services/plans.ts';
@@ -120,6 +121,10 @@ async function richFixture() {
   const p1 = await t.pay1({ amount: '250.00', paidWithId: visa.id, allocations: [{ billId: a.id, amount: '150.00' }, { billId: b.id, amount: '75.05' }] });
   const p2 = await t.pay1({ amount: '60.00', billId: c.id, allocateAmount: '40.00', paidWithId: oldCard.id });
   await pm.archivePaymentMethod(pool, actor, { id: oldCard.id, version: 1, archived: 'yes' }, 'r');
+  // An HSA account, an HSA card linked to it and a payment paid directly from that HSA.
+  const hsaAcct = await hsaAcc.createHsaAccount(pool, actor, { name: 'Family HSA', administrator: 'Example HSA Bank', lastFour: '7788' }, 'r');
+  const hsaCard = await pm.createPaymentMethod(pool, actor, { nickname: 'HSA Visa', kind: 'hsa_fsa_card', lastFour: '0042', hsaAccountId: hsaAcct.id }, 'r');
+  const pDirect = await t.pay1({ amount: '33.00', paidWithId: hsaCard.id });
   const allocs = (await t.payment(p1.id)).allocations;
   const allocA = allocs.find((x) => x.billId === a.id).allocationId;
   const allocB = allocs.find((x) => x.billId === b.id).allocationId;
@@ -177,7 +182,7 @@ async function richFixture() {
   await pool.query(`insert into user_identities (user_id, household_id, issuer, subject, email_at_link, created_via) values ($1, $2, 'https://id.example.test/realm', 'subject-of-the-administrator', 'admin@example.test', 'email_match')`, [actor.userId, actor.householdId]);
   const invitation = randomBytes(32);
   await pool.query(`insert into invitations (household_id, email, role, token_hash, invited_by, expires_at) values ($1, 'invited@example.test', 'operator', $2, $3, now() + interval '1 day')`, [actor.householdId, invitation, actor.userId]);
-  return { ...t, bills: { a, b, c }, payments: { p1, p2, p3 }, plan, plan2, claim, receipt, doc, gone, client, allocA, refund, invitation };
+  return { ...t, bills: { a, b, c }, payments: { p1, p2, p3, pDirect }, plan, plan2, claim, receipt, doc, gone, client, allocA, refund, invitation };
 }
 
 /** Everything the application reports about the ledger, read through the services the pages use. */

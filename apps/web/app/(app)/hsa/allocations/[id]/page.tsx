@@ -24,8 +24,9 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
     <p><DecisionPill a={a} /> Paid {a.paidOn} · <Link href={`/payments/${a.paymentId}`}>payment</Link> · <Link href={`/bills/${a.billId}`}>bill</Link> · <Link href="/hsa">All HSA payments</Link></p>
     <Banner code={q.error} />
     <FigureCards a={a} />
+    {a.directHsa && <div className="card" role="note"><strong>Paid directly from an HSA.</strong> This payment was made with an HSA card at the point of service, so the HSA has already paid it. There is nothing to claim and no eligibility decision to record. A refund still lowers the net cash shown here. <Link href={`/payments/${a.paymentId}`}>See the payment</Link></div>}
     {frozen && <div className="card" role="alert"><strong>This payment needs review.</strong> Pending plus received reimbursement is above its eligible ceiling, usually after a refund, a reversal or a lower decision. Real receipts stay on record. New claims are frozen until you cancel or reject pending amounts, reverse a receipt that was returned, or record a new decision with evidence.</div>}
-    <form className="card" method="post" action="/api/expenses/hsa/decide">
+    {!a.directHsa && <form className="card" method="post" action="/api/expenses/hsa/decide">
       <h2>Eligibility decision</h2>{base}{key}<input type="hidden" name="version" value={a.decisionCount} />
       <p className="muted">{current ? <>Current: {label(current.status)}{current.status === 'eligible' ? <> <Money cents={current.eligibleCents} /></> : null}, decided {current.decidedOn}. A new decision replaces it and keeps this one in the history.</> : 'No decision yet. Until you decide, this payment contributes nothing to available totals.'} A date or category alone does not make a payment eligible: record why, and what evidence supports it.</p>
       <label htmlFor="status">Decision</label>
@@ -39,7 +40,7 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
       <label htmlFor="contextNote">Plan context (optional)</label><input id="contextNote" name="contextNote" maxLength={300} defaultValue={q.contextNote} placeholder="For example: plan year or account used" />
       <label htmlFor="decidedOn">Decision date</label><input id="decidedOn" name="decidedOn" type="date" required defaultValue={q.decidedOn ?? todayUtc()} />
       <button type="submit">Record decision</button>
-    </form>
+    </form>}
     {canClaim && <form className="card" method="post" action="/api/expenses/hsa/claim">
       <h2>Submit a claim</h2>{base}{key}
       <p className="muted">Records a claim you submitted to your HSA administrator and reserves the amount. Up to <Money cents={a.availableCents} /> is available. TallyMed does not send the claim.</p>

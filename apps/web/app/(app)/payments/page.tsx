@@ -39,8 +39,8 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
           <label htmlFor="amount">Amount (USD)</label><input id="amount" name="amount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" placeholder="125.00" defaultValue={p.amount} />
           <label htmlFor="method">Payment type</label><select id="method" name="method" defaultValue={p.method ?? 'card'}>{PAYMENT_METHODS.map((m) => <option key={m} value={m}>{label(m)}</option>)}</select>
           <label htmlFor="paidWithId">Paid with (optional)</label>
-          <select id="paidWithId" name="paidWithId" defaultValue={p.paidWithId ?? ''}><Options items={methods.items.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank="Not recorded" /></select>
-          <p className="muted">Pick the card or account that paid. <Link href="/payment-methods?add=1">Add a payment method</Link> first if it is not listed.</p>
+          <select id="paidWithId" name="paidWithId" defaultValue={p.paidWithId ?? ''}><Options items={methods.items.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour) + (m.hsaAccountName ? ` (paid directly from ${m.hsaAccountName})` : ''), archived: m.archivedAt !== null }))} blank="Not recorded" /></select>
+          <p className="muted">Pick the card or account that paid. An HSA card linked to an HSA account records the payment as paid directly from that HSA, so there is nothing to claim. <Link href="/payment-methods?add=1">Add a payment method</Link> first if it is not listed.</p>
           <label htmlFor="reference">Reference (optional)</label><input id="reference" name="reference" maxLength={80} defaultValue={p.reference} />
           <label htmlFor="note">Note (optional)</label><input id="note" name="note" maxLength={500} defaultValue={p.note} />
           <label htmlFor="billId">Apply to a bill (optional)</label>
@@ -71,7 +71,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
       <thead><tr><th>Paid</th><th>Type, paid with and reference</th><th className="num">Amount</th><th className="num">Applied to bills</th><th className="num">Refunded</th><th className="num">Unapplied</th></tr></thead>
       <tbody>{data.items.map((x) => <tr key={x.id}>
         <td data-label="Paid"><Link href={`/payments/${x.id}`}>{x.paidOn}</Link> {x.voided && <span className="pill warn">Voided</span>}</td>
-        <td data-label="Type, paid with and reference">{label(x.method)}{x.paidWithName ? ` · ${methodName(x.paidWithName, x.paidWithLastFour)}` : ''} {x.reference ?? ''}</td>
+        <td data-label="Type, paid with and reference">{label(x.method)}{x.paidWithName ? ` · ${methodName(x.paidWithName, x.paidWithLastFour)}` : ''} {x.reference ?? ''} {x.hsaAccountName && <span className="pill">Paid from HSA</span>}</td>
         <td data-label="Amount" className="num"><Money cents={x.amountCents} /></td><td data-label="Applied to bills" className="num"><Money cents={x.appliedCents} /></td>
         <td data-label="Refunded" className="num"><Money cents={x.refundedCents} /></td><td data-label="Unapplied" className="num"><Money cents={x.unappliedCents} /></td>
       </tr>)}</tbody>

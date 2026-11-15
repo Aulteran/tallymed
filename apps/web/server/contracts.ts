@@ -144,6 +144,8 @@ export interface HsaAllocationContract {
   allocationId: string; paymentId: string; billId: string; memberId: string; providerId: string; paidOn: string; netCents: string;
   decisionStatus: 'eligible' | 'ineligible' | 'pending' | null; ceilingCents: string; pendingCents: string; receivedCents: string;
   availableCents: string; needsReviewCents: string;
+  /** Paid directly from an HSA at the point of service: available is always zero and no claim or decision exists. */
+  directHsa: boolean;
 }
 
 /** One page of HSA figures, newest payment first; follow `nextCursor` until null for every row. Filters match the HSA screens. */
@@ -154,7 +156,7 @@ export async function listHsaFigures(pool: Pool | Queryable, actor: Actor, filte
     items: page.items.map((a) => ({
       allocationId: a.allocationId, paymentId: a.paymentId, billId: a.billId, memberId: a.memberId, providerId: a.providerId, paidOn: a.paidOn, netCents: a.netCents,
       decisionStatus: a.decisionStatus, ceilingCents: a.ceilingCents, pendingCents: a.pendingCents, receivedCents: a.receivedCents,
-      availableCents: a.availableCents, needsReviewCents: a.needsReviewCents,
+      availableCents: a.availableCents, needsReviewCents: a.needsReviewCents, directHsa: a.directHsa,
     })),
     nextCursor: page.nextCursor,
   };

@@ -7,9 +7,11 @@ import { authorize, type Actor } from '../authz.ts';
 import { isUniqueViolation, withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
 import { recordAudit } from '../repositories/audit.ts';
+import * as hsaRepo from '../repositories/hsa-accounts.ts';
 import * as repo from '../repositories/payment-methods.ts';
 import * as payRepo from '../repositories/payments.ts';
 import { paymentSchemas, parse, schemas } from '../validation.ts';
+import { requireActiveAccount } from './hsa-accounts.ts';
 import { idempotent, withRetry } from './support.ts';
 
 const NICKNAME_TAKEN = 'You already have an active payment method with that nickname';
@@ -51,9 +53,13 @@ export async function createPaymentMethod(pool: Pool, actor: Actor, input: unkno
   try {
     return await withTransaction(pool, async (tx) => {
       const id = await repo.insertMethod(tx, { householdId: actor.householdId, userId: actor.userId, nickname: d.nickname, kind: d.kind, lastFour: d.lastFour });
+      if (d.hsaAccountId) {
+        await requireActiveAccount(tx, actor, d.hsaAccountId);
+        await hsaRepo.setLink(tx, { householdId: actor.householdId, userId: actor.userId, methodId: id, accountId: d.hsaAccountId });
+      }
       await recordAudit(tx, {
         householdId: actor.householdId, actorUserId: actor.userId, action: 'payment_method.created', entityType: 'payment_method', entityId: id, requestId,
-        detail: { paymentMethodId: id, kind: d.kind, hasLastFour: d.lastFour !== null },
+        detail: { paymentMethodId: id, kind: d.kind, hasLastFour: d.lastFour !== null, hsaAccountId: d.hsaAccountId },
       });
       return { id };
     });
@@ -72,9 +78,15 @@ export async function updatePaymentMethod(pool: Pool, actor: Actor, input: unkno
       if (!current) throw new AppError('not_found');
       if (current.version !== d.version) throw new AppError('stale_version');
       await repo.updateMethod(tx, actor.householdId, d.id, d.version, { nickname: d.nickname, kind: d.kind, lastFour: d.lastFour });
+      // The method row is locked, so the link cannot change under us. Changing it never alters a payment already recorded.
+      const linkBefore = await hsaRepo.linkOfMethod(tx, actor.householdId, d.id);
+      if (linkBefore !== d.hsaAccountId) {
+        if (d.hsaAccountId) await requireActiveAccount(tx, actor, d.hsaAccountId);
+        await hsaRepo.setLink(tx, { householdId: actor.householdId, userId: actor.userId, methodId: d.id, accountId: d.hsaAccountId });
+      }
       await recordAudit(tx, {
         householdId: actor.householdId, actorUserId: actor.userId, action: 'payment_method.updated', entityType: 'payment_method', entityId: d.id, requestId,
-        detail: { paymentMethodId: d.id, renamed: current.nickname !== d.nickname, kindChanged: current.kind !== d.kind, lastFourChanged: current.lastFour !== d.lastFour },
+        detail: { paymentMethodId: d.id, renamed: current.nickname !== d.nickname, kindChanged: current.kind !== d.kind, lastFourChanged: current.lastFour !== d.lastFour, fromHsaAccountId: linkBefore, toHsaAccountId: d.hsaAccountId },
       });
       return { id: d.id };
     });
@@ -107,10 +119,12 @@ export async function archivePaymentMethod(pool: Pool, actor: Actor, input: unkn
 }
 
 /** Checks a method can take new payments. The caller's transaction takes a share lock, so an archive cannot slip in before commit. */
-export async function requireActiveMethod(tx: Queryable, actor: Actor, methodId: string): Promise<void> {
+export async function requireActiveMethod(tx: Queryable, actor: Actor, methodId: string): Promise<{ hsaAccountId: string | null }> {
   const m = await repo.getMethod(tx, actor.householdId, methodId, 'share');
   if (!m) throw new AppError('not_found');
   if (m.archivedAt) throw new AppError('conflict', 'That payment method is archived. Restore it or choose another.');
+  // Read after the share lock: an HSA link changes only under the method's update lock.
+  return { hsaAccountId: await hsaRepo.linkOfMethod(tx, actor.householdId, methodId) };
 }
 
 /**
@@ -130,7 +144,12 @@ export async function setPaidWith(pool: Pool, actor: Actor, input: unknown, requ
     if (payment.voided) throw new AppError('conflict', 'A voided payment cannot be changed');
     const before = await repo.currentMethodId(tx, actor.householdId, paymentId);
     if (before === paidWithId) return { id: paymentId, replayed: false };
-    if (paidWithId) await requireActiveMethod(tx, actor, paidWithId);
+    // "Paid with" and direct HSA payment must agree. A payment paid directly from an HSA keeps an HSA card of that account, and a card
+    // linked to an HSA account can be chosen only when the payment is recorded (the HSA funding is written then, never afterwards).
+    const fundedBy = await hsaRepo.fundingOfPayment(tx, actor.householdId, paymentId);
+    const chosen = paidWithId ? await requireActiveMethod(tx, actor, paidWithId) : null;
+    if (fundedBy && chosen?.hsaAccountId !== fundedBy) throw new AppError('conflict', 'This payment was paid directly from an HSA. It can only be changed to another card of the same HSA account.');
+    if (!fundedBy && chosen?.hsaAccountId) throw new AppError('conflict', 'A card linked to an HSA account can only be chosen when the payment is recorded, because that is what marks it as paid directly from the HSA.');
     await repo.insertAssignment(tx, { id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId, methodId: paidWithId });
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.paid_with_changed', entityType: 'payment', entityId: paymentId, requestId,

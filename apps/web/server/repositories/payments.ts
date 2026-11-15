@@ -11,6 +11,8 @@ export interface Payment {
   createdByName: string | null; createdAt: Date; voided: boolean; voidReason: string | null; voidedOn: string | null;
   /** The saved payment method this was paid with, when one is recorded (it can be archived since). */
   paidWithId: string | null; paidWithName: string | null; paidWithLastFour: string | null; paidWithArchived: boolean;
+  /** Set when the payment was paid directly from an HSA at the point of service (see docs/contracts.md). */
+  hsaAccountId: string | null; hsaAccountName: string | null;
   /** Net cash applied to bills (allocations less reversals and net refunds). */
   appliedCents: string;
   /** Cash returned to the household (refunds less refund reversals). */
@@ -25,6 +27,8 @@ export const PAYMENT_FROM = `from payments p
   left join users u on u.id = p.created_by
   left join lateral (select a.method_id from payment_method_assignments a where a.household_id = p.household_id and a.payment_id = p.id order by a.seq desc limit 1) cur on true
   left join payment_methods pm on pm.household_id = p.household_id and pm.id = cur.method_id
+  left join payment_hsa_funding hf on hf.household_id = p.household_id and hf.payment_id = p.id
+  left join hsa_accounts ha on ha.household_id = hf.household_id and ha.id = hf.hsa_account_id
   left join payment_voids v on v.household_id = p.household_id and v.payment_id = p.id
   left join lateral (select
       coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) as applied,
@@ -33,7 +37,7 @@ export const PAYMENT_FROM = `from payments p
 const PAYMENT_COLS = `p.id, p.paid_on::text as "paidOn", p.amount_cents::text as "amountCents", p.method, p.reference, p.note,
   u.display_name as "createdByName", p.created_at as "createdAt", (v.payment_id is not null) as voided, v.reason as "voidReason",
   v.voided_on::text as "voidedOn", cur.method_id as "paidWithId", pm.nickname as "paidWithName", pm.last_four as "paidWithLastFour",
-  (pm.archived_at is not null) as "paidWithArchived", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
+  (pm.archived_at is not null) as "paidWithArchived", hf.hsa_account_id as "hsaAccountId", ha.name as "hsaAccountName", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded - c.applied else 0 end)::text as "unappliedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded else 0 end)::text as "netCashCents"`;
 

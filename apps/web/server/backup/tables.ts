@@ -34,9 +34,13 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'bills', orderBy: 'id' },
   { name: 'bill_adjustments', orderBy: '(reverses_adjustment_id is not null), id' },
   // Saved payment methods hold only a nickname, a type and optionally the last four digits; nothing here can charge anything.
+  // HSA accounts, the links from HSA cards to them and payments paid directly from them hold names and ids only, never a number that could move money.
+  { name: 'hsa_accounts', orderBy: 'id', since: '0016' },
   { name: 'payment_methods', orderBy: 'id', since: '0015' },
+  { name: 'payment_method_hsa_links', orderBy: 'method_id', since: '0016' },
   { name: 'payments', orderBy: 'id' },
   { name: 'payment_method_assignments', orderBy: 'seq', since: '0015' },
+  { name: 'payment_hsa_funding', orderBy: 'payment_id', since: '0016' },
   { name: 'payment_voids', orderBy: 'payment_id' },
   { name: 'payment_entries', orderBy: `(kind <> 'allocation'), seq` },
   { name: 'payment_plans', orderBy: 'id' },

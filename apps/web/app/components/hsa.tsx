@@ -14,7 +14,9 @@ export const LINE_LABEL: Record<LineStatus, string> = {
 };
 export const LineStatusPill = ({ status }: { status: LineStatus }) => <span className={status === 'fulfilled' ? 'pill' : 'pill warn'}>{LINE_LABEL[status]}</span>;
 
-export function DecisionPill({ a }: { a: Pick<HsaAllocation, 'decisionStatus' | 'needsReviewCents'> }) {
+export function DecisionPill({ a }: { a: Pick<HsaAllocation, 'decisionStatus' | 'needsReviewCents' | 'directHsa'> }) {
+  // A payment paid directly from an HSA is settled: it takes no eligibility decision, so it is never "not decided".
+  if (a.directHsa) return <span className="pill">Paid from HSA</span>;
   if (BigInt(a.needsReviewCents) > 0n) return <span className="pill warn">Needs review</span>;
   if (a.decisionStatus === 'eligible') return <span className="pill">Eligible</span>;
   if (a.decisionStatus === 'ineligible') return <span className="pill neutral">Ineligible</span>;

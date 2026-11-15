@@ -7,8 +7,13 @@ export const METHOD_KINDS = ['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_
 
 export interface PaymentMethod {
   id: string; nickname: string; kind: string; lastFour: string | null; archivedAt: Date | null; version: number; createdAt: Date; updatedAt: Date;
+  /** The HSA account this card draws from, when linked. A payment recorded with it is paid directly from that account. */
+  hsaAccountId: string | null; hsaAccountName: string | null;
 }
-const COLS = `m.id, m.nickname, m.kind, m.last_four as "lastFour", m.archived_at as "archivedAt", m.version, m.created_at as "createdAt", m.updated_at as "updatedAt"`;
+const COLS = `m.id, m.nickname, m.kind, m.last_four as "lastFour", m.archived_at as "archivedAt", m.version, m.created_at as "createdAt", m.updated_at as "updatedAt",
+  (select l.hsa_account_id from payment_method_hsa_links l where l.household_id = m.household_id and l.method_id = m.id) as "hsaAccountId",
+  (select a.name from payment_method_hsa_links l join hsa_accounts a on a.household_id = l.household_id and a.id = l.hsa_account_id
+    where l.household_id = m.household_id and l.method_id = m.id) as "hsaAccountName"`;
 
 export async function getMethod(db: Queryable, householdId: string, id: string, lock: Lock = false): Promise<PaymentMethod | null> {
   const { rows } = await db.query<PaymentMethod>(

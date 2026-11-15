@@ -130,6 +130,7 @@ export async function recordDecision(pool: Pool, actor: Actor, input: unknown, r
     if (replayId) return { id: replayId, replayed: true };
     const links = await lockForAllocations(tx, actor, [allocationId]);
     const before = await freshAllocation(tx, actor, allocationId);
+    if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
     if (before.decisionCount !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
     const eligible = d.status === 'eligible' ? d.eligibleAmount! : 0n;
     if (eligible > BigInt(before.netCents)) throw new AppError('conflict', 'The eligible amount is more than the net cash this allocation still holds');
@@ -168,6 +169,7 @@ export async function submitClaim(pool: Pool, actor: Actor, input: unknown, requ
     let total = 0n;
     for (const line of [...lines].sort(byId((l) => l.allocationId))) {
       const before = await freshAllocation(tx, actor, line.allocationId);
+      if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
       if (BigInt(before.needsReviewCents) > 0n) throw new AppError('conflict', 'This payment needs review (pending or received reimbursement is above its eligible amount). Resolve that before claiming more.');
       if (line.amount > BigInt(before.availableCents)) throw new AppError('conflict', 'That claim is more than the amount still available for this payment');
       const lineId = randomUUID();
@@ -300,6 +302,7 @@ export async function recordExternalReceipt(pool: Pool, actor: Actor, input: unk
     const eventId = randomUUID();
     for (const l of [...lines].sort(byId((x) => x.allocationId))) {
       const before = await freshAllocation(tx, actor, l.allocationId);
+      if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
       if (BigInt(before.needsReviewCents) > 0n) throw new AppError('conflict', 'This payment needs review (pending or received reimbursement is above its eligible amount). Resolve that before recording more.');
       if (l.amount > BigInt(before.availableCents)) throw new AppError('conflict', 'That reimbursement is more than the amount still available for this payment. Record or raise its eligibility decision first.');
       await repo.insertEntry(tx, {
@@ -395,7 +398,7 @@ export async function exportHsa(pool: Pool, actor: Actor, raw: unknown, requestI
       let csv = row(['allocation_id', 'payment_id', 'paid_on', 'family_member', 'bill', 'net_cash_cents', 'decision', 'decided_eligible_cents', 'eligible_ceiling_cents', 'pending_cents', 'received_cents', 'available_cents', 'needs_review_cents']);
       const t = { net: 0n, ceiling: 0n, pending: 0n, received: 0n, available: 0n, review: 0n, decided: 0n };
       for (const a of items) {
-        csv += row([a.allocationId, a.paymentId, a.paidOn, a.memberName, a.billLabel, num(a.netCents), a.decisionStatus ?? 'unknown', num(a.decidedCents), num(a.ceilingCents), num(a.pendingCents), num(a.receivedCents), num(a.availableCents), num(a.needsReviewCents)]);
+        csv += row([a.allocationId, a.paymentId, a.paidOn, a.memberName, a.billLabel, num(a.netCents), a.directHsa ? 'paid_directly_from_hsa' : (a.decisionStatus ?? 'unknown'), num(a.decidedCents), num(a.ceilingCents), num(a.pendingCents), num(a.receivedCents), num(a.availableCents), num(a.needsReviewCents)]);
         t.net += BigInt(a.netCents); t.decided += BigInt(a.decidedCents); t.ceiling += BigInt(a.ceilingCents); t.pending += BigInt(a.pendingCents);
         t.received += BigInt(a.receivedCents); t.available += BigInt(a.availableCents); t.review += BigInt(a.needsReviewCents);
       }
