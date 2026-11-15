@@ -23,8 +23,9 @@ create table hsa_accounts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (household_id, id),
-  -- A name or administrator is a label, not a place for an account number: nine or more digits in a row (spaces and hyphens ignored) are refused.
-  check (regexp_replace(name, '[ -]', '', 'g') !~ '[0-9]{9,}' and regexp_replace(administrator, '[ -]', '', 'g') !~ '[0-9]{9,}')
+  -- A name or administrator is a label, not a place for an account number: nine or more digits in a row (spaces, hyphens, dots, slashes and
+  -- underscores ignored) are refused. Best effort: another separator would pass.
+  check (regexp_replace(name, '[ ./_-]', '', 'g') !~ '[0-9]{9,}' and regexp_replace(administrator, '[ ./_-]', '', 'g') !~ '[0-9]{9,}')
 );
 create unique index hsa_accounts_active_name on hsa_accounts (household_id, lower(name)) where archived_at is null;
 create index hsa_accounts_household_idx on hsa_accounts (household_id, lower(name), id);

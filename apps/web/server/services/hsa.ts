@@ -398,7 +398,7 @@ export async function exportHsa(pool: Pool, actor: Actor, raw: unknown, requestI
       let csv = row(['allocation_id', 'payment_id', 'paid_on', 'family_member', 'bill', 'net_cash_cents', 'decision', 'decided_eligible_cents', 'eligible_ceiling_cents', 'pending_cents', 'received_cents', 'available_cents', 'needs_review_cents']);
       const t = { net: 0n, ceiling: 0n, pending: 0n, received: 0n, available: 0n, review: 0n, decided: 0n };
       for (const a of items) {
-        csv += row([a.allocationId, a.paymentId, a.paidOn, a.memberName, a.billLabel, num(a.netCents), a.decisionStatus ?? 'unknown', num(a.decidedCents), num(a.ceilingCents), num(a.pendingCents), num(a.receivedCents), num(a.availableCents), num(a.needsReviewCents)]);
+        csv += row([a.allocationId, a.paymentId, a.paidOn, a.memberName, a.billLabel, num(a.netCents), a.directHsa ? 'paid_directly_from_hsa' : (a.decisionStatus ?? 'unknown'), num(a.decidedCents), num(a.ceilingCents), num(a.pendingCents), num(a.receivedCents), num(a.availableCents), num(a.needsReviewCents)]);
         t.net += BigInt(a.netCents); t.decided += BigInt(a.decidedCents); t.ceiling += BigInt(a.ceilingCents); t.pending += BigInt(a.pendingCents);
         t.received += BigInt(a.receivedCents); t.available += BigInt(a.availableCents); t.review += BigInt(a.needsReviewCents);
       }

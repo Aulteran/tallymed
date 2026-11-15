@@ -42,7 +42,7 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
       <h2>Paid with</h2>
       <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. A card linked to an HSA account can be chosen only when the payment is recorded; a payment paid directly from an HSA can only change to another card of the same account. <Link href="/payment-methods">Manage payment methods</Link></p>
       <label htmlFor="paidWithId">Payment method</label>
-      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.filter((m) => (pm.hsaAccountId ? m.hsaAccountId === pm.hsaAccountId : !m.hsaAccountId)).map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank={pm.hsaAccountId ? undefined : 'Not recorded'} /></select>
+      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.filter((m) => m.id === pm.paidWithId || (pm.hsaAccountId ? m.hsaAccountId === pm.hsaAccountId : !m.hsaAccountId)).map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank={pm.hsaAccountId ? undefined : 'Not recorded'} /></select>
       <button type="submit" className="secondary">Save</button>
     </form>}
     <div className="card"><h2>Applied to bills</h2>

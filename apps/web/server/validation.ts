@@ -138,8 +138,8 @@ const paymentMethod = z.enum(['card', 'bank_transfer', 'check', 'cash', 'portal'
 // A saved payment method (a named card or account). Only the last four digits are ever accepted, never a full number.
 const paymentMethodKind = z.enum(['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other']);
 const lastFour = z.string().trim().regex(/^[0-9]{4}$/);
-// A nickname is a label, so nine or more digits in a row (spaces and hyphens ignored) are refused: a pasted card or account number cannot be stored here either.
-const noAccountNumber = (v: string) => !/[0-9]{9,}/.test(v.replace(/[ -]/g, ''));
+// A nickname is a label, so nine or more digits in a row (spaces, hyphens, dots, slashes and underscores ignored) are refused: a pasted card or account number cannot be stored here either.
+const noAccountNumber = (v: string) => !/[0-9]{9,}/.test(v.replace(/[ ./_-]/g, ''));
 const methodNickname = text(60).min(1).refine(noAccountNumber);
 // HSA account labels follow the same rule.
 const hsaAccountName = text(60).min(1).refine(noAccountNumber);

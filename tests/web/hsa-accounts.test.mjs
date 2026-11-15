@@ -253,3 +253,96 @@ test('existing HSA figures are unchanged for ordinary payments: the new view equ
     assert.deepEqual(await ledgerViolations(t.db.pool), []);
   } finally { await t.db.drop(); }
 });
+
+test('a card relinked after use leaves recorded payments alone; choosing the current card again changes nothing', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const a = await account(t);
+    // An unlinked HSA/FSA card pays an ordinary payment; linking the card later does not make that payment direct, and re-saving it is a no-op.
+    const c = await card(t, undefined, { nickname: 'Old HSA card', lastFour: '' });
+    const ordinary = await t.pay1({ amount: '20.00', paidWithId: c.id });
+    const cur = await pm.getPaymentMethod(t.db.pool, t.actor, c.id);
+    await pm.updatePaymentMethod(t.db.pool, t.actor, { id: c.id, version: cur.version, nickname: 'Old HSA card', kind: 'hsa_fsa_card', lastFour: '', hsaAccountId: a.id }, 'r');
+    const set = (paymentId, paidWithId) => pm.setPaidWith(t.db.pool, t.actor, { idempotencyKey: t.key(), paymentId, paidWithId }, 'r');
+    await set(ordinary.id, c.id);
+    const o = (await t.payment(ordinary.id)).payment;
+    assert.deepEqual([o.paidWithId, o.hsaAccountId], [c.id, null], 'still an ordinary, claimable payment with its card kept');
+    assert.equal(await t.count('payment_method_assignments'), 1, 'choosing the current card again wrote nothing');
+    // A direct payment whose card is unlinked afterwards keeps its card and its funding.
+    const direct = await t.pay1({ amount: '20.00', paidWithId: c.id });
+    const cur2 = await pm.getPaymentMethod(t.db.pool, t.actor, c.id);
+    await pm.updatePaymentMethod(t.db.pool, t.actor, { id: c.id, version: cur2.version, nickname: 'Old HSA card', kind: 'hsa_fsa_card', lastFour: '', hsaAccountId: '' }, 'r');
+    await set(direct.id, c.id);
+    const d = (await t.payment(direct.id)).payment;
+    assert.deepEqual([d.paidWithId, d.hsaAccountId], [c.id, a.id]);
+    assert.equal(await t.count('payment_method_assignments'), 2);
+  } finally { await t.db.drop(); }
+});
+
+test('guards race at commit: a direct funding and an HSA decision on the same payment cannot both commit, in any order', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member(); const p = await t.provider();
+    const a = await account(t);
+    const insertDecision = (client, ids) => hsaRepo.insertDecision(client, {
+      id: randomUUID(), householdId: t.actor.householdId, userId: t.actor.userId, paymentId: ids.paymentId, allocationId: ids.allocationId, billId: ids.billId, status: 'eligible', eligibleCents: 1000n,
+      rationale: 'Qualified', evidenceType: 'receipt', evidenceNote: 'x', contextNote: '', decidedOn: '2026-04-05',
+    });
+    const funding = (client, paymentId) => client.query(`insert into payment_hsa_funding (payment_id, household_id, hsa_account_id, created_by) values ($1, $2, $3, $4)`, [paymentId, t.actor.householdId, a.id, t.actor.userId]);
+    const fresh = async () => {
+      const bill = await t.bill({ memberId: m, providerId: p, originalAmount: '20.00' });
+      const pmt = await t.pay1({ amount: '20.00', billId: bill.id });
+      return { paymentId: pmt.id, allocationId: await alloc(t, pmt.id), billId: bill.id };
+    };
+    const open = async () => { const c = await t.db.pool.connect(); await c.query('begin'); return c; };
+    const outcome = async (promise) => promise.then(() => 'ok', () => 'refused');
+    const counts = async (ids) => [
+      (await t.db.pool.query(`select count(*)::int n from payment_hsa_funding where payment_id = $1`, [ids.paymentId])).rows[0].n,
+      (await t.db.pool.query(`select count(*)::int n from hsa_eligibility_decisions where payment_id = $1`, [ids.paymentId])).rows[0].n,
+    ];
+    // 1. Both open; the funding commits first, then the decision's commit-time guard sees it.
+    let ids = await fresh(); let fa = await open(); let da = await open();
+    await funding(fa, ids.paymentId); await insertDecision(da, ids);
+    assert.equal(await outcome(fa.query('commit')), 'ok');
+    assert.equal(await outcome(da.query('commit')), 'refused');
+    fa.release(); await da.query('rollback').catch(() => {}); da.release();
+    assert.deepEqual(await counts(ids), [1, 0]);
+    // 2. Both open; the decision starts committing first (its guard waits for the funding's payment lock), then the funding commits.
+    ids = await fresh(); fa = await open(); da = await open();
+    await funding(fa, ids.paymentId); await insertDecision(da, ids);
+    const pending = outcome(da.query('commit'));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await outcome(fa.query('commit')), 'ok');
+    assert.equal(await pending, 'refused');
+    fa.release(); await da.query('rollback').catch(() => {}); da.release();
+    assert.deepEqual(await counts(ids), [1, 0]);
+    // 3. The decision commits first: the funding insert is then refused outright.
+    ids = await fresh(); da = await open();
+    await insertDecision(da, ids); await da.query('commit'); da.release();
+    fa = await open();
+    assert.equal(await outcome(funding(fa, ids.paymentId)), 'refused');
+    await fa.query('rollback'); fa.release();
+    assert.deepEqual(await counts(ids), [0, 1]);
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('a partly applied direct payment: the HSA card counts what was applied, the account counts the whole payment, and the export marks it', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const m = await t.member(); const p = await t.provider();
+    const a = await account(t); const c = await card(t, a.id);
+    const bill = await t.bill({ memberId: m, providerId: p, originalAmount: '60.00' });
+    const direct = await t.pay1({ amount: '100.00', billId: bill.id, allocateAmount: '60.00', paidWithId: c.id });
+    const totals = await hsa.hsaSummary(t.db.pool, t.actor, {});
+    assert.deepEqual([totals.directCount, totals.paidDirectlyCents], [1, '6000'], 'the HSA page counts cash applied to bills');
+    assert.equal((await acc.listHsaAccounts(t.db.pool, t.actor)).items[0].netCashCents, '10000', 'the account counts the whole payment');
+    assert.equal((await t.payment(direct.id)).payment.unappliedCents, '4000');
+    // The export marks the row instead of calling it undecided.
+    const out = await hsa.exportHsa(t.db.pool, t.actor, { kind: 'allocations' }, 'r');
+    assert.match(out.csv, /paid_directly_from_hsa/);
+    assert.doesNotMatch(out.csv, /,unknown,/);
+    // Dotted or slashed account-number-like labels are refused too (best effort; another separator would pass).
+    for (const name of ['1234.5678.9012', '1234/5678/9012', '1234_5678_9012']) await assert.rejects(account(t, { name }), code('invalid_input'));
+  } finally { await t.db.drop(); }
+});

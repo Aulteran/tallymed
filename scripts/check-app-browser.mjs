@@ -357,6 +357,28 @@ try {
   await page.goto(`${origin}/hsa-accounts`);
   assert.match(await text(), /Family HSA ••7788[\s\S]*\$15\.00/);
   await a11y('HSA accounts with a direct payment');
+  // A direct payment applied to a new bill: the HSA page, the allocation page and the list show it as settled, with nothing to claim or decide.
+  await page.goto(`${origin}/bills/new`);
+  await enterBill({ provider: 'Example Clinic', reference: 'HSA-DIRECT-1', amount: '40.00', responsibility: '40.00', status: 'confirmed', visit: true });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  const hsaBillId = page.url().split('/').pop();
+  await page.goto(`${origin}/payments?billId=${hsaBillId}`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#paidOn', '2026-03-07');
+  await page.fill('#amount', '40.00');
+  await page.selectOption('#paidWithId', { label: 'HSA Visa ••0042 (paid directly from Family HSA)' });
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  await page.goto(`${origin}/hsa`);
+  assert.match(await text(), /Paid directly from HSA\s*\n?\s*\$40\.00/);
+  assert.match(await text(), /Paid from HSA/);
+  await a11y('HSA page with a direct payment');
+  await page.click('a:has-text("HSA-DIRECT-1")');
+  await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /Paid directly from an HSA/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/decide"]').count(), 0);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 0);
+  await a11y('HSA allocation page, paid directly');
   ok('HSA account created, HSA card linked, and a payment paid directly from the HSA is marked and totalled ($15.00)');
 
   // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
@@ -401,8 +423,8 @@ try {
   // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
   await a11y('HSA list');
-  assert.match(await text(), /Not decided yet\s*\n?\s*1/);
-  await page.locator('a[href^="/hsa/allocations/"]').first().click();
+  assert.match(await text(), /Not decided yet\s*\n?\s*1/); // the directly paid allocation is not counted: it takes no decision
+  await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'INV-1' }).first().click();
   await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
   const hsaUrl = page.url();
   await a11y('HSA payment page');
