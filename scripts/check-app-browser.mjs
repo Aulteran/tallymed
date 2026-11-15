@@ -271,6 +271,15 @@ try {
 
   // Payments: record cash against the bill, refund part of it, and see the bill balance follow the posted events.
   const billId = billUrl.split('/').pop();
+  // A saved payment method (fabricated nickname and last four digits) to choose as "Paid with".
+  await page.goto(`${origin}/payment-methods?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await a11y('payment methods list and add form');
+  await page.fill('#nickname', 'Example Visa');
+  await page.fill('#lastFour', '4242');
+  await page.click('form[action="/api/expenses/payment-methods/create"] button[type=submit]');
+  await page.waitForURL(/\/payment-methods\/[0-9a-f-]{36}$/);
+  await a11y('payment method detail');
   await page.goto(`${origin}/payments?billId=${billId}`);
   await addDialog.waitFor({ state: 'visible' }); // arriving from a bill opens the form with that bill chosen
   assert.equal(await page.inputValue('#billId'), billId);
@@ -278,13 +287,27 @@ try {
   await page.fill('#paidOn', '2026-03-05');
   await page.fill('#amount', '100.00');
   await page.fill('#reference', 'CARD-1234');
+  await page.selectOption('#paidWithId', { label: 'Example Visa ••4242' });
   await page.fill('#allocateAmount', '95.00');
   await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
   await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
   const paymentUrl = page.url();
+  assert.match(await text(), /paid with Example Visa ••4242/);
   assert.match(await text(), /Applied to bills\s*\n?\s*\$95\.00/);
   assert.match(await text(), /Unapplied\s*\n?\s*\$5\.00/);
   await a11y('payment detail');
+  // Change "Paid with" on an existing payment, then clear it; each change is listed in the history.
+  await page.goto(paymentUrl);
+  await page.selectOption('#paidWithId', { label: 'Not recorded' });
+  await page.click('form[action="/api/expenses/payments/paid-with"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  assert.doesNotMatch(await text(), /paid with Example Visa/);
+  await page.selectOption('#paidWithId', { label: 'Example Visa ••4242' });
+  await page.click('form[action="/api/expenses/payments/paid-with"] button[type=submit]');
+  await page.waitForURL(paymentUrl);
+  assert.match(await text(), /paid with Example Visa ••4242/);
+  assert.equal((await text()).match(/Payment paid with changed/g)?.length, 2);
+  await a11y('payment detail after changing paid with');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '10.00');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Provider refund after review');
   await page.click('form[action="/api/expenses/payments/refund"] button[type=submit]');
@@ -295,6 +318,12 @@ try {
   assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
   await a11y('bill detail with payments');
   ok('payment recorded, refunded in part, and the bill balance follows ($95.00 - $85.00 net applied)');
+  assert.match(await text(), /Example Visa ••4242/); // the bill's payment list names the method (page is still the bill)
+  await page.goto(`${origin}/payment-methods`);
+  assert.match(await text(), /Example Visa ••4242[\s\S]*\$90\.00/);
+  await page.goto(`${origin}/payments?paidWith=none`);
+  assert.match(await text(), /No payments match/);
+  ok('payment method saved, chosen as paid with, shown on the payment and bill, and totalled ($90.00 net)');
 
   // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
   await page.goto(`${origin}/plans`);
@@ -685,7 +714,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/payment-methods`, `${origin}/payment-methods?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);

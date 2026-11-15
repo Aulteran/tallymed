@@ -100,6 +100,10 @@ export function NarrowForm({ fields, values, inDialog }: { fields: Array<{ name:
 export const pick = (values: Record<string, string>, keys: string[]): Record<string, string> => Object.fromEntries(keys.filter((k) => values[k]).map((k) => [k, values[k]!]));
 export const q80 = (v: string | undefined) => (v ? v.slice(0, 80) : undefined);
 
+/** Saved payment methods (named cards and accounts). Display only: "Chase Sapphire ••4242". Never a full number. */
+export const METHOD_KINDS = ['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other'] as const;
+export const methodName = (nickname: string, lastFour: string | null) => (lastFour ? `${nickname} ••${lastFour}` : nickname);
+
 export const PAYMENT_METHODS = ['card', 'bank_transfer', 'check', 'cash', 'portal', 'other'] as const;
 export const CADENCES = ['monthly', 'biweekly', 'weekly'] as const;
 export const todayUtc = () => new Date().toISOString().slice(0, 10);

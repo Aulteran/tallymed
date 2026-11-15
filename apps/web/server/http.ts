@@ -16,6 +16,7 @@ import * as expenses from './services/expenses.ts';
 import * as assistant from './services/assistant.ts';
 import * as documents from './services/documents.ts';
 import * as hsa from './services/hsa.ts';
+import * as paymentMethods from './services/payment-methods.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
 import { completeSetup } from './services/bootstrap.ts';
@@ -643,7 +644,7 @@ const EXPENSE_ACTIONS: Record<string, {
   'adjustments/reverse': { service: expenses.reverseAdjustment, error: (b) => billPath(b, ''), ok: billPath },
 };
 
-const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'reference', 'note', 'billId', 'allocateAmount'];
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount'];
 const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str(b.paymentId) ?? id}`;
 const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
@@ -658,6 +659,10 @@ const MONEY_ACTIONS: Record<string, {
   'payments/unapply': { service: payments.reverseAllocation, error: paymentOf, keep: ['amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
+  'payments/paid-with': { service: paymentMethods.setPaidWith, error: paymentOf, keep: ['paidWithId'], ok: paymentPath },
+  'payment-methods/create': { service: paymentMethods.createPaymentMethod, error: () => '/payment-methods', keep: ['nickname', 'kind', 'lastFour'], ok: entity('/payment-methods') },
+  'payment-methods/update': { service: paymentMethods.updatePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
+  'payment-methods/archive': { service: paymentMethods.archivePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },

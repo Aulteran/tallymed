@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { formatCents } from '../../../../server/money.ts';
+import { pickPaymentMethods } from '../../../../server/services/payment-methods.ts';
 import { getPaymentDetail, pickPayableBills } from '../../../../server/services/payments.ts';
 import {
-  Banner, Csrf, dateOf, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, q80, requireSession, todayUtc, Truncated, type SearchParams,
+  Banner, Csrf, dateOf, flatWithFlash, label, load, methodName, Money, NarrowForm, newKey, Options, q80, requireSession, todayUtc, Truncated, type SearchParams,
 } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -15,6 +16,7 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
   const { data } = await load(() => getPaymentDetail(ctx.pool, actor, id), null);
   const { payment: pm, allocations, entries, refunds, history } = data!;
   const bills = await pickPayableBills(ctx.pool, actor, { q: q80(q.billQ), currentId: q.billId });
+  const methods = await pickPaymentMethods(ctx.pool, actor, pm.paidWithId);
   const live = !pm.voided;
   const unapplied = BigInt(pm.unappliedCents);
   const key = (name: string) => <input type="hidden" name="idempotencyKey" value={newKey()} data-for={name} />;
@@ -23,7 +25,7 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/payments">← Payments</Link></p>
     <h1>Payment of <Money cents={pm.amountCents} /> on {pm.paidOn}</h1>
-    <p>{label(pm.method)}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
+    <p>{label(pm.method)}{pm.paidWithName ? ` · paid with ${methodName(pm.paidWithName, pm.paidWithLastFour)}${pm.paidWithArchived ? ' (archived)' : ''}` : ''}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
     {pm.note && <p>{pm.note}</p>}
     <Banner code={q.error} />
     {pm.voided && <div className="card" role="note"><strong>Voided on {pm.voidedOn}.</strong> {pm.voidReason}. A voided payment holds no cash and cannot be applied or refunded.</div>}
@@ -34,6 +36,14 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
       <div className="card"><span>Applied to bills</span><strong><Money cents={pm.appliedCents} /></strong></div>
       <div className="card"><span>Unapplied</span><strong><Money cents={pm.unappliedCents} /></strong><span className="muted">Cash not yet applied to a bill</span></div>
     </section>
+    {live && <form className="card" method="post" action="/api/expenses/payments/paid-with">
+      {base}{key('paid-with')}
+      <h2>Paid with</h2>
+      <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. <Link href="/payment-methods">Manage payment methods</Link></p>
+      <label htmlFor="paidWithId">Payment method</label>
+      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank="Not recorded" /></select>
+      <button type="submit" className="secondary">Save</button>
+    </form>}
     <div className="card"><h2>Applied to bills</h2>
       {allocations.length === 0 ? <p>Nothing has been applied to a bill yet.</p> : <table className="stack">
         <thead><tr><th>Bill</th><th className="num">Allocated</th><th className="num">Moved back</th><th className="num">Refunded</th><th className="num">Net applied</th><th className="num">Matched to a plan</th><th>HSA</th></tr></thead>

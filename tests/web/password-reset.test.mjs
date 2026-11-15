@@ -411,7 +411,7 @@ test('migration 0009 upgrades existing accounts: nobody is forced to change a pa
     await seedHousehold(db.pool);
     await db.pool.query(`insert into sessions (user_id, household_id, token_hash, expires_at)
       select id, household_id, decode(repeat('ab', 32), 'hex'), now() + interval '1 hour' from users`);
-    assert.deepEqual(await migrate(db.pool), ['0009', '0010', '0011', '0012', '0013', '0014']);
+    assert.deepEqual(await migrate(db.pool), ['0009', '0010', '0011', '0012', '0013', '0014', '0015']);
     const u = (await db.pool.query('select must_change_password, password_changed_at from users')).rows[0];
     assert.deepEqual(u, { must_change_password: false, password_changed_at: null });
     assert.equal((await db.pool.query('select count(*)::int n from sessions where revoked_at is null')).rows[0].n, 1);

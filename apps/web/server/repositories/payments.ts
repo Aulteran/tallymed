@@ -9,6 +9,8 @@ export type EntryKind = 'allocation' | 'allocation_reversal' | 'refund' | 'unapp
 export interface Payment {
   id: string; paidOn: string; amountCents: string; method: string; reference: string | null; note: string;
   createdByName: string | null; createdAt: Date; voided: boolean; voidReason: string | null; voidedOn: string | null;
+  /** The saved payment method this was paid with, when one is recorded (it can be archived since). */
+  paidWithId: string | null; paidWithName: string | null; paidWithLastFour: string | null; paidWithArchived: boolean;
   /** Net cash applied to bills (allocations less reversals and net refunds). */
   appliedCents: string;
   /** Cash returned to the household (refunds less refund reversals). */
@@ -19,8 +21,10 @@ export interface Payment {
   netCashCents: string;
 }
 
-const PAYMENT_FROM = `from payments p
+export const PAYMENT_FROM = `from payments p
   left join users u on u.id = p.created_by
+  left join lateral (select a.method_id from payment_method_assignments a where a.household_id = p.household_id and a.payment_id = p.id order by a.seq desc limit 1) cur on true
+  left join payment_methods pm on pm.household_id = p.household_id and pm.id = cur.method_id
   left join payment_voids v on v.household_id = p.household_id and v.payment_id = p.id
   left join lateral (select
       coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) as applied,
@@ -28,7 +32,8 @@ const PAYMENT_FROM = `from payments p
     from payment_entries e where e.household_id = p.household_id and e.payment_id = p.id) c on true`;
 const PAYMENT_COLS = `p.id, p.paid_on::text as "paidOn", p.amount_cents::text as "amountCents", p.method, p.reference, p.note,
   u.display_name as "createdByName", p.created_at as "createdAt", (v.payment_id is not null) as voided, v.reason as "voidReason",
-  v.voided_on::text as "voidedOn", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
+  v.voided_on::text as "voidedOn", cur.method_id as "paidWithId", pm.nickname as "paidWithName", pm.last_four as "paidWithLastFour",
+  (pm.archived_at is not null) as "paidWithArchived", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded - c.applied else 0 end)::text as "unappliedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded else 0 end)::text as "netCashCents"`;
 
@@ -51,6 +56,8 @@ export async function listPayments(db: Queryable, householdId: string, f: Paymen
   if (f.from) where.push(`p.paid_on >= $${params.push(f.from)}`);
   if (f.to) where.push(`p.paid_on <= $${params.push(f.to)}`);
   if (f.q) where.push(`(p.reference ilike $${params.push(`%${f.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or p.note ilike $${params.length})`);
+  if (f.paidWith === 'none') where.push(`cur.method_id is null`);
+  else if (f.paidWith) where.push(`cur.method_id = $${params.push(f.paidWith)}`);
   if (f.unapplied) where.push(`v.payment_id is null and p.amount_cents - c.refunded - c.applied > 0`);
   if (f.billId) where.push(`exists (select 1 from payment_entries e where e.household_id = p.household_id and e.payment_id = p.id and e.kind = 'allocation' and e.bill_id = $${params.push(f.billId)})`);
   if (f.memberId) where.push(`exists (select 1 from payment_entries e join bills b on b.household_id = e.household_id and b.id = e.bill_id
@@ -171,6 +178,7 @@ export async function listUnmatchedAllocations(db: Queryable, householdId: strin
 export interface BillPaymentLine {
   entryId: string; paymentId: string; kind: EntryKind; amountCents: string; effectiveDate: string; reason: string; paidOn: string;
   method: string; reference: string | null; allocationId: string | null; createdByName: string | null; paymentVoided: boolean;
+  paidWithName: string | null; paidWithLastFour: string | null;
 }
 
 /** Every posted entry that touches a bill, oldest first by ledger sequence (not by clock). */
@@ -178,8 +186,10 @@ export async function listBillLedger(db: Queryable, householdId: string, billId:
   const { rows } = await db.query<BillPaymentLine>(
     `select e.id as "entryId", e.payment_id as "paymentId", e.kind, e.amount_cents::text as "amountCents", e.effective_date::text as "effectiveDate",
        e.reason, p.paid_on::text as "paidOn", p.method, p.reference, e.allocation_id as "allocationId", u.display_name as "createdByName",
-       exists (select 1 from payment_voids v where v.payment_id = p.id) as "paymentVoided"
+       exists (select 1 from payment_voids v where v.payment_id = p.id) as "paymentVoided", pm.nickname as "paidWithName", pm.last_four as "paidWithLastFour"
      from payment_entries e join payments p on p.household_id = e.household_id and p.id = e.payment_id
+     left join lateral (select a.method_id from payment_method_assignments a where a.household_id = p.household_id and a.payment_id = p.id order by a.seq desc limit 1) cur on true
+     left join payment_methods pm on pm.household_id = p.household_id and pm.id = cur.method_id
      left join users u on u.id = e.created_by
      where e.household_id = $1 and e.bill_id = $2 order by e.seq`, [householdId, billId]);
   return rows;

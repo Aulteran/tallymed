@@ -34,6 +34,7 @@ import * as docs from '../../apps/web/server/services/documents.ts';
 import * as svc from '../../apps/web/server/services/expenses.ts';
 import * as hsa from '../../apps/web/server/services/hsa.ts';
 import * as hsaRepo from '../../apps/web/server/repositories/hsa.ts';
+import * as pm from '../../apps/web/server/services/payment-methods.ts';
 import * as pay from '../../apps/web/server/services/payments.ts';
 import * as plans from '../../apps/web/server/services/plans.ts';
 import { resetSettingsLimitersForTests } from '../../apps/web/server/services/settings.ts';
@@ -113,8 +114,12 @@ async function richFixture() {
   const wrong = await t.adjust(c.id, '-5.00');
   await svc.reverseAdjustment(pool, actor, { idempotencyKey: t.key(), billId: c.id, adjustmentId: wrong.id, reason: 'Entered on the wrong bill' }, 'r');
   // Payments: split allocation, partial allocation, refund and its reversal, an allocation reversal, a voided payment.
-  const p1 = await t.pay1({ amount: '250.00', allocations: [{ billId: a.id, amount: '150.00' }, { billId: b.id, amount: '75.05' }] });
-  const p2 = await t.pay1({ amount: '60.00', billId: c.id, allocateAmount: '40.00' });
+  // Saved payment methods: one in use, one archived after it was chosen, and a payment whose choice changed and was then cleared.
+  const visa = await pm.createPaymentMethod(pool, actor, { nickname: 'Family Visa', kind: 'credit_card', lastFour: '0042' }, 'r');
+  const oldCard = await pm.createPaymentMethod(pool, actor, { nickname: 'Old Debit', kind: 'debit_card', lastFour: '' }, 'r');
+  const p1 = await t.pay1({ amount: '250.00', paidWithId: visa.id, allocations: [{ billId: a.id, amount: '150.00' }, { billId: b.id, amount: '75.05' }] });
+  const p2 = await t.pay1({ amount: '60.00', billId: c.id, allocateAmount: '40.00', paidWithId: oldCard.id });
+  await pm.archivePaymentMethod(pool, actor, { id: oldCard.id, version: 1, archived: 'yes' }, 'r');
   const allocs = (await t.payment(p1.id)).allocations;
   const allocA = allocs.find((x) => x.billId === a.id).allocationId;
   const allocB = allocs.find((x) => x.billId === b.id).allocationId;
