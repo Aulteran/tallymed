@@ -4,7 +4,7 @@ import { getBillDetail, pickParties, pickVisits } from '../../../../server/servi
 import { billPaymentSummary } from '../../../../server/services/payments.ts';
 import { centsToUsdInput } from '../../../../server/money.ts';
 import {
-  ADJUSTMENT_CATEGORIES, AMOUNT_SOURCES, Banner, Csrf, dateOf, flat, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, q80, requireSession, Truncated, type SearchParams,
+  ADJUSTMENT_CATEGORIES, AMOUNT_SOURCES, Banner, Csrf, dateOf, flat, flatWithFlash, label, load, methodName, Money, NarrowForm, newKey, Options, q80, requireSession, Truncated, type SearchParams,
 } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -81,7 +81,7 @@ export default async function BillPage({ params, searchParams }: { params: Promi
       {ledger.length === 0 ? <p>No payments are applied to this bill yet.</p> : <table className="stack">
         <thead><tr><th>Effective</th><th>Entry</th><th className="num">Amount</th><th>Payment</th><th>Reason</th></tr></thead>
         <tbody>{ledger.map((e) => <tr key={e.entryId}><td data-label="Effective">{e.effectiveDate}</td><td data-label="Entry">{label(e.kind)}</td><td data-label="Amount" className="num"><Money cents={e.amountCents} /></td>
-          <td data-label="Payment"><Link href={`/payments/${e.paymentId}`}>{e.paidOn} · {label(e.method)} {e.reference ?? ''}</Link> {e.paymentVoided && <span className="pill warn">Voided</span>}</td><td data-label="Reason">{e.reason}</td></tr>)}</tbody>
+          <td data-label="Payment"><Link href={`/payments/${e.paymentId}`}>{e.paidOn} · {label(e.method)}{e.paidWithName ? ` · ${methodName(e.paidWithName, e.paidWithLastFour)}` : ''} {e.reference ?? ''}</Link> {e.paymentVoided && <span className="pill warn">Voided</span>}</td><td data-label="Reason">{e.reason}</td></tr>)}</tbody>
       </table>}
       {estimate ? <p className="muted">Confirm the amounts before applying payments to this bill.</p> : <p className="actions"><Link className="button secondary" href={`/payments?billId=${b.id}`}>Record a payment for this bill</Link></p>}
       {billPlans.length > 0 && <p>Payment plans: {billPlans.map((pl) => <span key={pl.id}><Link href={`/plans/${pl.id}`}>{pl.name}</Link>{pl.status === 'cancelled' ? ' (cancelled)' : ''} </span>)}</p>}

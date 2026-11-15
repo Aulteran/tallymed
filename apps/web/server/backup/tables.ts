@@ -33,7 +33,10 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'visits', orderBy: 'id' },
   { name: 'bills', orderBy: 'id' },
   { name: 'bill_adjustments', orderBy: '(reverses_adjustment_id is not null), id' },
+  // Saved payment methods hold only a nickname, a type and optionally the last four digits; nothing here can charge anything.
+  { name: 'payment_methods', orderBy: 'id', since: '0015' },
   { name: 'payments', orderBy: 'id' },
+  { name: 'payment_method_assignments', orderBy: 'seq', since: '0015' },
   { name: 'payment_voids', orderBy: 'payment_id' },
   { name: 'payment_entries', orderBy: `(kind <> 'allocation'), seq` },
   { name: 'payment_plans', orderBy: 'id' },

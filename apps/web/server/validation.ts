@@ -135,6 +135,9 @@ const positiveUsd = z.string().transform((v, ctx) => {
   }
 });
 const paymentMethod = z.enum(['card', 'bank_transfer', 'check', 'cash', 'portal', 'other']);
+// A saved payment method (a named card or account). Only the last four digits are ever accepted, never a full number.
+const paymentMethodKind = z.enum(['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other']);
+const lastFour = z.string().trim().regex(/^[0-9]{4}$/);
 const cadence = z.enum(['weekly', 'biweekly', 'monthly', 'custom']);
 const allocationLine = z.strictObject({ billId: uuid, amount: positiveUsd });
 const refundLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
@@ -170,7 +173,7 @@ const scheduleInput = {
 
 export const paymentSchemas = {
   createPayment: z.strictObject({
-    idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, reference: optional(text(80).min(1)), note: optionalText(500),
+    idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, paidWithId: optional(uuid), reference: optional(text(80).min(1)), note: optionalText(500),
     ...allocationInput, ...csrf,
   }).refine(mixedAllocation).transform((d) => {
     const { billId: _b, allocateAmount: _a, allocations: _l, ...rest } = d;
@@ -198,6 +201,11 @@ export const paymentSchemas = {
   }),
   reverseRefund: z.strictObject({ idempotencyKey, paymentId: uuid.optional(), eventId: uuid, effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
   voidPayment: z.strictObject({ idempotencyKey, paymentId: uuid, voidedOn: isoDate, reason: text(500).min(1), ...csrf }),
+  // An empty paidWithId clears the choice.
+  setPaidWith: z.strictObject({ idempotencyKey, paymentId: uuid, paidWithId: optional(uuid), ...csrf }),
+  createPaymentMethod: z.strictObject({ nickname: text(60).min(1), kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
+  updatePaymentMethod: z.strictObject({ id: uuid, version, nickname: text(60).min(1), kind: paymentMethodKind, lastFour: optional(lastFour), ...csrf }),
+  archivePaymentMethod: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),
   createPlan: z.strictObject({
     idempotencyKey, name: text(120).min(1), billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), matchExisting: checkbox.optional(), startedOn: optional(isoDate), ...scheduleInput, ...csrf,
   }).transform((d, ctx) => {
@@ -227,6 +235,8 @@ export const paymentFilterSchemas = {
   payment: z.object({
     q: optionalFilter(text(80)), memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), billId: optionalFilter(uuid),
     from: optionalFilter(isoDate), to: optionalFilter(isoDate), unapplied: checkbox, cursor, limit: pageSize,
+    // A saved payment method, or "none" for payments with no method recorded.
+    paidWith: optionalFilter(z.union([uuid, z.literal('none')])),
   }),
   plan: z.object({
     q: optionalFilter(text(80)), providerId: optionalFilter(uuid), status: optionalFilter(z.enum(['active', 'cancelled'])), cursor, limit: pageSize,

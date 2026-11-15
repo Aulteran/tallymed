@@ -7,9 +7,11 @@ import { withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import * as expenseRepo from '../repositories/expenses.ts';
+import * as methodRepo from '../repositories/payment-methods.ts';
 import * as repo from '../repositories/payments.ts';
 import * as plans from '../repositories/plans.ts';
 import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
+import { requireActiveMethod } from './payment-methods.ts';
 import { idempotent, withRetry, type Detail } from './support.ts';
 
 const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
@@ -166,9 +168,14 @@ export async function recordPayment(pool: Pool, actor: Actor, input: unknown, re
     if (replayId) return { id: replayId, replayed: true };
     await repo.insertPayment(tx, { id, householdId: actor.householdId, userId: actor.userId, paidOn: fields.paidOn, amountCents: fields.amount, method: fields.method, reference: fields.reference, note: fields.note });
     const applied = sum(await applyAllocations(tx, actor, id, randomUUID(), allocations, fields.paidOn, requestId));
+    // The saved payment method comes last in the lock order (after payments, bills and plans).
+    if (fields.paidWithId) {
+      await requireActiveMethod(tx, actor, fields.paidWithId);
+      await methodRepo.insertAssignment(tx, { id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId: id, methodId: fields.paidWithId });
+    }
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.recorded', entityType: 'payment', entityId: id, requestId,
-      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
+      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paymentMethodId: fields.paidWithId, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
     });
     return { id, replayed: false };
   }));

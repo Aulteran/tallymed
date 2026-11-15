@@ -600,7 +600,8 @@ test('migration 0013 keeps existing single-provider plans, their matches and the
     const other = (await svc.createProvider(db.pool, actor, { name: 'Other Lab', kind: 'clinician' }, 'r')).id;
     const b = await svc.createBill(db.pool, actor, { idempotencyKey: randomUUID(), memberId: m, providerId: p, statementDate: '2026-01-05', originalAmount: '200.00', amountStatus: 'confirmed', amountSource: 'statement' }, 'r');
     const pm = await pay.recordPayment(db.pool, actor, { idempotencyKey: randomUUID(), paidOn: '2026-03-01', amount: '50.00', method: 'card', billId: b.id }, 'r');
-    const alloc = (await pay.getPaymentDetail(db.pool, actor, pm.id)).allocations[0].allocationId;
+    // Read straight from the ledger: the payment detail query reads tables that a later migration adds.
+    const alloc = (await db.pool.query(`select id from payment_entries where payment_id = $1 and kind = 'allocation'`, [pm.id])).rows[0].id;
     // An existing plan as the previous schema stored it: one provider on the plan, bills of that provider, one matched installment.
     const planId = randomUUID(), revId = randomUUID(), instId = randomUUID(), instId2 = randomUUID();
     const c = await db.pool.connect();
@@ -615,7 +616,7 @@ test('migration 0013 keeps existing single-provider plans, their matches and the
     } finally {
       c.release();
     }
-    assert.deepEqual(await migrate(db.pool), ['0013', '0014']);
+    assert.deepEqual(await migrate(db.pool), ['0013', '0014', '0015']);
     // Nothing in the ledger changed, and the plan still reads the same.
     assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from installment_matches`)).rows[0], { n: 1, s: '5000' });
     assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from payment_entries`)).rows[0], { n: 1, s: '5000' });
