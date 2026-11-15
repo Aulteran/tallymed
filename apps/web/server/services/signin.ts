@@ -24,7 +24,7 @@ import { recordAudit } from '../repositories/audit.ts';
 import {
   adminHasSignedInWith, deleteIdentity, findIdentity, findIdentityOfUser, insertIdentity, listIdentities, touchIdentity,
 } from '../repositories/identities.ts';
-import { findActiveSession, insertSession, revokeSession } from '../repositories/sessions.ts';
+import { findActiveSession, insertSession, revokeSession, revokeUserSessions } from '../repositories/sessions.ts';
 import { findUserByEmail, findUserInHousehold, insertUser, type UserRow } from '../repositories/users.ts';
 import { decryptSecret, encryptSecret } from '../secrets.ts';
 import { readGroup, refreshRuntimeConfig, type SigninProvider, type SigninValue, type StoredGroup } from '../settings.ts';
@@ -168,6 +168,12 @@ export async function saveSignin(pool: Pool, config: AppConfig, actor: Actor, in
   await commit(pool, config, actor, requestId, 'signin', d.version, (current) => {
     let secret = current.secretCiphertext;
     let secretChange: string | null = null;
+    // A saved secret belongs to the provider and client it was entered for. It is never carried over to another issuer or client,
+    // where it would be sent to a different token endpoint: it is dropped and must be typed again.
+    if (secret && (current.value.issuer !== issuer || current.value.clientId !== d.clientId)) {
+      secret = null;
+      secretChange = 'cleared';
+    }
     if (d.clearSecret) {
       if (secret) secretChange = 'cleared';
       secret = null;
@@ -214,9 +220,11 @@ export async function unlinkIdentity(pool: Pool, config: AppConfig, actor: Actor
   await withTransaction(pool, async (tx) => {
     const removed = await deleteIdentity(tx, actor.householdId, d.identityId);
     if (!removed) throw new AppError('not_found');
+    // The person's sessions end with the link (except the administrator's own, who is doing this), so removing a link takes effect now.
+    const ended = removed.userId === actor.userId ? 0 : await revokeUserSessions(tx, removed.userId, 'identity_unlinked');
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'auth.oidc_unlinked', entityType: 'user', entityId: removed.userId, requestId,
-      detail: { issuer: removed.issuer },
+      detail: { issuer: removed.issuer, sessionsEnded: ended },
     });
   });
   void config;

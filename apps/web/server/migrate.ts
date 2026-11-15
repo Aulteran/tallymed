@@ -10,9 +10,12 @@ const LOCK_ID = 7_203_401;
 export interface MigrationFile { version: string; name: string; sql: string; checksum: string }
 
 export function listMigrations(dir = MIGRATIONS_DIR): MigrationFile[] {
-  return readdirSync(dir)
-    .filter((f) => /^\d{4}_[a-z0-9_]+\.sql$/.test(f))
-    .sort()
+  const files = readdirSync(dir).filter((f) => /^\d{4}_[a-z0-9_]+\.sql$/.test(f)).sort();
+  // Two files with one number (two branches that each added "the next" migration) would apply the first and fail on the second,
+  // or be mistaken for an edited migration. Refuse before touching the database.
+  const repeated = files.find((f, i) => i > 0 && files[i - 1]!.slice(0, 4) === f.slice(0, 4));
+  if (repeated) throw new Error(`Two migrations share the number ${repeated.slice(0, 4)}; renumber the newer one`);
+  return files
     .map((file) => {
       const sql = readFileSync(path.join(dir, file), 'utf8');
       return {

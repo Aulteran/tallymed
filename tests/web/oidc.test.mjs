@@ -271,14 +271,18 @@ test('sign-in settings: admin only, password confirmed, validated, secret encryp
     assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN(issuer, { version: 1, clientSecret: '' }))).status, 200);
     assert.equal((await t.db.pool.query(`select secret_ciphertext from server_settings where group_key = 'signin'`)).rows[0].secret_ciphertext, row.secret_ciphertext);
 
+    // The secret belongs to the provider and client it was typed for: changing either drops it unless a new one is typed.
+    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN(issuer, { version: 2, clientSecret: '', clientId: 'another-client' }))).status, 200);
+    assert.equal((await t.db.pool.query(`select secret_ciphertext from server_settings where group_key = 'signin'`)).rows[0].secret_ciphertext, null);
+    assert.equal((await audit(t.db, 'settings.signin_updated')).at(-1).detail.clientSecret, 'cleared');
     // Presets fix the issuer; Microsoft needs one directory.
-    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN('https://ignored.example.test', { version: 2, provider: 'google' }))).status, 200);
+    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN('https://ignored.example.test', { version: 3, provider: 'google' }))).status, 200);
     assert.equal((await t.db.pool.query(`select value->>'issuer' i from server_settings where group_key = 'signin'`)).rows[0].i, 'https://accounts.google.com');
-    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN('', { version: 3, provider: 'microsoft', tenant: '11111111-2222-3333-4444-555555555555' }))).status, 200);
+    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN('', { version: 4, provider: 'microsoft', tenant: '11111111-2222-3333-4444-555555555555' }))).status, 200);
     assert.equal((await t.db.pool.query(`select value->>'issuer' i from server_settings where group_key = 'signin'`)).rows[0].i, 'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0');
 
     // The connection test reports the provider's state and is audited.
-    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN(issuer, { version: 4 }))).status, 200);
+    assert.equal((await act(t.ctx, t.admin, 'signin', SIGNIN(issuer, { version: 5 }))).status, 200);
     assert.equal(await err(await act(t.ctx, sam, 'signin/test', {})), 'forbidden');
     assert.equal((await (await act(t.ctx, t.admin, 'signin/test', {})).json()).result, 'ok');
     t.provider.metadata = { issuer: 'https://other.example.test' };
@@ -441,6 +445,14 @@ test('who may sign in: verified email only, no silent second link, disabled acco
     await refused({ sub: 'subject-impostor', email: 'sam@example.test', email_verified: true }, 'sso_failed');
     assert.deepEqual((await audit(t.db, 'auth.oidc_refused')).map((a) => [a.entity_id, a.detail.reason]), [[samId, 'identity_conflict']]);
     assert.equal((await t.db.pool.query(`select subject from user_identities where user_id = $1`, [samId])).rows[0].subject, 'subject-sam');
+
+    // An administrator removes the link: Sam's sessions end at once, and the administrator's own session is untouched.
+    const samLink = (await t.db.pool.query(`select id from user_identities where user_id = $1`, [samId])).rows[0].id;
+    assert.equal((await act(t.ctx, t.admin, 'signin/unlink', { identityId: samLink, currentPassword: PASSWORD })).status, 200);
+    assert.equal(await authenticate(t.db.pool, t.config, sam.session.split('=')[1]), null);
+    assert.ok(await authenticate(t.db.pool, t.config, t.admin.cookie.split('=')[1]));
+    assert.equal((await audit(t.db, 'auth.oidc_unlinked')).at(-1).detail.sessionsEnded, 1);
+    assert.equal((await t.signIn({ sub: 'subject-sam', email: 'sam@example.test', email_verified: true })).location, `${ORIGIN}/`);
 
     // A disabled account is refused both by subject and by address, and gets no session.
     await t.db.pool.query(`update users set status = 'disabled' where id = $1`, [samId]);

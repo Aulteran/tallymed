@@ -18,7 +18,7 @@ export function SettingsTabs({ current }: { current: (typeof TABS)[number]['href
 const SAVED: Record<string, string> = {
   general: 'General settings saved.', documents: 'Document limits saved.', proxy: 'Reverse proxy settings saved.',
   email: 'Email settings saved. Send a test email to check them.', email_cleared: 'Email settings removed.',
-  signin: 'Sign-in settings saved.', signin_unlinked: 'The link was removed. That account signs in with its password until it is linked again.',
+  signin: 'Sign-in settings saved.', signin_unlinked: 'The link was removed and that person was signed out. The account signs in with its password until it is linked again.',
 };
 export const savedMessage = (code: string | undefined) => (code ? SAVED[code] ?? null : null);
 

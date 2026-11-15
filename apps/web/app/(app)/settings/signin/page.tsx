@@ -70,7 +70,7 @@ export default async function SigninSettingsPage({ searchParams }: { searchParam
       <input id="clientId" name="clientId" maxLength={200} defaultValue={q.clientId ?? s.clientId ?? ''} autoComplete="off" />
       <label htmlFor="clientSecret">Client secret</label>
       <input id="clientSecret" name="clientSecret" type="password" maxLength={512} autoComplete="new-password" placeholder={v.secretState === 'saved' ? 'A secret is saved. Type to replace it.' : ''} />
-      <p className="muted">Stored encrypted and never shown again. Leave empty to keep the saved secret. A public client that uses PKCE only needs none.</p>
+      <p className="muted">Stored encrypted and never shown again. Leave empty to keep the saved secret. Changing the issuer or client ID removes the saved secret, so enter it again then. A public client that uses PKCE only needs none.</p>
       {v.secretState !== 'none' && <label><input type="checkbox" name="clearSecret" value="yes" /> Remove the saved secret</label>}
       <label htmlFor="scopes">Scopes</label>
       <input id="scopes" name="scopes" maxLength={200} defaultValue={q.scopes ?? s.scopes ?? DEFAULT_SCOPES} autoComplete="off" />
@@ -80,6 +80,7 @@ export default async function SigninSettingsPage({ searchParams }: { searchParam
 
       <h3>Who can sign in</h3>
       <p>Someone who signs in through the provider is matched to the TallyMed account with the same email address, but only when the provider states that the address is verified. After the first sign-in the account stays linked to that provider identity. Invite people on the Users page as before.</p>
+      <p><strong>Use only a provider that checks that people own their email address.</strong> Whoever the provider says owns an address signs in as the TallyMed account with that address, including an administrator's. A provider that lets people register any address and marks it verified without checking would hand over those accounts.</p>
       <label><input type="checkbox" name="autoProvision" value="yes" defaultChecked={s.autoProvision === true} /> Create a Standard account for a verified address that has no account yet</label>
       <label htmlFor="allowedDomains">Email domains that may get a new account</label>
       <input id="allowedDomains" name="allowedDomains" maxLength={1000} defaultValue={q.allowedDomains ?? (s.allowedDomains ?? []).join(' ')} placeholder="example.com" autoComplete="off" />
@@ -116,7 +117,7 @@ export default async function SigninSettingsPage({ searchParams }: { searchParam
           </form></td>
         </tr>)}
       </tbody></table>}
-      <p className="muted">Removing a link does not sign the person out or disable the account. The next provider sign-in with the same verified address links it again; disable the account on the Users page to stop that.</p>
+      <p className="muted">Removing a link signs that person out (not you) but does not disable the account. The next provider sign-in with the same verified address links it again; disable the account on the Users page to stop that.</p>
     </div>
   </main>;
 }
