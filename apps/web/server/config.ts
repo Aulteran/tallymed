@@ -40,6 +40,8 @@ export interface AppConfig {
    * trusts no address. Environment value TALLYMED_TRUSTED_PROXIES (comma separated); an administrator can override it in the settings.
    */
   trustedProxies: string[];
+  /** Largest backup file the setup page accepts for a restore (TALLYMED_RESTORE_MAX_MB). The command line has no such limit. */
+  restoreMaxBytes: number;
 }
 
 export const MIN_SETUP_TOKEN_LENGTH = 32;
@@ -211,5 +213,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     setupTokenError,
     secretsKey: parseSecretsKey(env.TALLYMED_SECRETS_KEY),
     trustedProxies: parseTrustedProxies(env.TALLYMED_TRUSTED_PROXIES),
+    restoreMaxBytes: intEnv(env, 'TALLYMED_RESTORE_MAX_MB', 4096, 1, 1_048_576) * 1024 * 1024,
   };
 }

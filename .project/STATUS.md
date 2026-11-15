@@ -185,3 +185,11 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Changed: `AddDialog.tsx` (new), list pages for providers, members, visits, documents, users, payments, plans and bills, `ui.tsx` (`pick`, `NarrowForm` in a dialog), `documents.tsx` (`UploadForm` heading), `icons.tsx` (plus), `globals.css`, `scripts/check-app-browser.mjs`, docs, decisions, screenshots (`docs/design/screenshots/add-forms-*`).
 - Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, a real screen reader or phone.
 - Wiki: checked the 27 pages; none describes where the add forms sit or quotes their headings, so no wiki change is needed.
+
+## Backup and restore from the app handoff
+
+- Branch: `feature/admin-backup-and-restore` (PR against `dev`; head SHA is on the PR). No migration. Independent security and financial reviews pending.
+- Changed: `server/backup/` (`archive.ts` tar and encryption, `tables.ts` table classification and export queries, `ledger.ts` invariant checks and totals, `engine.ts` create, verify, restore), `services/backup.ts`, the `backup` settings route and `handleSetupRestore` in `server/http.ts`, Server settings > Backup page, `/setup/restore` page and `/api/setup/restore`, `cli/backup.ts` (`create`, `verify`, `restore`), `TALLYMED_RESTORE_MAX_MB`, docs, decisions, `tests/web/backup.test.mjs` (14 tests).
+- Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, a real reverse proxy with its own upload limit, an archive of several gigabytes.
+- Reviewer focus: nothing secret in the archive, archive parsing (path names, sizes, decompression), restore only into an empty installation, setup-token handling on the restore route, table and ledger verification before commit, trigger handling during the load.
+- Follow-up: a pull request that adds a table must classify it in `server/backup/tables.ts` (the completeness test fails otherwise). The OIDC sign-in work adds tables and needs this whichever merges second.

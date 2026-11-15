@@ -23,6 +23,11 @@ export type ErrorCode =
   | 'secrets_key_missing'
   | 'confirmation_required'
   | 'email_not_configured'
+  | 'backup_invalid'
+  | 'backup_passphrase'
+  | 'backup_incompatible'
+  | 'backup_failed'
+  | 'restore_not_empty'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -50,6 +55,11 @@ const STATUS: Record<ErrorCode, number> = {
   secrets_key_missing: 409,
   confirmation_required: 400,
   email_not_configured: 409,
+  backup_invalid: 400,
+  backup_passphrase: 400,
+  backup_incompatible: 409,
+  backup_failed: 409,
+  restore_not_empty: 409,
   internal: 500,
 };
 

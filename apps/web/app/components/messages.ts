@@ -11,7 +11,7 @@ const MESSAGES: Record<string, string> = {
   unsupported_media_type: 'That file was not accepted. Use a PDF, PNG or JPEG whose contents match its type and that has no scripts or attachments inside.',
   duplicate_document: 'A document with identical contents already exists. Tick the box to upload it anyway, or attach the existing document.',
   storage_unavailable: 'Document storage is not available right now. Nothing was saved. Try again, or ask the server administrator to check the document volume.',
-  busy: 'Several uploads are in progress. Wait a moment and try again.',
+  busy: 'Several uploads are in progress, or a backup or restore is already running. Wait a moment and try again.',
   invalid_setup_token: 'The setup token was not accepted. Use the value of TALLYMED_SETUP_TOKEN, or the token the server printed to its console when it started.',
   bootstrap_closed: 'Setup was already completed.',
   rate_limited: 'Too many attempts. Wait a few minutes (up to fifteen) and try again.',
@@ -23,6 +23,11 @@ const MESSAGES: Record<string, string> = {
   reset_not_allowed: 'That account cannot be reset right now. It must be active, and the household must keep an administrator who can sign in.',
   confirmation_required: 'That range is very broad: every machine in it that can reach the app directly could forge client addresses. Tick the confirmation box if you are sure, or list only your proxy\'s own address.',
   email_not_configured: 'Password reset by email is not set up on this server. Ask an administrator to reset your password.',
+  backup_invalid: 'That file is not a complete, unchanged TallyMed backup. Nothing was restored. Download the backup again or use another copy.',
+  backup_passphrase: 'This backup is encrypted and the passphrase is missing or not correct. Nothing was restored.',
+  backup_incompatible: 'This backup was made by a different version of TallyMed than this server runs. Nothing was restored. Use the backup command on the server, which can load an older backup and then upgrade it.',
+  backup_failed: 'The backup could not be completed because a stored document does not match its record. Run the documents verify command on the server and try again.',
+  restore_not_empty: 'This TallyMed already holds data. A backup can only be restored into a new, empty installation.',
   internal: 'Something went wrong. Try again.',
 };
 

@@ -44,6 +44,8 @@ services:
       TALLYMED_SECRETS_KEY: ${TALLYMED_SECRETS_KEY:-}
       # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
       TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
+      # Optional: largest backup file (MB) accepted by Restore from a backup on the setup page. Empty uses 4096.
+      TALLYMED_RESTORE_MAX_MB: ${TALLYMED_RESTORE_MAX_MB:-}
       TALLYMED_DOCUMENTS_DIR: /var/lib/tallymed/documents
     volumes:
       - documents_data:/var/lib/tallymed/documents

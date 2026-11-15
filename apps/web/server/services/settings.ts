@@ -29,7 +29,7 @@ const testLimiter = new SlidingWindowLimiter(TEST_EMAILS_PER_WINDOW, 5 * 60_000)
 export const resetSettingsLimitersForTests = () => { reauth.reset(); testLimiter.reset(); };
 
 /** Verifies the acting administrator's own password. Five wrong answers in 15 minutes lock this check for that administrator. */
-async function confirmPassword(pool: Pool, actor: Actor, password: string, requestId: string): Promise<void> {
+export async function confirmPassword(pool: Pool, actor: Actor, password: string, requestId: string): Promise<void> {
   const wait = reauth.blockedFor(actor.userId);
   if (wait !== null) throw new AppError('rate_limited', 'Too many incorrect passwords', wait);
   const user = await findUserInHousehold(pool, actor.householdId, actor.userId);
