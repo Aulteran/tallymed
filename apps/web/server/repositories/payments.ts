@@ -234,7 +234,7 @@ export async function paymentHistory(db: Queryable, householdId: string, payment
   return rows;
 }
 
-export interface PayableBill { id: string; label: string; statementDate: string; openBalanceCents: string }
+export interface PayableBill { id: string; label: string; statementDate: string; openBalanceCents: string; providerId: string; providerName: string }
 
 /**
  * Confirmed bills with an open balance, for allocation selects. Bounded to `limit` rows (one extra row tells the caller the
@@ -245,15 +245,15 @@ export async function listPayableBills(db: Queryable, householdId: string, o: { 
   // The search narrows the candidates only; the current bill is always kept, whatever the search says.
   let search = 'true';
   if (o.q) search = `(x.provider_reference ilike $${params.push(`%${o.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)} or x.provider_name ilike $${params.length} or x.member_name ilike $${params.length})`;
-  const { rows } = await db.query<PayableBill>(
+  const { rows } = await db.query<PayableBill & { provider_name: string }>(
     `select * from (select b.id, m.name || ' · ' || pr.name || coalesce(' ' || b.provider_reference, '') as label, b.statement_date::text as "statementDate",
        (b.base_responsibility_cents + coalesce((select sum(a.amount_cents) from bill_adjustments a where a.household_id = b.household_id and a.bill_id = b.id), 0)
          - coalesce((select sum(e.amount_cents) from payment_entries e where e.household_id = b.household_id and e.bill_id = b.id), 0))::text as "openBalanceCents",
-       b.id = $2::uuid as is_current, b.provider_reference, pr.name as provider_name, m.name as member_name
+       b.id = $2::uuid as is_current, b.provider_reference, pr.name as provider_name, m.name as member_name, b.provider_id as "providerId"
      from bills b join family_members m on m.household_id = b.household_id and m.id = b.member_id
      join providers pr on pr.household_id = b.household_id and pr.id = b.provider_id
      where b.household_id = $1 and (b.amount_status = 'confirmed' or b.id = $2::uuid)) x
      where x.is_current or (x."openBalanceCents"::bigint > 0 and ${search})
      order by x.is_current desc, x."statementDate" desc, x.id desc limit $${params.push(o.limit)}`, params);
-  return rows.map(({ id, label, statementDate, openBalanceCents }) => ({ id, label, statementDate, openBalanceCents }));
+  return rows.map(({ id, label, statementDate, openBalanceCents, providerId, provider_name }) => ({ id, label, statementDate, openBalanceCents, providerId, providerName: provider_name }));
 }

@@ -34,7 +34,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/plans">← Payment plans</Link></p>
     <h1>{plan.name}</h1>
-    <p>{plan.providerName} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
+    <p>{plan.providerNames.length > 1 ? <span title="One plan covering bills from several providers">{plan.providerNames.join(', ')}</span> : plan.payee} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
     <Banner code={q.error} />
     {!active && <div className="card" role="note"><strong>Cancelled {plan.cancelledAt ? dateOf(plan.cancelledAt) : ''}.</strong> {plan.cancelReason}. History is kept; no new matches or revisions.</div>}
     <section className="metrics" aria-label="Plan totals">
@@ -43,8 +43,8 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
       <div className="card"><span>Still to match</span><strong><Money cents={(BigInt(plan.totalCents) - BigInt(plan.matchedCents)).toString()} /></strong></div>
     </section>
     <div className="card"><h2>Bills covered</h2>
-      <table className="stack"><thead><tr><th>Bill</th><th className="num">Responsibility</th><th className="num">Applied payments</th><th className="num">Open balance</th></tr></thead>
-        <tbody>{bills.map((b) => <tr key={b.id}><td data-label="Bill"><Link href={`/bills/${b.id}`}>{b.memberName} · {b.statementDate} {b.providerReference ?? ''}</Link></td>
+      <table className="stack"><thead><tr><th>Bill</th><th>Provider</th><th className="num">Responsibility</th><th className="num">Applied payments</th><th className="num">Open balance</th></tr></thead>
+        <tbody>{bills.map((b) => <tr key={b.id}><td data-label="Bill"><Link href={`/bills/${b.id}`}>{b.memberName} · {b.statementDate} {b.providerReference ?? ''}</Link></td><td data-label="Provider">{b.providerName}</td>
           <td data-label="Responsibility" className="num"><Money cents={b.responsibilityCents} /></td><td data-label="Applied payments" className="num"><Money cents={b.appliedCents} /></td><td data-label="Open balance" className="num"><Money cents={b.openBalanceCents} /></td></tr>)}</tbody></table>
       <p className="muted">The plan does not change bill balances. Only recorded payments do.</p>
     </div>
