@@ -1,8 +1,10 @@
 import Link from 'next/link';
 import { pickParties } from '../../../server/services/expenses.ts';
+import { listHsaAccounts } from '../../../server/services/hsa-accounts.ts';
 import { hsaSummary, listHsaAllocations } from '../../../server/services/hsa.ts';
+import { AddDialog } from '../../components/AddDialog.tsx';
 import { AllocationLink, DecisionPill } from '../../components/hsa.tsx';
-import { Banner, Empty, flat, load, Money, Options, Pager, q80, requireSession, type SearchParams } from '../../components/ui.tsx';
+import { Banner, Csrf, Empty, flatWithFlash, load, Money, Options, Pager, q80, requireSession, Truncated, type SearchParams } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA · TallyMed' };
@@ -13,22 +15,61 @@ const STATES: Array<[string, string]> = [
 ];
 
 export default async function HsaPage({ searchParams }: { searchParams: SearchParams }) {
-  const { ctx, actor } = await requireSession();
-  const p = await flat(searchParams);
+  const { ctx, actor, csrf } = await requireSession();
+  const p = await flatWithFlash(searchParams, '/hsa');
   const [members, providers] = await Promise.all([
     pickParties(ctx.pool, actor, 'members', { archived: true, q: q80(p.memberQ), currentId: p.memberId }), pickParties(ctx.pool, actor, 'providers', { archived: true, q: q80(p.providerQ), currentId: p.providerId }),
   ]);
   const scope = Object.fromEntries(['memberId', 'providerId', 'from', 'to'].filter((k) => p[k]).map((k) => [k, p[k]!]));
-  const filters = { ...scope, ...(p.state ? { state: p.state } : {}) };
+  const showArchived = p.accountsArchived === 'yes';
+  const filters = { ...scope, ...(p.state ? { state: p.state } : {}), ...(showArchived ? { accountsArchived: 'yes' } : {}) };
+  const accounts = await load(() => listHsaAccounts(ctx.pool, actor, { archived: showArchived }), { items: [], truncated: false });
+  const open = !!p.error || p.add === '1';
   const totals = await load(() => hsaSummary(ctx.pool, actor, scope), null);
   const list = await load(() => listHsaAllocations(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const t = totals.data;
-  const link = (state: string) => `/hsa?${new URLSearchParams({ ...scope, state })}`;
+  const link = (state: string) => `/hsa?${new URLSearchParams({ ...scope, state, ...(showArchived ? { accountsArchived: 'yes' } : {}) })}`;
+  const archivedToggle = `/hsa?${new URLSearchParams({ ...scope, ...(p.state ? { state: p.state } : {}), ...(showArchived ? {} : { accountsArchived: 'yes' }) })}`;
   const exportLink = (kind: string) => `/api/hsa/export?${new URLSearchParams({ ...scope, kind })}`;
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
   return <main id="main" className="wide">
-    <h1>HSA reimbursements</h1>
-    <Banner invalid={totals.invalid || list.invalid} />
+    <div className="page-head">
+      <h1>HSA</h1>
+      <AddDialog label="Add HSA account" open={open} keep={filters}>
+        {p.error && <Banner code={p.error} />}
+        <form method="post" action="/api/expenses/hsa-accounts/create">
+          <Csrf token={csrf} />
+          <p className="muted">Name your HSA, then say whether it has a spending card. A card you add here is saved on <Link href="/payment-methods">Payment methods</Link> and linked to this account, so a payment recorded with it is paid directly from the HSA and there is nothing to claim. Enter only the last four digits, never a full account or card number.</p>
+          <label htmlFor="name">Name</label><input id="name" name="name" required maxLength={60} placeholder="Family HSA" defaultValue={p.name} />
+          <label htmlFor="administrator">Administrator (optional)</label><input id="administrator" name="administrator" maxLength={80} placeholder="Example HSA Bank" defaultValue={p.administrator} />
+          <label htmlFor="lastFour">Account last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.lastFour} />
+          <label className="checkbox" htmlFor="hasCard"><input id="hasCard" type="checkbox" name="hasCard" value="yes" defaultChecked={p.hasCard === 'yes'} /> This account also has a spending card</label>
+          <div className="conditional-fields">
+            <label htmlFor="cardNickname">Card nickname</label><input id="cardNickname" name="cardNickname" maxLength={60} placeholder="HSA Visa" defaultValue={p.cardNickname} />
+            <label htmlFor="cardLastFour">Card last four digits (optional)</label><input id="cardLastFour" name="cardLastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.cardLastFour} />
+            <p className="muted">The card is saved as an HSA/FSA card payment method. A nickname is required when this box is ticked.</p>
+          </div>
+          <button type="submit">Add HSA account</button>
+        </form>
+      </AddDialog>
+    </div>
+    <Banner invalid={totals.invalid || list.invalid || accounts.invalid} />
+    <section aria-labelledby="hsa-accounts-heading">
+      <h2 id="hsa-accounts-heading">Accounts</h2>
+      {accounts.data.truncated && <Truncated what="HSA accounts" />}
+      {accounts.data.items.length === 0 ? <Empty>No HSA accounts yet. Add one, and tick the spending card box to record payments paid directly from the HSA.</Empty> : <table className="stack">
+        <thead><tr><th>HSA account</th><th>Administrator</th><th className="num">Paid directly</th><th className="num">Net cash</th><th>Status</th></tr></thead>
+        <tbody>{accounts.data.items.map((a) => <tr key={a.id}>
+          <td data-label="HSA account"><Link href={`/hsa/accounts/${a.id}`}>{a.name}{a.lastFour ? ` ••${a.lastFour}` : ''}</Link></td>
+          <td data-label="Administrator">{a.administrator}</td>
+          <td data-label="Paid directly" className="num">{a.paymentCount}</td>
+          <td data-label="Net cash" className="num"><Money cents={a.netCashCents} /></td>
+          <td data-label="Status">{a.archivedAt ? <span className="pill warn">Archived</span> : <span className="pill">Active</span>}</td>
+        </tr>)}</tbody>
+      </table>}
+      <p className="muted">Net cash follows the cash summary: refunds are subtracted and voided payments count zero. <Link href={archivedToggle}>{showArchived ? 'Hide archived accounts' : 'Show archived accounts'}</Link></p>
+    </section>
+    <h2>Reimbursements</h2>
     <p className="muted">Eligibility is your decision, with a reason and evidence. Claims reserve amounts and receipts reconcile to specific payments. Received reimbursements are not household cash and never change a provider balance. TallyMed does not submit claims to an administrator or decide tax treatment.</p>
     <form method="get" className="card row" role="search" aria-label="Filters">
       <div><label htmlFor="memberId">Family member</label><select id="memberId" name="memberId" defaultValue={p.memberId ?? ''}><Options items={opt(members)} blank="Everyone" /></select></div>
@@ -36,7 +77,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
       <div><label htmlFor="from">Paid from</label><input id="from" name="from" type="date" defaultValue={p.from} /></div>
       <div><label htmlFor="to">Paid to</label><input id="to" name="to" type="date" defaultValue={p.to} /></div>
       <div><label htmlFor="state">Show</label><select id="state" name="state" defaultValue={p.state ?? ''}>{STATES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-      <div><button type="submit">Filter</button> <Link href="/hsa">Clear</Link></div>
+      <div>{showArchived && <input type="hidden" name="accountsArchived" value="yes" />}<button type="submit">Filter</button> <Link href="/hsa">Clear</Link></div>
     </form>
     {t && <section className="metrics" aria-label="HSA totals">
       <Link href={link('eligible')}><div className="card"><span>Eligible</span><strong><Money cents={t.eligibleCents} /></strong><span className="muted">Confirmed eligible net cash, {t.allocationCount} payments</span></div></Link>

@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { getHsaAccount } from '../../../../server/services/hsa-accounts.ts';
-import { Banner, Csrf, dateOf, flat, load, requireSession, type SearchParams } from '../../../components/ui.tsx';
+import { getHsaAccount } from '../../../../../server/services/hsa-accounts.ts';
+import { Banner, Csrf, dateOf, flat, load, requireSession, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA account · TallyMed' };
@@ -11,7 +11,7 @@ export default async function HsaAccountPage({ params, searchParams }: { params:
   const q = await flat(searchParams);
   const { data: a } = await load(() => getHsaAccount(ctx.pool, actor, id), null);
   return <main id="main">
-    <p className="crumb"><Link href="/hsa-accounts">← HSA accounts</Link></p>
+    <p className="crumb"><Link href="/hsa">← HSA</Link></p>
     <h1>{a!.name}{a!.lastFour ? ` ••${a!.lastFour}` : ''} {a!.archivedAt && <span className="pill warn">Archived</span>}</h1>
     <Banner code={q.error} />
     <form className="card" method="post" action="/api/expenses/hsa-accounts/update">
@@ -28,6 +28,6 @@ export default async function HsaAccountPage({ params, searchParams }: { params:
         : <><p>Archiving blocks new direct payments from this account (a payment recorded with one of its cards is refused). Payments already paid from it keep the link.</p>
           <input type="hidden" name="archived" value="yes" /><button type="submit" className="secondary">Archive HSA account</button></>}
     </form>
-    <p><Link href="/payment-methods">Payment methods</Link> · <Link href="/hsa">HSA reimbursements</Link></p>
+    <p><Link href="/payment-methods">Payment methods</Link> · <Link href="/hsa">HSA</Link></p>
   </main>;
 }

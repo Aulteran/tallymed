@@ -11,7 +11,7 @@ import * as hsaRepo from '../repositories/hsa-accounts.ts';
 import * as repo from '../repositories/payment-methods.ts';
 import * as payRepo from '../repositories/payments.ts';
 import { paymentSchemas, parse, schemas } from '../validation.ts';
-import { requireActiveAccount } from './hsa-accounts.ts';
+import { requireActiveAccount } from './hsa-account-guard.ts';
 import { idempotent, withRetry } from './support.ts';
 
 const NICKNAME_TAKEN = 'You already have an active payment method with that nickname';
@@ -47,22 +47,30 @@ export async function getPaymentMethod(pool: Pool, actor: Actor, id: string) {
   return m;
 }
 
+/**
+ * Inserts a payment method, links it to an HSA account when given, and audits it, inside the caller's transaction. Used by the payment
+ * methods page and by HSA account creation (an account that also has a spending card), so both write exactly the same records.
+ */
+export async function insertMethodWithLink(tx: Queryable, actor: Actor, d: { nickname: string; kind: string; lastFour: string | null; hsaAccountId: string | null }, requestId: string): Promise<string> {
+  const id = await repo.insertMethod(tx, { householdId: actor.householdId, userId: actor.userId, nickname: d.nickname, kind: d.kind, lastFour: d.lastFour });
+  if (d.hsaAccountId) {
+    await requireActiveAccount(tx, actor, d.hsaAccountId);
+    await hsaRepo.setLink(tx, { householdId: actor.householdId, userId: actor.userId, methodId: id, accountId: d.hsaAccountId });
+  }
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'payment_method.created', entityType: 'payment_method', entityId: id, requestId,
+    detail: { paymentMethodId: id, kind: d.kind, hasLastFour: d.lastFour !== null, hsaAccountId: d.hsaAccountId },
+  });
+  return id;
+}
+
+export const PAYMENT_METHOD_NICKNAME_TAKEN = NICKNAME_TAKEN;
+
 export async function createPaymentMethod(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string }> {
   authorize(actor, 'expenses:write');
   const d = parse(paymentSchemas.createPaymentMethod, input);
   try {
-    return await withTransaction(pool, async (tx) => {
-      const id = await repo.insertMethod(tx, { householdId: actor.householdId, userId: actor.userId, nickname: d.nickname, kind: d.kind, lastFour: d.lastFour });
-      if (d.hsaAccountId) {
-        await requireActiveAccount(tx, actor, d.hsaAccountId);
-        await hsaRepo.setLink(tx, { householdId: actor.householdId, userId: actor.userId, methodId: id, accountId: d.hsaAccountId });
-      }
-      await recordAudit(tx, {
-        householdId: actor.householdId, actorUserId: actor.userId, action: 'payment_method.created', entityType: 'payment_method', entityId: id, requestId,
-        detail: { paymentMethodId: id, kind: d.kind, hasLastFour: d.lastFour !== null, hsaAccountId: d.hsaAccountId },
-      });
-      return { id };
-    });
+    return await withTransaction(pool, async (tx) => ({ id: await insertMethodWithLink(tx, actor, d, requestId) }));
   } catch (e) {
     if (isUniqueViolation(e, 'payment_methods_active_nickname')) throw new AppError('conflict', NICKNAME_TAKEN);
     throw e;

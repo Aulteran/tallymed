@@ -44,6 +44,52 @@ test('accounts: create, validate, rename, archive; labels only, never a number t
   } finally { await t.db.drop(); }
 });
 
+test('an account created with a spending card saves the card as a linked HSA/FSA payment method in the same step', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const a = await account(t, { hasCard: 'yes', cardNickname: 'HSA Visa', cardLastFour: '0042' });
+    assert.ok(a.paymentMethodId);
+    const methods = await pm.listPaymentMethods(t.db.pool, t.actor);
+    assert.equal(methods.items.length, 1);
+    assert.equal(methods.items[0].id, a.paymentMethodId);
+    assert.equal(methods.items[0].kind, 'hsa_fsa_card');
+    assert.equal(methods.items[0].lastFour, '0042');
+    assert.equal(methods.items[0].hsaAccountId, a.id, 'linked without a second step');
+    // Both records are audited the same way as when created separately, and the audit holds ids and flags only.
+    const created = await t.audit('hsa_account.created');
+    assert.equal(created[0].detail.withSpendingCard, true);
+    const pmAudit = await t.audit('payment_method.created');
+    assert.equal(pmAudit.length, 1);
+    assert.equal(pmAudit[0].detail.hsaAccountId, a.id);
+    assert.ok(!JSON.stringify([...created, ...pmAudit]).includes('HSA Visa'));
+    // The card works at once: a payment recorded with it is paid directly from the account.
+    const bill = await t.bill({ memberId: await t.member(), providerId: await t.provider(), originalAmount: '80.00' });
+    const p = await t.pay1({ amount: '25.00', billId: bill.id, paidWithId: a.paymentMethodId });
+    assert.equal((await t.payment(p.id)).payment.hsaAccountId, a.id);
+    // No card requested: an ordinary account, no method, and card text left in the form is ignored.
+    const plain = await account(t, { name: 'No card HSA', cardNickname: 'Ignored', cardLastFour: '9999' });
+    assert.equal(plain.paymentMethodId, null);
+    assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor)).items.length, 1);
+    // A ticked box needs a valid nickname and last four.
+    await assert.rejects(account(t, { name: 'Needs nick', hasCard: 'yes', cardNickname: '' }), code('invalid_input'));
+    await assert.rejects(account(t, { name: 'Bad four', hasCard: 'yes', cardNickname: 'Card', cardLastFour: '12' }), code('invalid_input'));
+    await assert.rejects(account(t, { name: 'Number', hasCard: 'yes', cardNickname: '4111 1111 1111 1111' }), code('invalid_input'));
+  } finally { await t.db.drop(); }
+});
+
+test('a spending card that cannot be saved leaves no HSA account behind', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    await pm.createPaymentMethod(t.db.pool, t.actor, { nickname: 'HSA Visa', kind: 'credit_card', lastFour: '' }, 'r');
+    await assert.rejects(account(t, { hasCard: 'yes', cardNickname: 'hsa visa' }), code('conflict'));
+    assert.equal((await acc.listHsaAccounts(t.db.pool, t.actor, { archived: true })).items.length, 0, 'the account was rolled back');
+    assert.equal((await t.audit('hsa_account.created')).length, 0);
+    // The same name works once the card nickname is free.
+    const a = await account(t, { hasCard: 'yes', cardNickname: 'Second HSA Visa' });
+    assert.ok(a.paymentMethodId);
+  } finally { await t.db.drop(); }
+});
+
 test('cards: only an HSA/FSA card can be linked, only to an active account; the link can change without touching old payments', { skip: skipDb }, async () => {
   const t = await setup();
   try {

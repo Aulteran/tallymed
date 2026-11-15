@@ -214,7 +214,21 @@ export const paymentSchemas = {
     .refine((d) => d.hsaAccountId === null || d.kind === 'hsa_fsa_card'),
   updatePaymentMethod: z.strictObject({ id: uuid, version, nickname: methodNickname, kind: paymentMethodKind, lastFour: optional(lastFour), hsaAccountId: optional(uuid), ...csrf })
     .refine((d) => d.hsaAccountId === null || d.kind === 'hsa_fsa_card'),
-  createHsaAccount: z.strictObject({ name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour), ...csrf }),
+  // "Also has a spending card": the card is saved as an HSA/FSA card payment method linked to the new account, in the same step. The card
+  // fields are read only when the box is ticked, so an unticked form with stale card text behaves as a plain account.
+  createHsaAccount: z.strictObject({
+    name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour),
+    hasCard: checkbox, cardNickname: optionalText(60), cardLastFour: optional(lastFour), ...csrf,
+  }).transform((d, ctx) => {
+    const { hasCard, cardNickname, cardLastFour, ...rest } = d;
+    if (!hasCard) return { ...rest, card: null };
+    const nickname = methodNickname.safeParse(cardNickname);
+    if (!nickname.success) {
+      ctx.addIssue({ code: 'custom', message: 'a spending card needs a nickname' });
+      return z.NEVER;
+    }
+    return { ...rest, card: { nickname: nickname.data, kind: 'hsa_fsa_card' as const, lastFour: cardLastFour } };
+  }),
   updateHsaAccount: z.strictObject({ id: uuid, version, name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour), ...csrf }),
   archiveHsaAccount: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),
   archivePaymentMethod: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),

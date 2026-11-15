@@ -28,7 +28,7 @@ export default async function PaymentMethodsPage({ searchParams }: { searchParam
           <label htmlFor="lastFour">Last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.lastFour} />
           <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
           <select id="hsaAccountId" name="hsaAccountId" defaultValue={p.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>
-          <p className="muted">Link an HSA/FSA card to an HSA account and a payment recorded with it is paid directly from that HSA: nothing to claim. Without a link the card is only a label. <Link href="/hsa-accounts?add=1">Add an HSA account</Link></p>
+          <p className="muted">Link an HSA/FSA card to an HSA account and a payment recorded with it is paid directly from that HSA: nothing to claim. Without a link the card is only a label. <Link href="/hsa?add=1">Add an HSA account</Link></p>
           <button type="submit">Add payment method</button>
         </form>
       </AddDialog>
