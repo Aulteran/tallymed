@@ -8,7 +8,19 @@ rem Colors: ANSI codes are used in Windows Terminal, or in a console where Virtu
 rem DEVUP_COLOR=1 forces colors on, DEVUP_COLOR=0 or NO_COLOR=1 turns them off. Classic Command Prompt, one-time setup:
 rem   reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f   (then open a new Command Prompt window)
 setlocal EnableExtensions
-cd /d "%~dp0"
+rem cmd.exe re-reads this file by byte offset while it runs, and "Restart and update" can rewrite it with git pull. To stay safe, the
+rem launcher runs from a temporary copy; the original is only used to start and delete that copy. If the copy cannot be made it runs in place.
+set "DEVUP_HOME=%~dp0"
+if /i "%~1"=="--from-copy" set "DEVUP_HOME=%~2"
+set "DEVUP_COPY=%TEMP%\tallymed-devup-run-%RANDOM%.cmd"
+if /i not "%~1"=="--from-copy" (
+  copy /y "%~f0" "%DEVUP_COPY%" >nul 2>&1 && (
+    call "%DEVUP_COPY%" --from-copy "%~dp0"
+    del "%DEVUP_COPY%" >nul 2>&1
+    exit /b
+  )
+)
+cd /d "%DEVUP_HOME%"
 title TallyMed dev-up
 
 rem ---- Colors -------------------------------------------------------------------------------------------------------------------
@@ -137,13 +149,20 @@ set "STATN=0"
 set "STATLAST="
 for /f "delims=" %%l in ('git diff --stat %OLDHEAD% %NEWHEAD%') do call :statline "%%l"
 if %STATN% gtr 26 echo   %C_DIM%... %STATN% diffstat lines in all; showing the first 25.%C_OFF%
-if %STATN% gtr 25 echo   %C_DIM%%STATLAST%%C_OFF%
+if %STATN% gtr 25 call :statlast
 goto :eof
 
 :statline
 set /a STATN+=1
 set "STATLAST=%~1"
-if %STATN% leq 25 echo   %C_DIM%%~1%C_OFF%
+if %STATN% leq 25 call :statlast
+goto :eof
+
+rem Diffstat lines contain a pipe character; print them through delayed expansion so cmd does not treat it as a pipe.
+:statlast
+setlocal EnableDelayedExpansion
+echo   %C_DIM%!STATLAST!%C_OFF%
+endlocal
 goto :eof
 
 :bringup
