@@ -4,12 +4,16 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
+
+// Migration versions come from the directory, so a new migration does not need an edit here.
+const MIGRATIONS = readdirSync(new URL('../../apps/web/db/migrations/', import.meta.url)).filter((f) => /^\d{4}_.*\.sql$/.test(f)).map((f) => f.slice(0, 4)).sort();
+const LATEST = MIGRATIONS.at(-1);
 import { promisify } from 'node:util';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import * as handlers from '../../apps/web/server/http.ts';
@@ -308,7 +312,7 @@ test('a backup restores into an empty installation with every figure, document a
     const m = verified.manifest;
     assert.equal(m.format, 'tallymed-backup');
     assert.equal(m.app.version, JSON.parse(readFileSync(new URL('../../apps/web/package.json', import.meta.url), 'utf8')).version);
-    assert.equal(m.database.migrations.at(-1).version, '0011');
+    assert.equal(m.database.migrations.at(-1).version, LATEST);
     assert.deepEqual(m.tables.map((t) => t.name), BACKUP_TABLES.map((t) => t.name));
     for (const t of m.tables) {
       const expected = t.name === 'server_settings' ? 2 : liveCounts[t.name];
@@ -560,8 +564,8 @@ test('a backup from an older database version is refused by the app and loaded t
     // The command prepares an empty database at the backup's version, loads it, then applies the newer migrations.
     const env = { ...process.env, DATABASE_URL: blank.url, TALLYMED_DOCUMENTS_DIR: '' };
     const out = await run(process.execPath, ['apps/web/cli/backup.ts', 'restore', file], { env });
-    assert.match(out.stdout, /"migrationsAppliedAfterRestore": \[\s*"0011"\s*\]/);
-    assert.equal((await blank.pool.query(`select max(version) v from schema_migrations`)).rows[0].v, '0011');
+    assert.deepEqual(JSON.parse(out.stdout.slice(0, out.stdout.lastIndexOf('}') + 1)).migrationsAppliedAfterRestore, MIGRATIONS.filter((v) => v > '0010'));
+    assert.equal((await blank.pool.query(`select max(version) v from schema_migrations`)).rows[0].v, LATEST);
     assert.equal((await blank.pool.query(`select email from users`)).rows[0].email, 'admin@example.test');
     assert.equal((await blank.pool.query(`select count(*)::int n from audit_events where action = 'backup.restored'`)).rows[0].n, 1);
     const ctx = { config: testConfig({}, blank.url), pool: blank.pool };
@@ -785,7 +789,7 @@ test('the backup command creates, verifies and restores, and reports a damaged f
 
     const verified = JSON.parse((await cli(['verify', file], {})).stdout);
     assert.equal(verified.ok, true);
-    assert.equal(verified.databaseVersion, '0011');
+    assert.equal(verified.databaseVersion, LATEST);
     assert.equal(verified.ledger.openBalanceCents, (await ledgerSummary(f.db.pool)).openBalanceCents);
     assert.equal(JSON.stringify(verified).includes('example.test'), false, 'verify prints counts and checksums, not records');
     const damaged = path.join(work, 'damaged.tar.gz');
