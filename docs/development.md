@@ -4,7 +4,7 @@ Use Node.js 24, npm, and Docker Compose v2 for the optional container stack. Ins
 
 ## Private app database, first-run setup and checks
 
-The private app needs PostgreSQL and these variables: `DATABASE_URL`, `TALLYMED_CANONICAL_ORIGIN` and optionally `TALLYMED_TRUSTED_PROXIES`, `TALLYMED_SECRETS_KEY` (needed only to store an SMTP password) and `TALLYMED_PROXY_SECRET` and `TALLYMED_SETUP_TOKEN` (see `.env.example`). With the Compose stack running:
+The private app needs PostgreSQL and these variables: `DATABASE_URL`, `TALLYMED_CANONICAL_ORIGIN` and optionally `TALLYMED_TRUSTED_PROXIES`, `TALLYMED_SECRETS_KEY` (needed to store an SMTP password or to use provider sign-in) and `TALLYMED_PROXY_SECRET` and `TALLYMED_SETUP_TOKEN` (see `.env.example`). With the Compose stack running:
 
 ```sh
 docker compose run --rm web node apps/web/cli/migrate.ts
@@ -41,6 +41,8 @@ Work branches from `dev` (the default branch) and pull requests target `dev`; `m
 ## Server settings, email and trusted proxies (development)
 
 Administrator-editable settings live in the `server_settings` table (migration 0010; one row per group: `general`, `documents`, `email`, `proxy`). `server/settings.ts` reads them at most every five seconds per process and applies them in place to the config object (stored value, then environment, then default). `server/services/settings.ts` holds the admin-only mutations: each re-checks the role, asks for the administrator's password (five wrong answers in 15 minutes lock the check), is optimistic-locked by the group version and audits in the same transaction. Secrets are encrypted by `server/secrets.ts` (AES-256-GCM, HKDF per setting, key from `TALLYMED_SECRETS_KEY`).
+
+Sign-in through an OpenID Connect provider (migration 0013) is in `server/oidc.ts` (protocol only: discovery, PKCE, code exchange, ID token verification, guarded outbound requests), `server/services/signin.ts` (settings, who may sign in, the rules for turning passwords off) and `server/repositories/identities.ts`. The routes are `GET /api/auth/oidc/start` and `GET /api/auth/oidc/callback`. `tests/web/oidc.test.mjs` runs a mock provider on loopback; tests and local experiments against an http provider need `TALLYMED_OIDC_ALLOW_INSECURE_ISSUER=true`. `signinState` decides what the sign-in page offers and whether `login()` accepts passwords.
 
 Email goes through `server/email.ts` (`isEmailConfigured`, `sendEmail`; see operations.md). To try it locally, run a throwaway mail catcher on port 1025 (for example Mailpit), choose that port, security "None", and tick "Allow loopback and link-local addresses" (from the Compose network use the service name instead). The test suite uses a fake SMTP server (`tests/web/settings.test.mjs`).
 

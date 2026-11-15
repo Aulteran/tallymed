@@ -185,3 +185,11 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Changed: `AddDialog.tsx` (new), list pages for providers, members, visits, documents, users, payments, plans and bills, `ui.tsx` (`pick`, `NarrowForm` in a dialog), `documents.tsx` (`UploadForm` heading), `icons.tsx` (plus), `globals.css`, `scripts/check-app-browser.mjs`, docs, decisions, screenshots (`docs/design/screenshots/add-forms-*`).
 - Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, a real screen reader or phone.
 - Wiki: checked the 27 pages; none describes where the add forms sit or quotes their headings, so no wiki change is needed.
+
+## Sign-in with an OpenID Connect provider handoff
+
+- Branch: `feature/oidc-sign-in` (PR against `dev`; head SHA is on the PR). Migration `0013_oidc_sign_in.sql` (`user_identities`, the `signin` settings group). Independent security review pending.
+- Changed: `server/oidc.ts` (protocol), `server/services/signin.ts` (settings, account matching, password-off rules), `server/repositories/identities.ts`, `handleOidcStart` and `handleOidcCallback` and three settings actions in `server/http.ts`, the password-off check in `services/auth.ts`, Server settings > Sign-in page, the sign-in page, `TALLYMED_PASSWORD_LOGIN` and `TALLYMED_OIDC_ALLOW_INSECURE_ISSUER`, docs, decisions, `tests/web/oidc.test.mjs` (11 tests with a mock provider).
+- Checks run locally (Node 22, PostgreSQL 16) are listed on the PR. Not run: Node 24, Docker/Compose, any real provider (Authentik, Keycloak, Google, Microsoft Entra ID), a real reverse proxy.
+- Reviewer focus: state, nonce and PKCE binding; ID token verification; linking by verified email; that no administrator can be created; the outbound request guard; the rules that keep password sign-in available; the client secret never leaving the server.
+- Follow-up: the backup pull request (#23) classifies every table. Whichever of the two merges second must add `user_identities` to `server/backup/tables.ts` (include it, so linked accounts survive a restore) and decide that the `signin` settings group is not restored (its secret cannot be), and append `0013` handling where needed.

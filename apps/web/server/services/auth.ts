@@ -11,6 +11,7 @@ import { findOpenEmailReset, findPending, markUsed, supersedeOpenEmailResets } f
 import { findUserByEmail, findUserInHousehold, setTemporaryPassword } from '../repositories/users.ts';
 import { refreshRuntimeConfig } from '../settings.ts';
 import { digest, emailKey, newToken } from '../tokens.ts';
+import { signinState } from './signin.ts';
 
 export const THROTTLE_WINDOW_SECONDS = 15 * 60;
 export const MAX_ACCOUNT_FAILURES = 5;
@@ -33,6 +34,8 @@ export async function login(
   input: { email: string; password: string; ip: string | null; requestId: string; previousToken?: string | null },
 ): Promise<LoginResult> {
   await refreshRuntimeConfig(config, pool);
+  // An administrator who signs in through the provider may have switched passwords off. Checked before any password work or counting.
+  if (!(await signinState(pool, config)).passwordLogin) throw new AppError('password_login_disabled');
   const key = emailKey(input.email);
   const ipKey = input.ip ?? 'untrusted';
   // Check and reserve atomically: the attempt is recorded as a failure before the password is verified, under

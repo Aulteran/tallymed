@@ -4,6 +4,7 @@ const TABS = [
   { href: '/settings', label: 'General' },
   { href: '/settings/proxy', label: 'Reverse proxy' },
   { href: '/settings/email', label: 'Email (SMTP)' },
+  { href: '/settings/signin', label: 'Sign-in' },
 ] as const;
 
 export function SettingsTabs({ current }: { current: (typeof TABS)[number]['href'] }) {
@@ -17,6 +18,7 @@ export function SettingsTabs({ current }: { current: (typeof TABS)[number]['href
 const SAVED: Record<string, string> = {
   general: 'General settings saved.', documents: 'Document limits saved.', proxy: 'Reverse proxy settings saved.',
   email: 'Email settings saved. Send a test email to check them.', email_cleared: 'Email settings removed.',
+  signin: 'Sign-in settings saved.', signin_unlinked: 'The link was removed. That account signs in with its password until it is linked again.',
 };
 export const savedMessage = (code: string | undefined) => (code ? SAVED[code] ?? null : null);
 

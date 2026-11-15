@@ -23,6 +23,11 @@ export type ErrorCode =
   | 'secrets_key_missing'
   | 'confirmation_required'
   | 'email_not_configured'
+  | 'sso_unavailable'
+  | 'sso_failed'
+  | 'sso_no_account'
+  | 'sso_not_proven'
+  | 'password_login_disabled'
   | 'internal';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -50,6 +55,11 @@ const STATUS: Record<ErrorCode, number> = {
   secrets_key_missing: 409,
   confirmation_required: 400,
   email_not_configured: 409,
+  sso_unavailable: 409,
+  sso_failed: 401,
+  sso_no_account: 403,
+  sso_not_proven: 409,
+  password_login_disabled: 403,
   internal: 500,
 };
 

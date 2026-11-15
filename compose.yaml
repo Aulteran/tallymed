@@ -29,6 +29,8 @@ services:
       TALLYMED_TRUSTED_PROXIES: ${TALLYMED_TRUSTED_PROXIES:-}
       # Optional: key that encrypts the SMTP password stored by Settings > Email. `openssl rand -base64 32`; keep a copy in a password manager, apart from your backups.
       TALLYMED_SECRETS_KEY: ${TALLYMED_SECRETS_KEY:-}
+      TALLYMED_PASSWORD_LOGIN: ${TALLYMED_PASSWORD_LOGIN:-}
+      TALLYMED_OIDC_ALLOW_INSECURE_ISSUER: ${TALLYMED_OIDC_ALLOW_INSECURE_ISSUER:-}
       # Optional one-time setup token for creating the first administrator. Empty: the server generates one and prints it to its console.
       TALLYMED_SETUP_TOKEN: ${TALLYMED_SETUP_TOKEN:-}
       # Private document volume (outside the web root). Backed up together with PostgreSQL.
