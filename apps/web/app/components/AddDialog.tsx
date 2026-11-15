@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
-import { Icon } from './icons.tsx';
+import { Icon, type IconName } from './icons.tsx';
 
 /** Closes a modal dialog when the click lands on its backdrop (the dialog element itself), not on its content. */
 export const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => { if (e.target === e.currentTarget) e.currentTarget.close(); };
@@ -14,8 +14,10 @@ export const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => { if (e.tar
  * dialog reopens with the message and the typed values in view. The button is a GET form that adds `add=1`, so it still opens
  * the form without JavaScript; with JavaScript the click opens the dialog in place.
  */
-export function AddDialog({ label, title = label, open = false, keep = {}, children }: {
+export function AddDialog({ label, title = label, open = false, keep = {}, icon = 'plus', secondary = false, requiredNote = true, children }: {
   label: string; title?: string; open?: boolean;
+  /** Icon on the opening button (null for none), whether it is a secondary button, and whether the dialog shows the "* required" note. */
+  icon?: IconName | null; secondary?: boolean; requiredNote?: boolean;
   /** Current query values (filters) to keep in the address when the button is used without JavaScript. */
   keep?: Record<string, string>;
   children: ReactNode;
@@ -44,7 +46,7 @@ export function AddDialog({ label, title = label, open = false, keep = {}, child
     <form method="get" className="page-action">
       {Object.entries(keep).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
       <input type="hidden" name="add" value="1" />
-      <button ref={opener} type="submit" aria-haspopup="dialog" onClick={(e) => { e.preventDefault(); show(); }}><Icon name="plus" />{label}</button>
+      <button ref={opener} type="submit" className={secondary ? 'secondary' : undefined} aria-haspopup="dialog" onClick={(e) => { e.preventDefault(); show(); }}>{icon && <Icon name={icon} />}{label}</button>
     </form>
     <dialog ref={dialog} className="modal form-modal" open={open} aria-labelledby="add-dialog-title" onClick={closeOnBackdrop} onClose={onClose}>
       <div className="modal-head">
@@ -52,7 +54,7 @@ export function AddDialog({ label, title = label, open = false, keep = {}, child
         <button type="button" className="icon-button" aria-label="Close" title="Close" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
       </div>
       <div className="modal-body">
-        <p className="muted required-note"><span className="required-mark" aria-hidden="true">*</span> required</p>
+        {requiredNote && <p className="muted required-note"><span className="required-mark" aria-hidden="true">*</span> required</p>}
         {children}
       </div>
     </dialog>
