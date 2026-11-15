@@ -69,9 +69,12 @@ export async function startBackup(
     backup.done.then(
       (o) => recordAudit(ctx.pool, { ...entry, action: 'backup.completed', detail: { encrypted: o.encrypted, bytes: o.bytes, sha256: o.sha256, rows: o.rows, documents: o.documents } }),
       (error: unknown) => {
-        const e = error as { code?: string; name?: string } | null;
-        const cancelled = e?.code === 'ERR_STREAM_PREMATURE_CLOSE' || e?.code === 'ABORT_ERR' || e?.name === 'AbortError';
-        const reason = error instanceof BackupError ? error.code : cancelled ? 'download_cancelled' : 'internal';
+        // Tearing a pipeline down can report several errors at once (an AggregateError on newer Node versions): the cancellation itself
+        // and what each stage raised while closing. A real backup error wins; otherwise any cancellation among them means cancelled.
+        const all = (error instanceof AggregateError ? error.errors : [error]) as Array<{ code?: string; name?: string } | null>;
+        const failure = all.find((e) => e instanceof BackupError) as BackupError | undefined;
+        const cancelled = all.some((e) => e?.code === 'ERR_STREAM_PREMATURE_CLOSE' || e?.code === 'ABORT_ERR' || e?.name === 'AbortError');
+        const reason = failure ? failure.code : cancelled ? 'download_cancelled' : 'internal';
         if (reason === 'internal') logError('backup.failed', error, { requestId });
         return recordAudit(ctx.pool, { ...entry, action: 'backup.failed', detail: { reason } });
       },
