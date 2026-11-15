@@ -66,9 +66,9 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string }> = [
            where s.n < 1 or s.scheduled <> r.total_cents`,
   },
   {
-    rule: 'a plan covers only confirmed bills of its provider',
+    rule: 'a plan covers only confirmed bills of its household',
     sql: `select pb.plan_id from payment_plan_bills pb
-           where not exists (select 1 from payment_plans p join bills b on b.household_id = p.household_id and b.provider_id = p.provider_id
+           where not exists (select 1 from payment_plans p join bills b on b.household_id = p.household_id
                               where p.id = pb.plan_id and b.id = pb.bill_id and b.amount_status = 'confirmed')`,
   },
   {

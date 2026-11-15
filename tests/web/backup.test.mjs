@@ -125,12 +125,12 @@ async function richFixture() {
   const p3 = await t.pay1({ amount: '12.34' });
   await pay.voidPayment(pool, actor, { idempotencyKey: t.key(), paymentId: p3.id, voidedOn: '2026-04-02', reason: 'Entered twice' }, 'r');
   // A plan with a match, then a revision that carries it forward; a second plan that is cancelled.
-  const plan = await plans.createPlan(pool, actor, { idempotencyKey: t.key(), name: 'Clinic plan', providerId: p, billId: a.id, totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-06-01', cadence: 'monthly' }, 'r');
+  const plan = await plans.createPlan(pool, actor, { idempotencyKey: t.key(), name: 'Clinic plan', billId: a.id, totalAmount: '300.00', installmentCount: '3', firstDueDate: '2026-06-01', cadence: 'monthly' }, 'r');
   const d0 = await plans.getPlanDetail(pool, actor, plan.id, { asOf: '2026-07-15' });
   await plans.matchInstallment(pool, actor, { idempotencyKey: t.key(), installmentId: d0.installments[0].id, allocationId: allocA, amount: '100.00' }, 'r');
   const d1 = await plans.getPlanDetail(pool, actor, plan.id, { asOf: '2026-07-15' });
   await plans.revisePlan(pool, actor, { idempotencyKey: t.key(), planId: plan.id, version: d1.plan.version, reason: 'Lower monthly amount', totalAmount: '300.00', installmentCount: '6', firstDueDate: '2026-06-01', cadence: 'monthly' }, 'r');
-  const plan2 = await plans.createPlan(pool, actor, { idempotencyKey: t.key(), name: 'Short plan', providerId: p, billId: c.id, totalAmount: '40.00', installmentCount: '2', firstDueDate: '2026-08-01', cadence: 'monthly' }, 'r');
+  const plan2 = await plans.createPlan(pool, actor, { idempotencyKey: t.key(), name: 'Short plan', billId: c.id, totalAmount: '40.00', installmentCount: '2', firstDueDate: '2026-08-01', cadence: 'monthly' }, 'r');
   const d2 = await plans.getPlanDetail(pool, actor, plan2.id, { asOf: '2026-07-15' });
   await plans.cancelPlan(pool, actor, { planId: plan2.id, version: d2.plan.version, reason: 'Paid in full instead' }, 'r');
   // HSA: decision, claim, partial receipt, a receipt that is reversed, a released line, and a refund after the claim (needs review stays possible).
