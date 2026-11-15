@@ -7,13 +7,13 @@ export type InstallmentState = 'paid' | 'partial' | 'unpaid';
 
 export interface Plan {
   id: string; name: string; providerId: string; providerName: string; status: 'active' | 'cancelled'; cancelReason: string | null;
-  cancelledAt: Date | null; version: number; createdAt: Date; createdSort: string; revisionId: string; revisionNo: number; totalCents: string;
+  cancelledAt: Date | null; version: number; startedOn: string; createdAt: Date; createdSort: string; revisionId: string; revisionNo: number; totalCents: string;
   cadence: string; installmentCount: number; matchedCents: string; billCount: number; nextDueDate: string | null; overdueCount: number;
 }
 
 const MATCHED = `coalesce((select sum(m.amount_cents) from installment_matches m where m.installment_id = i.id), 0)`;
 const PLAN_SELECT = `select p.id, p.name, p.provider_id as "providerId", pr.name as "providerName", p.status, p.cancel_reason as "cancelReason",
-    p.cancelled_at as "cancelledAt", p.version, p.created_at as "createdAt", p.created_at::text as "createdSort", r.id as "revisionId",
+    p.cancelled_at as "cancelledAt", p.version, p.started_on::text as "startedOn", p.created_at as "createdAt", p.created_at::text as "createdSort", r.id as "revisionId",
     r.revision_no as "revisionNo", r.total_cents::text as "totalCents", r.cadence,
     (select count(*)::int from plan_installments i where i.revision_id = r.id) as "installmentCount",
     (select coalesce(sum(m.amount_cents), 0) from installment_matches m where m.revision_id = r.id)::text as "matchedCents",
@@ -166,8 +166,8 @@ export async function matchedNet(db: Queryable, householdId: string, installment
   return BigInt(rows[0]!.total);
 }
 
-export async function insertPlan(db: Queryable, v: { id: string; householdId: string; userId: string; providerId: string; name: string }): Promise<void> {
-  await db.query(`insert into payment_plans (id, household_id, provider_id, name, created_by) values ($1, $2, $3, $4, $5)`, [v.id, v.householdId, v.providerId, v.name, v.userId]);
+export async function insertPlan(db: Queryable, v: { id: string; householdId: string; userId: string; providerId: string; name: string; startedOn: string }): Promise<void> {
+  await db.query(`insert into payment_plans (id, household_id, provider_id, name, started_on, created_by) values ($1, $2, $3, $4, $5, $6)`, [v.id, v.householdId, v.providerId, v.name, v.startedOn, v.userId]);
 }
 
 export async function insertPlanBill(db: Queryable, householdId: string, planId: string, billId: string): Promise<void> {

@@ -153,6 +153,21 @@ export async function listMatchableAllocations(db: Queryable, householdId: strin
   return rows;
 }
 
+/** Payments that hold an allocation on any of the given bills (to lock them before reading allocations). */
+export async function paymentIdsOnBills(db: Queryable, householdId: string, billIds: string[]): Promise<string[]> {
+  const { rows } = await db.query<{ payment_id: string }>(
+    `select distinct payment_id from payment_entries where household_id = $1 and kind = 'allocation' and bill_id = any($2::uuid[]) order by payment_id`, [householdId, billIds]);
+  return rows.map((r) => r.payment_id);
+}
+
+/** Every allocation of the given bills that still holds cash no plan has matched, oldest payment first. */
+export async function listUnmatchedAllocations(db: Queryable, householdId: string, billIds: string[]): Promise<AllocationNet[]> {
+  const { rows } = await db.query<AllocationNet>(
+    `select * from (${ALLOCATION_SELECT} where n.household_id = $1 and n.bill_id = any($2::uuid[])) a
+     where a."netCents"::bigint - a."matchedCents"::bigint > 0 order by a."paidOn", a."allocationId"`, [householdId, billIds]);
+  return rows;
+}
+
 export interface BillPaymentLine {
   entryId: string; paymentId: string; kind: EntryKind; amountCents: string; effectiveDate: string; reason: string; paidOn: string;
   method: string; reference: string | null; allocationId: string | null; createdByName: string | null; paymentVoided: boolean;

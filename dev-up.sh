@@ -6,11 +6,16 @@
 # this start only and prints it on screen once. It is never written to .env, a log or a temporary file. If you define
 # TALLYMED_SETUP_TOKEN yourself (.env or environment) that value is used and not displayed.
 # Colors are used only on a terminal. They are off when output is piped or redirected, or when NO_COLOR is set (https://no-color.org).
+# Force colors with DEVUP_COLOR=1 (even when piped); DEVUP_COLOR=0 turns them off.
 set -u
 cd "$(dirname "$0")" || exit 1
 
-# color_on FD: true when file descriptor FD is a terminal and colors are not disabled.
-color_on() { [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ] && [ -t "$1" ]; }
+# color_on FD: true when colors are wanted for file descriptor FD. NO_COLOR and DEVUP_COLOR=0 always win; DEVUP_COLOR=1 forces them on.
+color_on() {
+  [ -z "${NO_COLOR:-}" ] || return 1
+  case "${DEVUP_COLOR:-}" in 0) return 1 ;; 1) return 0 ;; esac
+  [ "${TERM:-dumb}" != dumb ] && [ -t "$1" ]
+}
 
 if color_on 1; then
   BOLD=$'\033[1m' DIM=$'\033[2m' RED=$'\033[31m' GREEN=$'\033[32m' YELLOW=$'\033[33m' CYAN=$'\033[36m' RESET=$'\033[0m'
