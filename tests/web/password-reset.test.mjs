@@ -293,7 +293,7 @@ function routeFiles(dir = routeDir, base = '') {
 
 // Every API route and what the password-change gate does to it. A new route fails the inventory test until it is classified here.
 const CLASSIFIED = {
-  '/auth/login': 'public', '/auth/forgot-password': 'public', '/invitations/accept': 'public', '/setup': 'public', '/setup/restore': 'public',
+  '/auth/login': 'public', '/auth/oidc/start': 'public', '/auth/oidc/callback': 'public', '/auth/forgot-password': 'public', '/invitations/accept': 'public', '/setup': 'public', '/setup/restore': 'public',
   '/auth/logout': 'allowed', '/auth/change-password': 'allowed',
   '/operators/invite': 'gated', '/operators/update': 'gated', '/operators/reset-password': 'gated', '/operators/invitations/revoke': 'gated',
   '/expenses/[...action]': 'gated', '/documents/[...action]': 'gated', '/assistant/[...action]': 'gated', '/settings/[...action]': 'gated',
@@ -411,7 +411,7 @@ test('migration 0009 upgrades existing accounts: nobody is forced to change a pa
     await seedHousehold(db.pool);
     await db.pool.query(`insert into sessions (user_id, household_id, token_hash, expires_at)
       select id, household_id, decode(repeat('ab', 32), 'hex'), now() + interval '1 hour' from users`);
-    assert.deepEqual(await migrate(db.pool), ['0009', '0010', '0011', '0012', '0013']);
+    assert.deepEqual(await migrate(db.pool), ['0009', '0010', '0011', '0012', '0013', '0014']);
     const u = (await db.pool.query('select must_change_password, password_changed_at from users')).rows[0];
     assert.deepEqual(u, { must_change_password: false, password_changed_at: null });
     assert.equal((await db.pool.query('select count(*)::int n from sessions where revoked_at is null')).rows[0].n, 1);

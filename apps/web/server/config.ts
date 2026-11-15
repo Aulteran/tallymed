@@ -35,6 +35,10 @@ export interface AppConfig {
    * Never shown, logged or returned.
    */
   secretsKey: Buffer | null;
+  /** Development and tests only: accept an http or loopback OpenID Connect issuer. Never set this on a real installation. */
+  oidcAllowInsecure: boolean;
+  /** Break-glass: keep password sign-in available even when an administrator switched it off in Sign-in settings. */
+  forcePasswordLogin: boolean;
   /**
    * Addresses or CIDR ranges of the reverse proxies whose forwarded headers are believed, as seen on the TCP connection. Empty (the default)
    * trusts no address. Environment value TALLYMED_TRUSTED_PROXIES (comma separated); an administrator can override it in the settings.
@@ -194,6 +198,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     setupTokenError = error instanceof Error ? error.message : 'invalid TALLYMED_SETUP_TOKEN';
     log('warn', 'config.setup_token_invalid', { reason: setupTokenError, note: 'ignored once an administrator exists; setup stays closed until fixed' });
   }
+  if (env.TALLYMED_OIDC_ALLOW_INSECURE_ISSUER === 'true') {
+    log('warn', 'config.oidc_insecure_issuer_allowed', { note: 'http and loopback sign-in providers are accepted. Use this only with a local test provider.' });
+  }
   return {
     databaseUrl,
     canonicalOrigin: origin,
@@ -212,6 +219,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     setupToken,
     setupTokenError,
     secretsKey: parseSecretsKey(env.TALLYMED_SECRETS_KEY),
+    oidcAllowInsecure: env.TALLYMED_OIDC_ALLOW_INSECURE_ISSUER === 'true',
+    forcePasswordLogin: env.TALLYMED_PASSWORD_LOGIN === 'on',
     trustedProxies: parseTrustedProxies(env.TALLYMED_TRUSTED_PROXIES),
     restoreMaxBytes: intEnv(env, 'TALLYMED_RESTORE_MAX_MB', 4096, 1, 1_048_576) * 1024 * 1024,
   };

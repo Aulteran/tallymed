@@ -5,7 +5,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
+import http from 'node:http';
 import { cpSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,11 +33,13 @@ const restoreDbName = `tallymed_ui_restore_${randomBytes(5).toString('hex')}`;
 let app;
 let restoredApp;
 let browser;
+let provider;
 const ok = (name) => console.log(`ok - ${name}`);
 
 async function cleanup() {
   await browser?.close().catch(() => {});
   app?.kill('SIGTERM');
+  provider?.close();
   restoredApp?.kill('SIGTERM');
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();
@@ -58,6 +61,8 @@ try {
   const env = {
     ...process.env, TALLYMED_DOCUMENTS_DIR: documentsDir, DATABASE_URL: dbUrl.href, TALLYMED_CANONICAL_ORIGIN: origin, TALLYMED_SOURCE_URL: 'https://github.com/example/tallymed',
     NEXT_TELEMETRY_DISABLED: '1', TALLYMED_SETUP_TOKEN: setupToken,
+    // For the provider sign-in check below: a key for the client secret, and permission to use a local http test provider.
+    TALLYMED_SECRETS_KEY: randomBytes(32).toString('base64'), TALLYMED_OIDC_ALLOW_INSECURE_ISSUER: 'true',
   };
   let r = spawnSync('node', ['apps/web/cli/migrate.ts'], { env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
@@ -491,6 +496,96 @@ try {
   assert.match(await text(), /Not configured/);
   ok('server settings, reverse proxy and email pages: accessible, saved with password confirmation, proxy trust visible');
 
+  // Sign-in with an identity provider: a local OpenID Connect test provider that approves every request as the administrator's verified
+  // address. Configured in Server settings, used from the sign-in page in a fresh browser, then passwords are turned off and on again.
+  {
+    const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const codes = new Map();
+    const b64 = (v) => Buffer.from(JSON.stringify(v)).toString('base64url');
+    let issuer = '';
+    provider = http.createServer((req, res) => {
+      const url = new URL(req.url, issuer);
+      const json = (body) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+      if (url.pathname === '/.well-known/openid-configuration') return json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`, response_types_supported: ['code'], code_challenge_methods_supported: ['S256'] });
+      if (url.pathname === '/jwks') return json({ keys: [{ ...keys.publicKey.export({ format: 'jwk' }), kid: 'k1', use: 'sig', alg: 'RS256' }] });
+      if (url.pathname === '/authorize') {
+        const q = url.searchParams;
+        const code = randomBytes(12).toString('base64url');
+        codes.set(code, { nonce: q.get('nonce'), challenge: q.get('code_challenge') });
+        res.writeHead(302, { location: `${q.get('redirect_uri')}?code=${code}&state=${q.get('state')}` });
+        return res.end();
+      }
+      if (url.pathname === '/token') {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          const form = new URLSearchParams(body);
+          const entry = codes.get(form.get('code'));
+          codes.delete(form.get('code'));
+          if (!entry || entry.challenge !== createHash('sha256').update(form.get('code_verifier') ?? '').digest('base64url')) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"error":"invalid_grant"}'); }
+          const now = Math.floor(Date.now() / 1000);
+          const signed = `${b64({ alg: 'RS256', kid: 'k1' })}.${b64({ iss: issuer, aud: 'tallymed-ui', sub: 'ui-admin', iat: now, exp: now + 300, nonce: entry.nonce, email: 'admin@example.test', email_verified: true })}`;
+          json({ id_token: `${signed}.${createSign('sha256').update(signed).sign(keys.privateKey).toString('base64url')}` });
+        });
+        return undefined;
+      }
+      res.writeHead(404);
+      return res.end();
+    });
+    await new Promise((resolve) => provider.listen(0, '127.0.0.1', resolve));
+    issuer = `http://127.0.0.1:${provider.address().port}`;
+
+    await page.goto(`${origin}/settings/signin`);
+    await a11y('sign-in settings');
+    assert.match(await text(), new RegExp(`${origin.replace(/[.]/g, '\\.')}/api/auth/oidc/callback`), 'the redirect address to register is shown');
+    await page.check('input[name="enabled"]');
+    await page.fill('#issuer', issuer);
+    await page.fill('#clientId', 'tallymed-ui');
+    await page.fill('#clientSecret', 'synthetic client secret for the browser check');
+    await page.fill('#buttonLabel', 'Example ID');
+    await page.fill('#signin-pw', password);
+    await page.click('button:has-text("Save sign-in settings")');
+    assert.match(await text(), /Sign-in settings saved/);
+    assert.equal(await page.inputValue('#clientSecret'), '', 'the saved secret is never sent back to the page');
+    await page.click('button:has-text("Test connection")');
+    assert.match(await text(), /The provider answered/);
+    // Passwords cannot be turned off before this administrator has signed in through the provider.
+    await page.check('input[name="passwordLoginDisabled"]');
+    await page.fill('#signin-pw', password);
+    await page.click('button:has-text("Save sign-in settings")');
+    assert.match(await text(), /Password sign-in was left on/);
+
+    const viaProvider = await (await browser.newContext({ colorScheme })).newPage();
+    await viaProvider.goto(`${origin}/login`);
+    const loginA11y = await new AxeBuilder({ page: viaProvider }).analyze();
+    assert.deepEqual(loginA11y.violations.map((v) => v.id), [], 'accessibility on sign in with a provider button');
+    if (shots) await viaProvider.screenshot({ path: path.join(shots, 'sign-in-with-provider.png'), fullPage: true });
+    await viaProvider.click('a:has-text("Sign in with Example ID")');
+    await viaProvider.waitForURL(`${origin}/`);
+    assert.match(await viaProvider.locator('main').innerText(), /Overview/);
+    assert.equal((await viaProvider.context().cookies()).some((c) => c.name.includes('oidc')), false, 'the flow cookie is gone after sign-in');
+    // Now the same administrator, signed in through the provider, may turn passwords off; the sign-in page then shows only the button.
+    await viaProvider.goto(`${origin}/settings/signin`);
+    assert.match(await viaProvider.locator('main').innerText(), /Alex Example[\s\S]*matched by verified email/);
+    await viaProvider.check('input[name="passwordLoginDisabled"]');
+    await viaProvider.fill('#signin-pw', password);
+    await viaProvider.click('button:has-text("Save sign-in settings")');
+    assert.match(await viaProvider.locator('main').innerText(), /Password sign-in: Off/);
+    const noPassword = await (await browser.newContext({ colorScheme })).newPage();
+    await noPassword.goto(`${origin}/login`);
+    assert.match(await noPassword.locator('main').innerText(), /Password sign-in is turned off/);
+    assert.equal(await noPassword.locator('#password').count(), 0);
+    assert.equal((await noPassword.request.post(`${origin}/api/auth/login`, { headers: { origin }, data: { email: 'admin@example.test', password } })).status(), 403);
+    await noPassword.close();
+    // Back on for the rest of this check, which signs other people in with passwords.
+    await viaProvider.uncheck('input[name="passwordLoginDisabled"]');
+    await viaProvider.fill('#signin-pw', password);
+    await viaProvider.click('button:has-text("Save sign-in settings")');
+    assert.match(await viaProvider.locator('main').innerText(), /Password sign-in: On/);
+    if (shots) await viaProvider.screenshot({ path: path.join(shots, 'sign-in-settings-linked.png'), fullPage: true });
+    await viaProvider.close();
+  }
+  ok('provider sign-in: configured and tested in Server settings, used from the sign-in page, passwords turned off only after proof and back on');
   // Backup: an administrator downloads an encrypted backup, and a second, empty installation is restored from it on its setup page.
   await page.goto(`${origin}/settings/backup`);
   await a11y('backup settings');
@@ -577,7 +672,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/backup`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);

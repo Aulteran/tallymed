@@ -89,7 +89,7 @@ export const settingsSchemas = {
 
 // ---------- shared commit ----------
 
-type Detail = Record<string, string | number | boolean | null>;
+export type Detail = Record<string, string | number | boolean | null>;
 const show = (v: unknown): string | number | boolean | null => (v === undefined || v === null ? null : Array.isArray(v) ? v.join(' ').slice(0, 300) : typeof v === 'string' ? v.slice(0, 300) : (v as number | boolean));
 
 /** Changed fields as `field.from` / `field.to`. Fields named in `hide` only record that they changed. */
@@ -105,7 +105,7 @@ function diff(before: object, after: object, hide: string[] = []): Detail {
   return out;
 }
 
-async function commit<K extends GroupKey>(
+export async function commit<K extends GroupKey>(
   pool: Pool, config: AppConfig, actor: Actor, requestId: string, group: K, expected: number,
   compute: (current: StoredGroup<K>) => { value: GroupValue[K]; secret: string | null; extra?: Detail; hide?: string[] },
   action = 'settings.updated',

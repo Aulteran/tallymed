@@ -15,12 +15,18 @@ export interface TableSpec {
   where?: string;
   /** Columns exported as a fixed expression instead of the stored value, so a secret never enters the archive. */
   replace?: Record<string, string>;
+  /** The migration that created the table, for tables added after backups existed. A database or backup older than it has no such table. */
+  since?: string;
 }
 
 /** In foreign-key order: a table comes after every table it references. */
 export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'households', orderBy: 'id' },
   { name: 'users', orderBy: 'id' },
+  // Links between accounts and identity-provider subjects. The provider settings themselves stay behind (the 'signin' group is not in the
+  // list below), so a link is used again only once an administrator enters the same issuer on the restored server; until then people sign
+  // in with their passwords.
+  { name: 'user_identities', orderBy: 'id', since: '0014' },
   { name: 'bootstrap_state', orderBy: 'singleton' },
   { name: 'family_members', orderBy: 'id' },
   { name: 'providers', orderBy: 'id' },
@@ -47,8 +53,8 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'mcp_clients', orderBy: 'id', replace: { token_hash: `sha256(convert_to('tallymed-backup:no-credential:' || id::text, 'UTF8'))` } },
   { name: 'document_match_proposals', orderBy: 'id' },
   { name: 'idempotency_records', orderBy: 'id' },
-  // Only the groups that describe the household's preferences. Email and reverse-proxy settings describe the old server's network, and the
-  // encrypted SMTP password could not be read without the old server's key anyway; they are entered again on the new server.
+  // Only the groups that describe the household's preferences. Email, sign-in provider and reverse-proxy settings describe the old server's network, and the
+  // encrypted SMTP password and provider client secret could not be read without the old server's key anyway; they are entered again on the new server.
   { name: 'server_settings', orderBy: 'group_key collate "C"', where: `group_key in ('general', 'documents')`, replace: { secret_ciphertext: 'null::text' } },
   { name: 'audit_events', orderBy: 'id' },
 ];
@@ -62,6 +68,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   login_attempts: 'Sign-in throttle counters.',
   schema_migrations: 'Recorded in the backup manifest instead, and recreated by the migration command.',
 };
+
+/** The tables a database at these applied migrations has, and so the tables a backup of it holds. */
+export const tablesAt = (appliedVersions: readonly string[]): readonly TableSpec[] =>
+  BACKUP_TABLES.filter((t) => !t.since || appliedVersions.includes(t.since));
 
 export const quoteIdent = (name: string) => {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(name)) throw new Error('unexpected identifier');

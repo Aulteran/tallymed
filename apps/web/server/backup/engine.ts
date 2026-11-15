@@ -26,7 +26,7 @@ import {
   dataEntryName, decryptStream, documentEntryName, encryptStream, limitStream, readTar, tarEntry, type ArchiveEntry,
 } from './archive.ts';
 import { ledgerSummary, ledgerViolations } from './ledger.ts';
-import { BACKUP_TABLES, EXCLUDED_TABLES, exportQuery, identityColumns, pinOutputFormat, quoteIdent, tableColumns, type TableSpec } from './tables.ts';
+import { BACKUP_TABLES, EXCLUDED_TABLES, tablesAt, exportQuery, identityColumns, pinOutputFormat, quoteIdent, tableColumns, type TableSpec } from './tables.ts';
 
 export const BACKUP_FORMAT = 'tallymed-backup';
 export const BACKUP_FORMAT_VERSION = 1;
@@ -85,7 +85,8 @@ async function* produce(pool: Pool, store: ObjectStore | null, meta: { backupId:
       entries.push({ path: name, size: content.length, sha256: sha256(content) });
       return tarEntry(name, content);
     };
-    for (const spec of BACKUP_TABLES) {
+    const migrations = await client.query<{ version: string; name: string; checksum: string }>('select version, name, checksum from schema_migrations order by version');
+    for (const spec of tablesAt(migrations.rows.map((m) => m.version))) {
       const columns = await tableColumns(client, spec.name);
       if (columns.length === 0) throw new BackupError('incompatible', 'The database is missing a table this version of TallyMed expects. Run the migration command first.');
       await client.query(`declare backup_rows no scroll cursor for ${exportQuery(spec, columns)}`);
@@ -137,7 +138,6 @@ async function* produce(pool: Pool, store: ObjectStore | null, meta: { backupId:
       totals.documentBytes += bytes.length;
       yield* entry(documentEntryName(v.key), bytes);
     }
-    const migrations = await client.query<{ version: string; name: string; checksum: string }>('select version, name, checksum from schema_migrations order by version');
     const server = await client.query<{ server_version: string }>('show server_version');
     const manifest: BackupManifest = {
       format: BACKUP_FORMAT, formatVersion: BACKUP_FORMAT_VERSION, backupId: meta.backupId, createdAt: meta.createdAt,
@@ -285,7 +285,8 @@ export async function verifyArchive(file: string, passphrase: string | null = nu
   if (!mf) throw new BackupError('invalid_archive', 'The backup file has no manifest. It is incomplete.');
   const same = mf.entries.length === seen.length && mf.entries.every((e, i) => e.path === seen[i]!.path && e.size === seen[i]!.size && e.sha256 === seen[i]!.sha256);
   if (!same) throw new BackupError('invalid_archive', 'The backup contents do not match its manifest. The file was changed or is damaged.');
-  if (mf.tables.length !== BACKUP_TABLES.length || mf.tables.some((t, i) => t.name !== BACKUP_TABLES[i]!.name)) {
+  const expectedTables = tablesAt(mf.database.migrations.map((m) => m.version));
+  if (mf.tables.length !== expectedTables.length || mf.tables.some((t, i) => t.name !== expectedTables[i]!.name)) {
     throw new BackupError('incompatible', 'This backup was made by a different version of TallyMed (its list of tables differs).');
   }
   for (const t of mf.tables) {
@@ -340,7 +341,7 @@ async function assertRestorable(client: PoolClient, manifest: BackupManifest): P
       throw new BackupError('incompatible', 'This backup does not match the database layout of this server.');
     }
   }
-  for (const spec of BACKUP_TABLES) {
+  for (const spec of tablesAt(manifest.database.migrations.map((m) => m.version))) {
     const r = await client.query(`select 1 from ${quoteIdent(spec.name)} limit 1`);
     if (r.rowCount) throw new BackupError('not_empty', 'This TallyMed already holds data. A backup can only be restored into a new, empty installation.');
   }
@@ -384,16 +385,17 @@ export async function restoreArchive(
     await client.query('select pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
     await pinOutputFormat(client);
     await assertRestorable(client, manifest);
+    const present = tablesAt(manifest.database.migrations.map((m) => m.version));
     const specs = new Map(BACKUP_TABLES.map((t) => [t.name, t]));
     const columns = new Map(manifest.tables.map((t) => [t.name, t.columns]));
     // Insert-time triggers judge new entries against the present state of other rows; history is loaded as recorded and checked as a whole below.
-    for (const spec of BACKUP_TABLES) await client.query(`alter table ${quoteIdent(spec.name)} disable trigger user`);
+    for (const spec of present) await client.query(`alter table ${quoteIdent(spec.name)} disable trigger user`);
     let dataFinished = false;
     let expected = new Map<string, { size: string; sha256: string }>();
     let householdId = '';
     const finishData = async () => {
       dataFinished = true;
-      for (const spec of BACKUP_TABLES) {
+      for (const spec of present) {
         await client.query(`alter table ${quoteIdent(spec.name)} enable trigger user`);
         for (const column of await identityColumns(client, spec.name)) {
           await client.query(

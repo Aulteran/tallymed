@@ -8,7 +8,7 @@ import { sourceUrl } from './config.ts';
 import type { Queryable } from './db.ts';
 import { log, logError } from './log.ts';
 
-export type GroupKey = 'general' | 'documents' | 'email' | 'proxy';
+export type GroupKey = 'general' | 'documents' | 'email' | 'proxy' | 'signin';
 export type SmtpSecurity = 'tls' | 'starttls' | 'none';
 
 /** Allowed submission ports. A fixed list narrows what the SMTP test and mail helper can be pointed at. */
@@ -36,11 +36,28 @@ export interface EmailValue {
   allowRestrictedTargets?: boolean | null;
 }
 export interface ProxyValue { trustedProxies?: string[] | null }
-export type GroupValue = { general: GeneralValue; documents: DocumentsValue; email: EmailValue; proxy: ProxyValue };
+export type SigninProvider = 'generic' | 'google' | 'microsoft';
+/** Sign-in with an OpenID Connect provider. The client secret is not here: it is the group's encrypted secret. */
+export interface SigninValue {
+  enabled?: boolean | null;
+  provider?: SigninProvider | null;
+  issuer?: string | null;
+  /** Microsoft only: the directory (tenant) the issuer was built from. */
+  tenant?: string | null;
+  clientId?: string | null;
+  scopes?: string | null;
+  buttonLabel?: string | null;
+  /** Create a Standard account for a verified address in an allowed domain that has no account yet. Off unless switched on. */
+  autoProvision?: boolean | null;
+  allowedDomains?: string[] | null;
+  /** Hide and refuse password sign-in. Only honoured while an administrator can sign in through the provider. */
+  passwordLoginDisabled?: boolean | null;
+}
+export type GroupValue = { general: GeneralValue; documents: DocumentsValue; email: EmailValue; proxy: ProxyValue; signin: SigninValue };
 
 export interface StoredGroup<K extends GroupKey = GroupKey> {
   value: GroupValue[K];
-  /** Encrypted secret, present only for the email group. Never leaves the server. */
+  /** Encrypted secret (the SMTP password for the email group, the client secret for the sign-in group). Never leaves the server. */
   secretCiphertext: string | null;
   version: number;
   updatedAt: Date | null;

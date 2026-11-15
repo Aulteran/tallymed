@@ -46,6 +46,7 @@ const run = promisify(execFile);
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const code = (c) => (e) => e instanceof BackupError && e.code === c;
 const SETUP_TOKEN = 'Vq3Zx8Lm1Rt6Yp0Kd4Wn7Jc2Hs5Bg9Fe-Ua_MoTiXl';
+const OIDC_CIPHERTEXT = 'v1.abcdef02.b2lkYy1ub25jZQ.b2lkYy10YWc.b2lkYy1jbGllbnQtc2VjcmV0LWNpcGhlcnRleHQ';
 const SMTP_CIPHERTEXT = 'v1.abcdef01.c2VjcmV0LW5vbmNl.c2VjcmV0LXRhZw.c210cC1wYXNzd29yZC1jaXBoZXJ0ZXh0';
 
 async function collect(iterable) {
@@ -167,6 +168,8 @@ async function richFixture() {
   await pool.query(`insert into server_settings (group_key, value, updated_by) values ('general', '{"sessionIdleSeconds": 1800}', $1), ('documents', '{"documentMaxMb": 12}', $1)`, [actor.userId]);
   await pool.query(`insert into server_settings (group_key, value, secret_ciphertext, updated_by) values ('email', '{"host": "smtp.example.test", "port": 587, "username": "mailer", "fromAddress": "tallymed@example.test"}', $2, $1)`, [actor.userId, SMTP_CIPHERTEXT]);
   await pool.query(`insert into server_settings (group_key, value, updated_by) values ('proxy', '{"trustedProxies": ["10.9.8.7"]}', $1)`, [actor.userId]);
+  await pool.query(`insert into server_settings (group_key, value, secret_ciphertext, updated_by) values ('signin', '{"enabled": true, "issuer": "https://id.example.test/realm", "clientId": "tallymed-client-id", "passwordLoginDisabled": true}', $2, $1)`, [actor.userId, OIDC_CIPHERTEXT]);
+  await pool.query(`insert into user_identities (user_id, household_id, issuer, subject, email_at_link, created_via) values ($1, $2, 'https://id.example.test/realm', 'subject-of-the-administrator', 'admin@example.test', 'email_match')`, [actor.userId, actor.householdId]);
   const invitation = randomBytes(32);
   await pool.query(`insert into invitations (household_id, email, role, token_hash, invited_by, expires_at) values ($1, 'invited@example.test', 'operator', $2, $3, now() + interval '1 day')`, [actor.householdId, invitation, actor.userId]);
   return { ...t, bills: { a, b, c }, payments: { p1, p2, p3 }, plan, plan2, claim, receipt, doc, gone, client, allocA, refund, invitation };
@@ -399,6 +402,7 @@ test('secrets and sign-in state never enter a backup', { skip: skipDb }, async (
     const text = tar.toString('latin1');
     for (const [what, needle] of [
       ['the encrypted SMTP password', SMTP_CIPHERTEXT], ['the SMTP relay', 'smtp.example.test'], ['the SMTP user', 'mailer'], ['the trusted proxy list', '10.9.8.7'],
+      ['the encrypted provider client secret', OIDC_CIPHERTEXT], ['the provider client ID', 'tallymed-client-id'],
       ['the assistant token digest', token.toString('hex')], ['a session token digest', session.toString('hex')], ['an invitation token digest', f.invitation.toString('hex')],
       ['an invited address', 'invited@example.test'], ['the proxy secret', f.config.proxySecret],
     ]) assert.equal(text.includes(needle), false, `${what} must not be in the backup`);
@@ -409,9 +413,13 @@ test('secrets and sign-in state never enter a backup', { skip: skipDb }, async (
     const pool = target.db.pool;
     assert.deepEqual((await pool.query(`select group_key, secret_ciphertext from server_settings order by 1`)).rows, [
       { group_key: 'documents', secret_ciphertext: null }, { group_key: 'general', secret_ciphertext: null }]);
+    // The link between an account and its provider identity is kept; the provider settings are not, so passwords work on the restored server.
+    assert.deepEqual((await pool.query(`select issuer, subject, created_via from user_identities`)).rows, [
+      { issuer: 'https://id.example.test/realm', subject: 'subject-of-the-administrator', created_via: 'email_match' }]);
     for (const table of ['sessions', 'invitations', 'password_resets', 'login_attempts', 'password_reset_requests']) {
       assert.equal((await pool.query(`select count(*)::int n from ${table}`)).rows[0].n, 0, table);
     }
+    assert.equal((await loginJson(handlers, { config: testConfig({}, target.db.url), pool, store: target.store }, 'admin@example.test')).res.status, 200);
     // The assistant client is kept for the proposal's history, but its credential is replaced by a digest no token can produce.
     const client = (await pool.query(`select id, name, token_hash from mcp_clients`)).rows[0];
     assert.equal(client.name, 'Example assistant');

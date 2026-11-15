@@ -93,6 +93,10 @@ h3 { font-size: var(--text-md); font-weight: 700; margin: var(--space-5) 0 var(-
 p { margin: 0 0 var(--space-3); }
 a { color: var(--link); text-underline-offset: .18em; text-decoration-thickness: 1px; }
 a:hover { text-decoration-thickness: 2px; }
+/* A small form inside a table cell (password plus one button): wraps instead of widening the page. */
+.row-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: flex-end; min-width: 0; }
+.row-form input { flex: 1 1 9rem; min-width: 0; margin: 0; }
+.row-form button { margin: 0; }
 code { font-family: var(--font-mono); font-size: .9em; background: var(--surface-2); padding: .1em .35em; border-radius: var(--radius-sm); overflow-wrap: anywhere; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

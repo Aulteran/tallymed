@@ -21,6 +21,7 @@ import * as plans from './services/plans.ts';
 import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import * as settingsService from './services/settings.ts';
+import * as signin from './services/signin.ts';
 import { restoreFromSetup, startBackup } from './services/backup.ts';
 import { refreshRuntimeConfig } from './settings.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
@@ -327,6 +328,77 @@ export const handleLogin = route({
     };
   },
 });
+
+// ---------- sign-in with an OpenID Connect provider ----------
+
+export function oidcCookieName(config: AppConfig): string {
+  return config.secureCookies ? '__Host-tallymed_oidc' : 'tallymed_oidc';
+}
+
+/** Lax, so the cookie comes back on the provider's top-level redirect to the callback and on nothing cross-site that is not a navigation. */
+function oidcCookie(config: AppConfig, value: string, maxAgeSeconds: number): string {
+  return [`${oidcCookieName(config)}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`,
+    ...(config.secureCookies ? ['Secure'] : [])].join('; ');
+}
+
+const SSO_ERRORS = new Set(['sso_unavailable', 'sso_failed', 'sso_no_account', 'rate_limited']);
+
+/** Both steps are browser navigations, so every failure goes back to the sign-in page with a code; details stay in the server log. */
+function oidcFailure(ctx: AppContext, name: string, error: unknown, requestId: string): Response {
+  if (!(error instanceof AppError) || error.code === 'internal') logError(`http.${name}`, error, { requestId });
+  const code = error instanceof AppError && SSO_ERRORS.has(error.code) ? error.code : 'sso_failed';
+  const headers = new Headers({ ...BASE_HEADERS, Location: new URL(`/login?error=${code}`, ctx.config.canonicalOrigin).href, 'Referrer-Policy': 'no-referrer' });
+  headers.append('Set-Cookie', oidcCookie(ctx.config, '', 0));
+  return new Response(null, { status: 303, headers });
+}
+
+/** Starts provider sign-in: sets the flow cookie and sends the browser to the provider. Reads nothing from the request but its address. */
+export async function handleOidcStart(req: Request, ctx: AppContext): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
+    await refreshRuntimeConfig(ctx.config, ctx.pool);
+    const client = clientInfo(req.headers, ctx.config);
+    assertTransport(req.headers, ctx.config, client);
+    const started = await signin.startOidc(ctx.pool, ctx.config, { ip: client.ip, requestId });
+    return new Response(null, {
+      status: 303,
+      headers: { ...BASE_HEADERS, Location: started.location, 'Set-Cookie': oidcCookie(ctx.config, started.flowCookie, signin.FLOW_SECONDS), 'Referrer-Policy': 'no-referrer' },
+    });
+  } catch (error) {
+    return oidcFailure(ctx, 'oidc.start', error, requestId);
+  }
+}
+
+/** The provider's redirect back. The flow cookie is always cleared, so an answer can be used once at most. */
+export async function handleOidcCallback(req: Request, ctx: AppContext): Promise<Response> {
+  const requestId = randomUUID();
+  try {
+    if (req.method !== 'GET') throw new AppError('invalid_input', 'GET required');
+    await refreshRuntimeConfig(ctx.config, ctx.pool);
+    const client = clientInfo(req.headers, ctx.config);
+    assertTransport(req.headers, ctx.config, client);
+    const params = new URL(req.url).searchParams;
+    const query: Record<string, string> = Object.create(null);
+    for (const key of ['code', 'state', 'error', 'iss']) {
+      const all = params.getAll(key);
+      if (all.length > 1) throw new AppError('sso_failed');
+      if (all.length === 1) query[key] = all[0]!;
+    }
+    const result = await signin.finishOidc(ctx.pool, ctx.config, {
+      query, flowCookie: readCookie(req.headers, oidcCookieName(ctx.config)), ip: client.ip, requestId,
+      previousToken: readCookie(req.headers, sessionCookieName(ctx.config)),
+    });
+    const headers = new Headers({
+      ...BASE_HEADERS, Location: new URL(result.passwordChangeRequired ? '/password/change' : '/', ctx.config.canonicalOrigin).href, 'Referrer-Policy': 'no-referrer',
+    });
+    headers.append('Set-Cookie', cookieHeader(ctx.config, result.token, Math.max(1, Math.floor((result.expiresAt.getTime() - Date.now()) / 1000))));
+    headers.append('Set-Cookie', oidcCookie(ctx.config, '', 0));
+    return new Response(null, { status: 303, headers });
+  } catch (error) {
+    return oidcFailure(ctx, 'oidc.callback', error, requestId);
+  }
+}
 
 /**
  * "Forgot password": always the same answer for a well-formed address, whether or not an account exists. The email, if any, is sent after
@@ -877,7 +949,7 @@ export function actionInventory(): { expenses: string[]; documents: string[]; as
 
 // ---------- administrator settings ----------
 
-const SETTINGS_PAGES = { general: '/settings', documents: '/settings', proxy: '/settings/proxy', email: '/settings/email' } as const;
+const SETTINGS_PAGES = { general: '/settings', documents: '/settings', proxy: '/settings/proxy', email: '/settings/email', signin: '/settings/signin' } as const;
 const SETTINGS_ACTIONS: Record<string, {
   service: (pool: Pool, config: AppConfig, actor: Actor, input: unknown, requestId: string) => Promise<void>; page: string; saved: string; keep?: string[];
 }> = {
@@ -886,6 +958,8 @@ const SETTINGS_ACTIONS: Record<string, {
   proxy: { service: settingsService.saveProxy, page: SETTINGS_PAGES.proxy, saved: 'proxy', keep: ['trustedProxies'] },
   email: { service: settingsService.saveEmail, page: SETTINGS_PAGES.email, saved: 'email', keep: ['host', 'port', 'security', 'username', 'fromAddress', 'fromName'] },
   'email/clear': { service: settingsService.clearEmail, page: SETTINGS_PAGES.email, saved: 'email_cleared' },
+  signin: { service: signin.saveSignin, page: SETTINGS_PAGES.signin, saved: 'signin', keep: ['provider', 'issuer', 'tenant', 'clientId', 'scopes', 'buttonLabel', 'allowedDomains'] },
+  'signin/unlink': { service: signin.unlinkIdentity, page: SETTINGS_PAGES.signin, saved: 'signin_unlinked' },
 };
 
 const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promise<Response>>([
@@ -909,6 +983,16 @@ const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promi
       const outcome = result.sent ? 'sent' : result.reason;
       if (wantsHtml(req)) return { response: redirect(ctx.config, `/settings/email?tested=${outcome}`) };
       return { json: { ok: result.sent, result: outcome, smtpCode: result.sent ? undefined : result.smtpCode } };
+    },
+  })],
+  ['signin/test', route({
+    name: 'settings.signin.test',
+    session: true,
+    errorPath: () => '/settings/signin',
+    async run({ ctx, actor, body, requestId, req }) {
+      const result = await signin.testSignin(ctx.pool, ctx.config, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `/settings/signin?tested=${result}`) };
+      return { json: { ok: result === 'ok', result } };
     },
   })],
   // Server-wide backup: answers with the archive itself, streamed as it is produced. The service re-checks the role and the password.

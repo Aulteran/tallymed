@@ -98,6 +98,28 @@ The relay host is resolved by the app and the connection goes to the checked add
 
 Other features send mail through one helper, `apps/web/server/email.ts`: `isEmailConfigured(db, config)` and `sendEmail({ db, config }, { to, subject, text }, { purpose, requestId })`, which returns `{ sent: true }` or `{ sent: false, reason, smtpCode? }`, never throws for delivery problems, and never puts the address, body or any secret in its result or logs. Callers record their own audit row.
 
+## Sign-in with an identity provider (OpenID Connect)
+
+Optional. Under **Server settings > Sign-in** an administrator can let people sign in through a provider that supports OpenID Connect: a self-hosted one (Authentik, Keycloak, Authelia), Google, or Microsoft Entra ID. Password sign-in keeps working beside it. GitHub is not offered: it does not provide OpenID Connect sign-in for applications, and a second, separate protocol was left out on purpose.
+
+Setting it up:
+
+1. `TALLYMED_SECRETS_KEY` must be set (the same key that protects the SMTP password). It encrypts the client secret and the short-lived sign-in cookie.
+2. At the provider, create an application (a "confidential" or "web" client with the authorization code flow). Register the **redirect address** shown on the Sign-in page exactly as shown. It is `<TALLYMED_CANONICAL_ORIGIN>/api/auth/oidc/callback`, the public https address people use behind your reverse proxy; it is never built from request headers.
+3. On the Sign-in page choose the provider type and enter:
+   - **OpenID Connect:** the issuer URL, exactly as the provider shows it (the address under which `/.well-known/openid-configuration` is published), for example `https://auth.example.com/application/o/tallymed/` (Authentik) or `https://auth.example.com/realms/home` (Keycloak).
+   - **Google:** nothing; the issuer is `https://accounts.google.com`.
+   - **Microsoft Entra ID:** the directory (tenant) ID. One directory only. In the app registration add the optional ID-token claims `email` and `xms_edov`; without `xms_edov` Entra ID does not state that an address is verified and nobody can be matched to an account.
+   - The client ID and client secret, and the scopes (`openid email profile` by default).
+4. Save, then use **Test connection**. It reads the provider's discovery document and signing keys and reports what is wrong if it cannot.
+5. Sign out and use the provider button on the sign-in page.
+
+Who can sign in. The first time someone signs in through the provider, TallyMed matches them to the account with the same email address, but only when the provider states that the address is verified. From then on that provider identity is linked to the account (shown under Linked accounts, where a link can be removed). Someone without an account is refused. Optionally, **Create a Standard account** creates one for a verified address in the email domains you list; it is off by default, needs at least one domain, and never creates an administrator. Invite people on the Users page as before; a person invited with a password can use either way.
+
+Turning passwords off. The checkbox is accepted only from an administrator who has already signed in through the saved provider configuration, and not in the same save as a change of issuer, client ID or secret. Passwords come back by themselves when provider sign-in is switched off, when the saved secret can no longer be read, or when no active administrator is linked to the provider any more. If the provider itself is down and nobody can get in, start the web service once with `TALLYMED_PASSWORD_LOGIN=on`, sign in with a password, fix the settings, and remove the variable. Keep at least one administrator password in a password manager for that day. Accounts created at first provider sign-in have a random password nobody knows; an administrator can issue a temporary one from the Users page while passwords are on.
+
+The TallyMed server must be able to reach the provider over https (discovery, keys and the token endpoint). Addresses on your own network are allowed; loopback, link-local and cloud metadata addresses are refused, and redirects are not followed. `TALLYMED_OIDC_ALLOW_INSECURE_ISSUER=true` accepts http and loopback providers and exists only for development against a local test provider. Never set it on a real installation.
+
 ## Upgrade
 
 1. Run a backup (the Backup page or one of the procedures below) and confirm it verifies: `backup.ts verify <file>` for an app backup, or decrypt and check the manifest for a dump.
@@ -125,7 +147,7 @@ An administrator can download one file that holds the whole installation and res
 **Make a backup.** Open **Server settings > Backup**, optionally type a passphrase twice, confirm your own password and press **Download backup**. The browser saves `tallymed-backup-<UTC time>.tar.gz`, or `.tar.gz.enc` with a passphrase. The app keeps running: the file is made from one consistent database snapshot. The page lists recent backups with the size and SHA-256 of each file as it was downloaded; compare that with `sha256sum` of your copy.
 
 - *What is in it:* every record (household, people, providers, visits, bills and adjustments, payments, refunds, payment plans, HSA decisions, claims and receipts, documents with versions and attachments, assistant proposals, the full audit log), the file of every stored document version, user accounts with their password hashes, the General and Documents settings, and a manifest with the database version, per-table row counts and SHA-256, per-file SHA-256 and the ledger totals.
-- *What is never in it:* sign-in sessions, invitation links, temporary passwords and reset counters, sign-in throttle data, the email (SMTP) settings and password, the reverse proxy list, assistant credentials (the client entries are kept for history, with their token digest replaced by an unusable value), and anything from the environment (`deploy/.env`: database password, secrets key, proxy secret, setup token). Keep a copy of `deploy/.env` and your proxy configuration separately.
+- *What is never in it:* sign-in sessions, invitation links, temporary passwords and reset counters, sign-in throttle data, the email (SMTP) settings and password, the sign-in provider settings and client secret (the links between accounts and provider identities are kept, and work again once the same provider is entered on the restored server), the reverse proxy list, assistant credentials (the client entries are kept for history, with their token digest replaced by an unusable value), and anything from the environment (`deploy/.env`: database password, secrets key, proxy secret, setup token). Keep a copy of `deploy/.env` and your proxy configuration separately.
 - *Passphrase:* with one, the file is encrypted with AES-256-GCM under a key derived from the passphrase by scrypt. It is not stored anywhere; a lost passphrase means a lost backup. Without one the file is a plain compressed archive (`tar -tzf` lists it) that anyone holding it can read, so store it like the records themselves. The file always contains medical and financial information.
 - *If the download stops:* an incomplete file has no manifest and is refused by verify and restore. The page records it as "did not finish". A backup also refuses to start a file it cannot vouch for: if a stored document is missing or does not match its checksum, the backup fails and tells you to run `documents verify`.
 
