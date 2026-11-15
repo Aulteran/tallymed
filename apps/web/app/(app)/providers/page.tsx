@@ -6,6 +6,8 @@ import { Banner, Csrf, Empty, label, flatWithFlash, load, Pager, pick, requireSe
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Providers · TallyMed' };
 const KINDS = ['facility', 'clinician', 'lab', 'pharmacy', 'other'];
+// Display words only: the stored and submitted value stays as in KINDS.
+const SHOWN: Record<string, string> = { clinician: 'physician' };
 
 export default async function Page({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
@@ -21,7 +23,7 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
         <form method="post" action="/api/expenses/providers/create">
           <Csrf token={csrf} />
           <label htmlFor="name">Name</label><input id="name" name="name" required maxLength={120} defaultValue={params.name} />
-          <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={params.kind ?? "clinician"}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select>
+          <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={params.kind ?? "clinician"}>{KINDS.map((k) => <option key={k} value={k}>{SHOWN[k] ?? k}</option>)}</select>
           <label htmlFor="notes">Notes</label><textarea id="notes" name="notes" maxLength={2000} defaultValue={params.notes} />
           <button type="submit">Add provider</button>
         </form>
@@ -37,7 +39,7 @@ export default async function Page({ searchParams }: { searchParams: SearchParam
       <thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead>
       <tbody>{data.items.map((i) => <tr key={i.id}>
         <td data-label="Name"><Link href={`/providers/${i.id}`}>{i.name}</Link></td>
-        <td data-label="Type">{i.kind ? label(i.kind) : ""}</td>
+        <td data-label="Type">{i.kind ? label(SHOWN[i.kind] ?? i.kind) : ""}</td>
         <td data-label="Status">{i.archivedAt ? <span className="pill warn">Archived</span> : <span className="pill">Active</span>}</td>
       </tr>)}</tbody>
     </table>}
