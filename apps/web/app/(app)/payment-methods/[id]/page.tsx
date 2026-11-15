@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { pickHsaAccounts } from '../../../../server/services/hsa-accounts.ts';
 import { getPaymentMethod } from '../../../../server/services/payment-methods.ts';
-import { Banner, Csrf, dateOf, flat, label, load, METHOD_KINDS, methodName, Options, requireSession, type SearchParams } from '../../../components/ui.tsx';
+import { Banner, Csrf, dateOf, flat, load, METHOD_KINDS, methodKindLabel, methodName, Options, requireSession, type SearchParams } from '../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Payment method · TallyMed' };
@@ -19,7 +19,7 @@ export default async function PaymentMethodPage({ params, searchParams }: { para
     <form className="card" method="post" action="/api/expenses/payment-methods/update">
       <Csrf token={csrf} /><input type="hidden" name="id" value={m!.id} /><input type="hidden" name="version" value={m!.version} />
       <label htmlFor="nickname">Nickname</label><input id="nickname" name="nickname" required maxLength={60} defaultValue={m!.nickname} />
-      <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={m!.kind}>{METHOD_KINDS.map((k) => <option key={k} value={k}>{label(k)}</option>)}</select>
+      <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={m!.kind}>{METHOD_KINDS.map((k) => <option key={k} value={k}>{methodKindLabel(k)}</option>)}</select>
       <label htmlFor="lastFour">Last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} defaultValue={m!.lastFour ?? ''} />
       <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
       <select id="hsaAccountId" name="hsaAccountId" defaultValue={m!.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>

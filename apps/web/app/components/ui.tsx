@@ -102,6 +102,8 @@ export const q80 = (v: string | undefined) => (v ? v.slice(0, 80) : undefined);
 
 /** Saved payment methods (named cards and accounts). Display only: "Chase Sapphire ••4242". Never a full number. */
 export const METHOD_KINDS = ['credit_card', 'debit_card', 'hsa_fsa_card', 'bank_account', 'other'] as const;
+/** Shown as the type of a payment method. HSA and FSA are acronyms, so they are written in capitals, matching the form's help text. */
+export const methodKindLabel = (kind: string) => (kind === 'hsa_fsa_card' ? 'HSA/FSA card' : label(kind));
 export const methodName = (nickname: string, lastFour: string | null) => (lastFour ? `${nickname} ••${lastFour}` : nickname);
 
 export const PAYMENT_METHODS = ['card', 'bank_transfer', 'check', 'cash', 'portal', 'other'] as const;
