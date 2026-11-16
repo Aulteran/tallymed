@@ -73,7 +73,7 @@ export async function billPaymentSummary(pool: Pool, actor: Actor, billId: strin
   const ledger = await repo.listBillLedger(pool, actor.householdId, id);
   const { rows: planRows } = await pool.query<{ id: string; name: string; status: string }>(
     `select p.id, p.name, p.status from payment_plan_bills pb join payment_plans p on p.household_id = pb.household_id and p.id = pb.plan_id
-     where pb.household_id = $1 and pb.bill_id = $2 order by p.created_at desc, p.id`, [actor.householdId, id]);
+     where pb.household_id = $1 and pb.bill_id = $2 and p.removed_at is null order by p.created_at desc, p.id`, [actor.householdId, id]);
   return { ledger, plans: planRows };
 }
 

@@ -9,6 +9,8 @@ export interface Plan {
   id: string; name: string; providerNames: string[]; payee: string; status: 'active' | 'cancelled'; cancelReason: string | null;
   cancelledAt: Date | null; version: number; startedOn: string; createdAt: Date; createdSort: string; revisionId: string; revisionNo: number; totalCents: string;
   cadence: string; installmentCount: number; matchedCents: string; billCount: number; nextDueDate: string | null; overdueCount: number;
+  /** Set while an administrator has the plan removed. Removed plans are read only with `includeRemoved` (the restore path). */
+  removedAt: Date | null; removedReason: string | null;
 }
 
 /** Names of the providers whose bills a plan covers, alphabetical and distinct. A plan has no provider of its own. */
@@ -30,7 +32,7 @@ const withPayee = <T extends { providerNames: string[] }>(r: T): T & { payee: st
 
 const MATCHED = `coalesce((select sum(m.amount_cents) from installment_matches m where m.installment_id = i.id), 0)`;
 const PLAN_SELECT = `select p.id, p.name, ${PROVIDER_NAMES('p')} as "providerNames", p.status, p.cancel_reason as "cancelReason",
-    p.cancelled_at as "cancelledAt", p.version, p.started_on::text as "startedOn", p.created_at as "createdAt", p.created_at::text as "createdSort", r.id as "revisionId",
+    p.cancelled_at as "cancelledAt", p.removed_at as "removedAt", p.removed_reason as "removedReason", p.version, p.started_on::text as "startedOn", p.created_at as "createdAt", p.created_at::text as "createdSort", r.id as "revisionId",
     r.revision_no as "revisionNo", r.total_cents::text as "totalCents", r.cadence,
     (select count(*)::int from plan_installments i where i.revision_id = r.id) as "installmentCount",
     (select coalesce(sum(m.amount_cents), 0) from installment_matches m where m.revision_id = r.id)::text as "matchedCents",
@@ -40,21 +42,21 @@ const PLAN_SELECT = `select p.id, p.name, ${PROVIDER_NAMES('p')} as "providerNam
   from payment_plans p
   join lateral (select x.* from plan_revisions x where x.plan_id = p.id order by x.revision_no desc limit 1) r on true`;
 
-export async function getPlan(db: Queryable, householdId: string, id: string, asOf: string): Promise<Plan | null> {
-  const { rows } = await db.query<Omit<Plan, 'payee'>>(`${PLAN_SELECT} where p.household_id = $1 and p.id = $3`, [householdId, asOf, id]);
+export async function getPlan(db: Queryable, householdId: string, id: string, asOf: string, o: { includeRemoved?: boolean } = {}): Promise<Plan | null> {
+  const { rows } = await db.query<Omit<Plan, 'payee'>>(`${PLAN_SELECT} where p.household_id = $1 and p.id = $3${o.includeRemoved ? '' : ' and p.removed_at is null'}`, [householdId, asOf, id]);
   return rows[0] ? withPayee(rows[0]) : null;
 }
 
 /** Locks plan rows (ascending id). */
-export async function lockPlans(db: Queryable, householdId: string, ids: string[]): Promise<Array<{ id: string; status: 'active' | 'cancelled'; version: number }>> {
-  const { rows } = await db.query<{ id: string; status: 'active' | 'cancelled'; version: number }>(
-    `select id, status, version from payment_plans where household_id = $1 and id = any($2::uuid[]) order by id for update`, [householdId, [...new Set(ids)].sort()]);
+export async function lockPlans(db: Queryable, householdId: string, ids: string[]): Promise<Array<{ id: string; status: 'active' | 'cancelled'; version: number; removed: boolean }>> {
+  const { rows } = await db.query<{ id: string; status: 'active' | 'cancelled'; version: number; removed: boolean }>(
+    `select id, status, version, removed_at is not null as removed from payment_plans where household_id = $1 and id = any($2::uuid[]) order by id for update`, [householdId, [...new Set(ids)].sort()]);
   return rows;
 }
 
 export async function listPlans(db: Queryable, householdId: string, f: PlanFilter, asOf: string): Promise<Page<Plan>> {
   const params: unknown[] = [householdId, asOf];
-  const where = ['p.household_id = $1'];
+  const where = ['p.household_id = $1', 'p.removed_at is null'];
   if (f.status) where.push(`p.status = $${params.push(f.status)}`);
   // A plan is listed under every provider whose bills it covers.
   if (f.providerId) where.push(COVERS_PROVIDER('p', `$${params.push(f.providerId)}`));
@@ -220,6 +222,22 @@ export async function cancelPlan(db: Queryable, householdId: string, id: string,
   return r.rowCount === 1;
 }
 
+/** Hides a plan (all three removed_* columns are set together) and bumps the version. The caller holds the plan lock. */
+export async function removePlanRow(db: Queryable, householdId: string, id: string, version: number, userId: string, reason: string): Promise<boolean> {
+  const r = await db.query(
+    `update payment_plans set removed_at = now(), removed_by = $4, removed_reason = $5, version = version + 1, updated_at = now()
+     where household_id = $1 and id = $2 and version = $3 and removed_at is null`, [householdId, id, version, userId, reason]);
+  return r.rowCount === 1;
+}
+
+/** Shows a removed plan again and bumps the version. The caller holds the plan lock. */
+export async function restorePlanRow(db: Queryable, householdId: string, id: string): Promise<boolean> {
+  const r = await db.query(
+    `update payment_plans set removed_at = null, removed_by = null, removed_reason = null, version = version + 1, updated_at = now()
+     where household_id = $1 and id = $2 and removed_at is not null`, [householdId, id]);
+  return r.rowCount === 1;
+}
+
 /** Changes only the label. The version is not bumped, so a schedule or cancel form that is already open is not made stale by a rename. */
 export async function renamePlan(db: Queryable, householdId: string, id: string, name: string): Promise<void> {
   await db.query(`update payment_plans set name = $3, updated_at = now() where household_id = $1 and id = $2`, [householdId, id, name]);
@@ -237,7 +255,7 @@ export interface QueueItem {
 /** Unpaid installments of active plans' current revisions: overdue (due before asOf) and upcoming. Soonest due first. */
 export async function installmentQueue(db: Queryable, householdId: string, f: InstallmentFilter, asOf: string): Promise<Page<QueueItem>> {
   const params: unknown[] = [householdId, asOf];
-  const where = [`p.household_id = $1`, `p.status = 'active'`, `i.amount_cents > ${MATCHED}`,
+  const where = [`p.household_id = $1`, `p.status = 'active'`, `p.removed_at is null`, `i.amount_cents > ${MATCHED}`,
     `i.revision_id = (select x.id from plan_revisions x where x.plan_id = p.id order by x.revision_no desc limit 1)`];
   if (f.state === 'overdue') where.push('i.due_date < $2::date');
   if (f.state === 'upcoming') where.push('i.due_date >= $2::date');
@@ -267,7 +285,7 @@ export async function installmentTotals(db: Queryable, householdId: string, asOf
        (count(*) filter (where i.due_date >= $2::date))::int as "upcomingCount",
        coalesce(sum(i.amount_cents - ${MATCHED}) filter (where i.due_date >= $2::date), 0)::text as "upcomingCents"
      from plan_installments i join payment_plans p on p.household_id = i.household_id and p.id = i.plan_id
-     where p.household_id = $1 and p.status = 'active' and i.amount_cents > ${MATCHED}
+     where p.household_id = $1 and p.status = 'active' and p.removed_at is null and i.amount_cents > ${MATCHED}
        and i.revision_id = (select x.id from plan_revisions x where x.plan_id = p.id order by x.revision_no desc limit 1)`, [householdId, asOf]);
   return rows[0]!;
 }

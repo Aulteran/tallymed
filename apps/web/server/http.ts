@@ -686,11 +686,12 @@ const MONEY_ACTIONS: Record<string, {
   'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
   'payments/remove': { service: payments.removePayment, error: paymentOf, keep: ['reason'], ok: () => '/payments' },
   // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
-  'undo': { service: undoService.undo, error: () => '/payments', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
+  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
+  'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
   'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },

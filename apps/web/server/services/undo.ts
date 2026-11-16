@@ -9,6 +9,7 @@ import { clearUndoSlot, getUndoSlot, lockUndoSlot, peekUndoEntity, type UndoSlot
 import { paymentSchemas, parse } from '../validation.ts';
 import { undoMethodChange } from './payment-methods.ts';
 import { restorePayment } from './payments.ts';
+import { restorePlan } from './plans.ts';
 import { idempotent, withRetry } from './support.ts';
 
 /** What the actor can undo right now (kind, entity and seconds left from the database clock), or null. For the banner on a page. */
@@ -57,10 +58,10 @@ export async function undo(pool: Pool, actor: Actor, input: unknown, requestId: 
         });
         break;
       case 'plan_remove':
-        // STUB: plan removal arrives in a later slice, which fills this branch (restorePlan). No slot of this kind is written until then.
-        throw new AppError('not_implemented', 'Undoing a plan removal is not available yet');
+        await restorePlan(tx, actor, slot.entityId, slot.payload, requestId);
+        break;
     }
     await clearUndoSlot(tx, actor);
-    return { id: slot.entityId, replayed: false, target: 'payment' as const };
+    return { id: slot.entityId, replayed: false, target: slot.kind === 'plan_remove' ? 'plan' as const : 'payment' as const };
   }));
 }

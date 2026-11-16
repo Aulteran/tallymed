@@ -216,6 +216,10 @@ export async function ledgerSummary(db: Queryable): Promise<Record<string, strin
   if ((await db.query<{ present: boolean }>(`select to_regprocedure('payment_is_removed(uuid)') is not null as present`)).rows[0]!.present) {
     s.removedPayments = (await db.query<{ n: string }>(`select count(*)::text as n from payments where payment_is_removed(id)`)).rows[0]!.n;
   }
+  // Plans carry removal in columns (0017). An older database has no such column and reports no total.
+  if ((await db.query<{ present: boolean }>(`select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'payment_plans' and column_name = 'removed_at') as present`)).rows[0]!.present) {
+    s.removedPlans = (await db.query<{ n: string }>(`select count(*)::text as n from payment_plans where removed_at is not null`)).rows[0]!.n;
+  }
   // Open balance is derived, not stored: responsibility (base plus signed adjustments) minus net applied payments.
   s.openBalanceCents = (BigInt(s.baseResponsibilityCents!) + BigInt(s.adjustmentCents!) - BigInt(s.netAppliedCents!)).toString();
   return s;
