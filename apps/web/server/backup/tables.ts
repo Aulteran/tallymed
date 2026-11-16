@@ -55,6 +55,8 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'hsa_claims', orderBy: 'id' },
   { name: 'hsa_receipts', orderBy: 'id' },
   { name: 'hsa_entries', orderBy: `(case kind when 'reserve' then 0 when 'receipt_reversal' then 2 else 1 end), seq` },
+  // Who removed or restored an HSA decision, claim or receipt, in the order it happened. Ids and a reason only; the removed records themselves stay in their tables.
+  { name: 'hsa_removal_events', orderBy: 'seq', since: '0020' },
   { name: 'documents', orderBy: 'id' },
   { name: 'document_versions', orderBy: 'id' },
   { name: 'document_attachments', orderBy: 'id' },

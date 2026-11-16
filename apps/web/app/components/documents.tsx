@@ -15,7 +15,9 @@ const MEDIA = { 'application/pdf': 'PDF', 'image/png': 'PNG', 'image/jpeg': 'JPE
 export const mediaLabel = (t: string) => MEDIA[t] ?? t;
 
 /** The page a link points at, so a document's history links back to the record it supports. */
-export function targetHref(a: Pick<AttachmentRow, 'targetType' | 'targetId' | 'billId' | 'allocationId'>): string | null {
+export function targetHref(a: Pick<AttachmentRow, 'targetType' | 'targetId' | 'billId' | 'allocationId'> & { targetRemoved?: boolean }): string | null {
+  // A deleted decision or reimbursement has no page (the receipt link would 404): the caller shows plain "deleted" text.
+  if (a.targetRemoved) return null;
   switch (a.targetType) {
     case 'bill': return `/bills/${a.targetId}`;
     case 'bill_adjustment': return a.billId ? `/bills/${a.billId}` : null;

@@ -5,9 +5,11 @@ import { authorize, type Actor } from '../authz.ts';
 import { withTransaction, type Pool } from '../db.ts';
 import { AppError } from '../errors.ts';
 import { recordAudit } from '../repositories/audit.ts';
+import { recordPage } from '../repositories/hsa.ts';
 import { clearUndoSlot, getUndoSlot, lockUndoSlot, peekUndoEntity, type UndoSlot } from '../repositories/undo.ts';
 import { paymentSchemas, parse } from '../validation.ts';
 import { undoMethodChange } from './payment-methods.ts';
+import { restoreHsaRecord } from './hsa.ts';
 import { restorePayment } from './payments.ts';
 import { restorePlan } from './plans.ts';
 import { idempotent, withRetry } from './support.ts';
@@ -28,7 +30,12 @@ export async function currentUndo(pool: Pool, actor: Actor): Promise<Pick<UndoSl
  * breaks that as a deadlock and `withRetry` runs the loser again. Other users never touch this user's slot (the pipeline deletes only
  * the actor's own).
  */
-export async function undo(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean; target: 'payment' | 'plan' }> {
+export type UndoTarget = 'payment' | 'plan' | 'hsa_decision' | 'hsa_claim' | 'hsa_receipt';
+/**
+ * `id` is the entity the slot held (a decision, claim or receipt id for the HSA kinds). `path` is set for the HSA kinds only: the page the redirect
+ * lands on (an allocation page for a decision, /hsa/claims/<id>, /hsa/receipts/<id>); payments and plans keep the `target` + `id` routing.
+ */
+export async function undo(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean; target: UndoTarget; path: string | null }> {
   authorize(actor, 'records:remove');
   const { csrf: _csrf, idempotencyKey } = parse(paymentSchemas.undo, input);
   return withRetry(() => withTransaction(pool, async (tx) => {
@@ -38,7 +45,10 @@ export async function undo(pool: Pool, actor: Actor, input: unknown, requestId: 
     const replayId = await idempotent(tx, actor, 'undo', idempotencyKey, {}, resultId);
     if (replayId) {
       const { rows } = await tx.query(`select 1 from payment_plans where household_id = $1 and id = $2`, [actor.householdId, replayId]);
-      return { id: replayId, replayed: true, target: rows.length > 0 ? 'plan' as const : 'payment' as const };
+      if (rows.length > 0) return { id: replayId, replayed: true, target: 'plan' as const, path: null };
+      const hsaPage = await recordPage(tx, actor.householdId, replayId);
+      if (hsaPage) return { id: replayId, replayed: true, target: `hsa_${hsaPage.kind}` as const, path: hsaPage.path };
+      return { id: replayId, replayed: true, target: 'payment' as const, path: null };
     }
     const slot = await lockUndoSlot(tx, actor);
     if (!slot) throw new AppError('conflict', 'Nothing to undo');
@@ -60,8 +70,16 @@ export async function undo(pool: Pool, actor: Actor, input: unknown, requestId: 
       case 'plan_remove':
         await restorePlan(tx, actor, slot.entityId, slot.payload, requestId);
         break;
+      case 'hsa_decision_remove':
+      case 'hsa_claim_remove':
+      case 'hsa_receipt_remove': {
+        const kind = slot.kind === 'hsa_decision_remove' ? 'decision' : slot.kind === 'hsa_claim_remove' ? 'claim' : 'receipt';
+        const restored = await restoreHsaRecord(tx, actor, kind, slot.entityId, requestId, slot.payload);
+        await clearUndoSlot(tx, actor);
+        return { id: slot.entityId, replayed: false, target: restored.target, path: restored.path };
+      }
     }
     await clearUndoSlot(tx, actor);
-    return { id: slot.entityId, replayed: false, target: slot.kind === 'plan_remove' ? 'plan' as const : 'payment' as const };
+    return { id: slot.entityId, replayed: false, target: slot.kind === 'plan_remove' ? 'plan' as const : 'payment' as const, path: null };
   }));
 }

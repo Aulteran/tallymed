@@ -146,7 +146,7 @@ async function richFixture() {
   await plans.cancelPlan(pool, actor, { planId: plan2.id, version: d2.plan.version, reason: 'Paid in full instead' }, 'r');
   // HSA: decision, claim, partial receipt, a receipt that is reversed, a released line, and a refund after the claim (needs review stays possible).
   const decide = async (allocationId, amount) => hsa.recordDecision(pool, actor, {
-    idempotencyKey: t.key(), allocationId, version: String((await hsaRepo.getAllocation(pool, actor.householdId, allocationId)).decisionCount), status: 'eligible', eligibleAmount: amount,
+    idempotencyKey: t.key(), allocationId, version: String((await hsaRepo.getAllocation(pool, actor.householdId, allocationId)).decisionVersion), status: 'eligible', eligibleAmount: amount,
     rationale: 'Qualified medical expense per plan rules', evidenceType: 'receipt', evidenceNote: 'Receipt on file', decidedOn: '2026-04-05',
   }, 'r');
   await decide(allocA, '120.00');

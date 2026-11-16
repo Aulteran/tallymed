@@ -4,12 +4,14 @@
 // plans), and take no bill or plan lock at all, so they can never lock out of order. Money is bigint cents. HSA rows never touch
 // payment_entries: a receipt does not change a bill or provider balance.
 import { randomUUID } from 'node:crypto';
-import { authorize, type Actor } from '../authz.ts';
+import { z } from 'zod';
+import { authorize, can, type Actor } from '../authz.ts';
 import { withSnapshot, withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import * as repo from '../repositories/hsa.ts';
 import * as paymentRepo from '../repositories/payments.ts';
+import { setUndoSlot, type UndoKind } from '../repositories/undo.ts';
 import { hsaFilterSchemas, hsaSchemas, parse, schemas } from '../validation.ts';
 import { idempotent, withRetry, type Detail } from './support.ts';
 
@@ -78,10 +80,14 @@ export async function getHsaAllocationDetail(pool: Pool, actor: Actor, id: strin
   const allocationId = parse(schemas.id, id);
   const allocation = await repo.getAllocation(pool, actor.householdId, allocationId);
   if (!allocation || await repo.paymentRemoved(pool, actor.householdId, allocation.paymentId)) throw new AppError('not_found');
-  const [decisions, lines, entries, history] = await Promise.all([
+  const admin = can(actor, 'records:remove');
+  const [rows, lines, entries, history, deletable] = await Promise.all([
     repo.listDecisions(pool, actor.householdId, allocationId), repo.linesOfAllocation(pool, actor.householdId, allocationId),
     repo.listEntriesOfAllocation(pool, actor.householdId, allocationId), repo.history(pool, actor.householdId, 'allocationId', allocationId),
+    admin ? repo.decisionsDeletable(pool, actor.householdId, allocationId) : Promise.resolve(null),
   ]);
+  // `deletable` is for administrators only (operators get null): whether Delete is available on that decision, and why not.
+  const decisions = rows.map((d) => ({ ...d, deletable: deletable ? deletable.get(d.id) ?? null : null }));
   return { allocation, decisions, lines, entries, history };
 }
 
@@ -95,10 +101,11 @@ export async function getHsaClaimDetail(pool: Pool, actor: Actor, id: string) {
   const claimId = parse(schemas.id, id);
   const claim = await repo.getClaim(pool, actor.householdId, claimId);
   if (!claim) throw new AppError('not_found');
-  const [lines, entries, history] = await Promise.all([
+  const [lines, entries, history, deletable] = await Promise.all([
     repo.linesOfClaim(pool, actor.householdId, claimId), repo.listEntriesOfClaim(pool, actor.householdId, claimId), repo.history(pool, actor.householdId, 'claimId', claimId),
+    can(actor, 'records:remove') ? repo.claimDeletable(pool, actor.householdId, claimId) : Promise.resolve(null),
   ]);
-  return { claim, lines, entries, history };
+  return { claim, lines, entries, history, deletable };
 }
 
 export async function listHsaReceipts(pool: Pool, actor: Actor, raw: unknown) {
@@ -112,10 +119,11 @@ export async function getHsaReceiptDetail(pool: Pool, actor: Actor, id: string) 
   const receiptId = parse(schemas.id, id);
   const receipt = await repo.getReceipt(pool, actor.householdId, receiptId);
   if (!receipt) throw new AppError('not_found');
-  const [entries, history] = await Promise.all([
+  const [entries, history, deletable] = await Promise.all([
     repo.listEntriesOfReceipt(pool, actor.householdId, receiptId), repo.history(pool, actor.householdId, 'receiptId', receiptId),
+    can(actor, 'records:remove') ? repo.receiptDeletable(pool, actor.householdId, receiptId) : Promise.resolve(null),
   ]);
-  return { receipt, entries, history };
+  return { receipt, entries, history, deletable };
 }
 
 // ---------- writes ----------
@@ -124,7 +132,7 @@ export async function getHsaReceiptDetail(pool: Pool, actor: Actor, id: string) 
  * Records an eligibility decision for one payment allocation. A decision is a user judgment with rationale and evidence; a date,
  * a category or a suggestion alone never certifies eligibility. Decisions are immutable rows, the latest is current, and
  * lowering one below what is pending or received is allowed: nothing already received is lost, the allocation shows as "needs
- * review" and new claims are frozen until the excess is resolved. `version` is the number of decisions the person saw.
+ * review" and new claims are frozen until the excess is resolved. `version` is the decision version the person saw (every decision and every removal or restore of one counts).
  */
 export async function recordDecision(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
@@ -136,7 +144,7 @@ export async function recordDecision(pool: Pool, actor: Actor, input: unknown, r
     const links = await lockForAllocations(tx, actor, [allocationId], { newExposure: true });
     const before = await freshAllocation(tx, actor, allocationId);
     if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
-    if (before.decisionCount !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
+    if (before.decisionVersion !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
     const eligible = d.status === 'eligible' ? d.eligibleAmount! : 0n;
     if (eligible > BigInt(before.netCents)) throw new AppError('conflict', 'The eligible amount is more than the net cash this allocation still holds');
     await repo.insertDecision(tx, {
@@ -368,6 +376,170 @@ export async function reverseReceipt(pool: Pool, actor: Actor, input: unknown, r
     return { id: eventId, replayed: false };
   }));
 }
+
+// ---------- administrator removal and restore (undo) ----------
+
+type RemovalKind = repo.RemovalKind;
+const REMOVAL: Record<RemovalKind, { noun: string; slot: UndoKind; removed: string; restored: string; entityType: string; target: 'hsa_decision' | 'hsa_claim' | 'hsa_receipt' }> = {
+  decision: { noun: 'eligibility decision', slot: 'hsa_decision_remove', removed: 'hsa.decision_removed', restored: 'hsa.decision_restored', entityType: 'hsa_allocation', target: 'hsa_decision' },
+  claim: { noun: 'claim', slot: 'hsa_claim_remove', removed: 'hsa.claim_removed', restored: 'hsa.claim_restored', entityType: 'hsa_claim', target: 'hsa_claim' },
+  receipt: { noun: 'reimbursement', slot: 'hsa_receipt_remove', removed: 'hsa.receipt_removed', restored: 'hsa.receipt_restored', entityType: 'hsa_receipt', target: 'hsa_receipt' },
+};
+
+/** Summed before and after figures of the allocations a removal or restore touches: cents only, no free text. */
+function sumFigures(before: repo.HsaAllocation[], after: repo.HsaAllocation[]): Detail {
+  const t = (xs: repo.HsaAllocation[], f: 'pendingCents' | 'receivedCents' | 'availableCents' | 'needsReviewCents') => cents(sum(xs.map((a) => BigInt(a[f]))));
+  return {
+    pendingBeforeCents: t(before, 'pendingCents'), pendingAfterCents: t(after, 'pendingCents'), receivedBeforeCents: t(before, 'receivedCents'), receivedAfterCents: t(after, 'receivedCents'),
+    availableBeforeCents: t(before, 'availableCents'), availableAfterCents: t(after, 'availableCents'), needsReviewBeforeCents: t(before, 'needsReviewCents'), needsReviewAfterCents: t(after, 'needsReviewCents'),
+  };
+}
+
+/** Maps what the removal guard (migration 0020) raises to a sentence the person can act on. Anything else passes through. */
+function mapRemovalError(e: unknown, kind: RemovalKind, action: repo.RemovalAction): unknown {
+  if (e instanceof AppError) return e;
+  const err = e as { code?: string; constraint?: string; message?: string };
+  const msg = String(err?.message ?? '');
+  const undoNote = action === 'restore' ? 'This cannot be undone: ' : '';
+  if (err?.code === '23505' && err.constraint === 'hsa_claims_reference_unique') {
+    return new AppError('conflict', 'This cannot be undone: a newer claim now uses the same reference. Delete or change that claim first.');
+  }
+  if (err?.code !== '23514') return e;
+  if (/unknown HSA record/.test(msg)) return new AppError('not_found');
+  if (/already removed/.test(msg)) return new AppError('conflict', `That ${REMOVAL[kind].noun} was already deleted`);
+  if (/is not removed/.test(msg)) return new AppError('conflict', 'Nothing to undo');
+  if (/remove its reimbursements first/.test(msg)) return new AppError('conflict', `${repo.MSG_CLAIM_HAS_RECEIPTS}. A claim with a reimbursement cannot be deleted.`);
+  if (/would increase the excess above the eligible ceiling/.test(msg)) {
+    return new AppError('conflict', kind === 'decision' ? repo.MSG_DECISION_SUPPORTS : kind === 'receipt' ? repo.MSG_RECEIPT_SUPPORTS : 'Deleting this claim would leave more reimbursement than the payment supports');
+  }
+  if (/exceed the eligible ceiling/.test(msg)) return new AppError('conflict', action === 'restore'
+    ? 'Undoing this deletion would put pending plus received reimbursement above what the payment\'s eligible amount supports, so this deletion cannot be undone. Enter the record again instead if it is still wanted.'
+    : 'That change would put pending plus received reimbursement above what the payment\'s eligible amount supports.');
+  if (/payment is removed/.test(msg)) return new AppError('conflict', `${undoNote}the payment was removed, so its HSA records stay deleted.`);
+  if (/payment is voided/.test(msg)) return new AppError('conflict', `${undoNote}the payment was voided, so its HSA records stay deleted.`);
+  if (/paid directly from an HSA/.test(msg)) return new AppError('conflict', `${undoNote}the payment is now paid directly from an HSA, so it has no claims or decisions.`);
+  if (/while its claim is removed/.test(msg)) return new AppError('conflict', `${undoNote}its claim is deleted. Restore the claim first.`);
+  if (/allocated in full|cover every entry/.test(msg)) return new AppError('conflict', `${undoNote}the reimbursement no longer matches its claim lines.`);
+  return new AppError('conflict', 'That change would break a reimbursement limit. Reload and check the current figures.');
+}
+
+/** Probes the record, locks the payments behind it (ascending id) and reads it again, so every figure read afterwards is under the locks. */
+async function lockedRecord(tx: Queryable, actor: Actor, kind: RemovalKind, id: string): Promise<repo.RemovalRecord | null> {
+  const probe = await repo.getRemovalRecord(tx, actor.householdId, kind, id);
+  if (!probe) return null;
+  const locked = await paymentRepo.lockPayments(tx, actor.householdId, probe.paymentIds);
+  if (locked.length !== probe.paymentIds.length) return null;
+  return repo.getRemovalRecord(tx, actor.householdId, kind, id);
+}
+
+/** Appends the event and runs the commit-time guard now (instead of at commit), so a refusal is raised here and can be explained. */
+async function postRemovalEvent(tx: Queryable, actor: Actor, kind: RemovalKind, id: string, action: repo.RemovalAction, reason: string): Promise<string> {
+  try {
+    const eventId = await repo.insertRemovalEvent(tx, { kind, recordId: id, action, reason, householdId: actor.householdId, userId: actor.userId });
+    await tx.query('set constraints hsa_removal_events_guard immediate');
+    return eventId;
+  } catch (e) {
+    throw mapRemovalError(e, kind, action);
+  }
+}
+
+function removalDetail(kind: RemovalKind, rec: repo.RemovalRecord, eventId: string, before: repo.HsaAllocation[], after: repo.HsaAllocation[]): Detail {
+  const ids: Detail = kind === 'decision' ? { decisionId: rec.id, allocationId: rec.allocationId, paymentId: rec.paymentIds[0] ?? null }
+    : kind === 'claim' ? { claimId: rec.id } : { receiptId: rec.id, claimId: rec.claimId };
+  return { ...ids, eventId, allocationCount: rec.allocationIds.length, amountCents: rec.cents, ...sumFigures(before, after) };
+}
+
+async function removeRecord(
+  pool: Pool, actor: Actor, kind: RemovalKind, v: { id: string; reason: string; key: string; steer?: (r: repo.RemovalRecord) => boolean }, requestId: string,
+): Promise<{ id: string; replayed: boolean }> {
+  const meta = REMOVAL[kind];
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, meta.removed.replace('removed', 'remove'), v.key, { id: v.id, reason: v.reason }, v.id);
+    if (replayId) return { id: replayId, replayed: true };
+    const rec = await lockedRecord(tx, actor, kind, v.id);
+    if (!rec) throw new AppError('not_found');
+    if (v.steer && !v.steer(rec)) throw new AppError('invalid_input');
+    if (rec.removed) throw new AppError('conflict', `That ${meta.noun} was already deleted`);
+    const before = await repo.getAllocations(tx, actor.householdId, rec.allocationIds);
+    const eventId = await postRemovalEvent(tx, actor, kind, v.id, 'remove', v.reason);
+    const after = await repo.getAllocations(tx, actor.householdId, rec.allocationIds);
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: meta.removed, entityType: meta.entityType,
+      entityId: kind === 'decision' ? rec.allocationId : rec.id, requestId, detail: removalDetail(kind, rec, eventId, before, after),
+    });
+    await setUndoSlot(tx, actor, { kind: meta.slot, entityId: rec.id, payload: { recordId: rec.id } });
+    return { id: rec.id, replayed: false };
+  }));
+}
+
+/**
+ * Administrator removal of an eligibility decision. Nothing is deleted: a removal marker hides it, and undo restores it exactly. Refused when
+ * it would leave more pending plus received than the remaining ceiling supports and that is worse than before (the guard's "not worse than
+ * before" rule, so stale decisions can still be cleaned up on an allocation that already needs review).
+ */
+export async function removeHsaDecision(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'records:remove');
+  const { idempotencyKey, decisionId, allocationId, reason } = parse(hsaSchemas.removeDecision, input);
+  return removeRecord(pool, actor, 'decision', { id: decisionId, reason, key: idempotencyKey, steer: (r) => !allocationId || allocationId === r.allocationId }, requestId);
+}
+
+/** Administrator removal of a whole claim (its reserve, reject and cancel entries stop counting). Leaf-first: refused while a live reimbursement has entries on it. */
+export async function removeHsaClaim(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'records:remove');
+  const { idempotencyKey, claimId, reason } = parse(hsaSchemas.removeClaim, input);
+  return removeRecord(pool, actor, 'claim', { id: claimId, reason, key: idempotencyKey }, requestId);
+}
+
+/** Administrator removal of a reimbursement receipt: its entries stop counting, claim lines return to pending and received falls. */
+export async function removeHsaReceipt(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'records:remove');
+  const { idempotencyKey, receiptId, claimId, reason } = parse(hsaSchemas.removeReceipt, input);
+  return removeRecord(pool, actor, 'receipt', { id: receiptId, reason, key: idempotencyKey, steer: (r) => !claimId || claimId === r.claimId }, requestId);
+}
+
+const restorePayload = z.strictObject({ recordId: z.uuid() });
+
+/**
+ * The inverse of a removal, used only by undo and called inside its transaction (the caller authorized `records:remove`). Locks the payments
+ * first, requires the record to be removed right now (else "Nothing to undo"), appends a `restore` event and runs the commit guard at once. The
+ * guard is strict for a restore: nothing may exceed the ceiling, and the payment must still be live and not paid directly from an HSA. Returns
+ * the page the undo redirect lands on.
+ */
+export async function restoreHsaRecord(
+  tx: Queryable, actor: Actor, kind: RemovalKind, recordId: string, requestId: string, payload: unknown = { recordId },
+): Promise<{ target: 'hsa_decision' | 'hsa_claim' | 'hsa_receipt'; path: string }> {
+  const parsed = restorePayload.safeParse(payload);
+  if (!parsed.success || parsed.data.recordId !== recordId) throw new AppError('conflict', 'Nothing to undo');
+  const meta = REMOVAL[kind];
+  const rec = await lockedRecord(tx, actor, kind, recordId);
+  if (!rec || !rec.removed) throw new AppError('conflict', 'Nothing to undo');
+  const before = await repo.getAllocations(tx, actor.householdId, rec.allocationIds);
+  const eventId = await postRemovalEvent(tx, actor, kind, recordId, 'restore', 'Restored by undo');
+  const after = await repo.getAllocations(tx, actor.householdId, rec.allocationIds);
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: meta.restored, entityType: meta.entityType,
+    entityId: kind === 'decision' ? rec.allocationId : rec.id, requestId, detail: removalDetail(kind, rec, eventId, before, after),
+  });
+  const page = await repo.recordPage(tx, actor.householdId, recordId);
+  if (!page) throw new AppError('conflict', 'Nothing to undo');
+  return { target: meta.target, path: page.path };
+}
+
+/**
+ * Whether Delete is available on one record, and why not, from the rules the database guard enforces (leaf-first for a claim, "not worse than
+ * before" for a decision or a receipt). For administrators only. The detail reads carry the same shape as `deletable`.
+ */
+export async function hsaRecordDeletable(pool: Pool | Queryable, actor: Actor, kind: RemovalKind, id: string): Promise<repo.Deletable> {
+  authorize(actor, 'records:remove');
+  const recordId = parse(schemas.id, id);
+  const rec = await repo.getRemovalRecord(pool, actor.householdId, kind, recordId);
+  if (!rec) throw new AppError('not_found');
+  if (rec.removed) return { deletable: false, reason: repo.MSG_ALREADY_REMOVED };
+  if (kind === 'claim') return repo.claimDeletable(pool, actor.householdId, recordId);
+  if (kind === 'receipt') return repo.receiptDeletable(pool, actor.householdId, recordId);
+  return (await repo.decisionsDeletable(pool, actor.householdId, rec.allocationId!)).get(recordId) ?? { deletable: false, reason: repo.MSG_ALREADY_REMOVED };
+}
+
 
 // ---------- scoped export ----------
 

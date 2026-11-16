@@ -111,7 +111,9 @@ HTML form posts are flat, so a list of rows (payment allocations, plan installme
 
 ## HSA reimbursements (M04)
 
-Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` (and the SQL view `hsa_allocation_status`) is the stable read interface for reports and exports. The MCP deliberately reads no HSA data.
+Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` is the stable read interface for reports and exports (the SQL view `hsa_allocation_status` is the raw model behind it; see the visibility rule below). The MCP deliberately reads no HSA data.
+
+The SQL view `hsa_allocation_status` is the raw reconciliation model: it includes every allocation, removed payments and fully reversed leftovers too. `listHsaFigures` and every HSA list, total, queue and export apply the visibility rule instead: an allocation is hidden when its payment is removed, or when it is fully reversed (net 0) with no live eligibility decision and no live HSA entry. Dollar figures are identical either way; only counts of hidden rows differ. HSA decisions, claims and reimbursement receipts can be deleted by an administrator (append-only removal markers in `hsa_removal_events`, undoable for a short time); a removed record is not live. Readers take decisions and entries from `hsa_live_decisions` and `hsa_live_entries`, the one definition of live. Deletes are leaf-first (reimbursements, then the claim, then a decision that supports them), a removal may not make an allocation's needs-review excess larger, and a restore may never leave pending plus received above the eligible ceiling.
 
 ### Figures
 

@@ -336,7 +336,14 @@ const decisionVersion = z.coerce.number().int().min(0).max(1_000_000);
 const claimLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
 const receiptLine = z.strictObject({ lineId: uuid, amount: positiveUsd });
 
+// Removing an HSA record hides it (undo brings it back); the reason is kept on the removal event, never in the audit row. The optional claim and
+// allocation fields only steer the redirect after the action; the service refuses a value that does not belong to the record.
+const removalReason = z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), text(500).min(1).default('Removed by administrator'));
+
 export const hsaSchemas = {
+  removeDecision: z.strictObject({ idempotencyKey, decisionId: uuid, allocationId: uuid.optional(), reason: removalReason, ...csrf }),
+  removeClaim: z.strictObject({ idempotencyKey, claimId: uuid, reason: removalReason, ...csrf }),
+  removeReceipt: z.strictObject({ idempotencyKey, receiptId: uuid, claimId: uuid.optional(), reason: removalReason, ...csrf }),
   /** An eligibility decision. `version` is the number of decisions the person saw, so a stale form is refused. */
   decide: z.strictObject({
     idempotencyKey, allocationId: uuid, version: decisionVersion, status: decisionStatus, eligibleAmount: optional(positiveUsd),
