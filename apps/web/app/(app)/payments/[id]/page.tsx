@@ -48,6 +48,7 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     </div>
     <p>{label(pm.method)}{pm.paidWithName ? ` · paid with ${methodName(pm.paidWithName, pm.paidWithLastFour)}${pm.paidWithArchived ? ' (archived)' : ''}` : ''}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
     {pm.hsaAccountId && <div className="card" role="note"><strong>Paid directly from {pm.hsaAccountName}.</strong> This was paid with an HSA card at the point of service, so the HSA has already paid it. There is nothing to claim and no eligibility decision. A refund below returns cash to the HSA.</div>}
+    {pm.hsaIneligible && <p className="muted" role="note">This payment was recorded as ineligible for HSA, so nothing can be claimed on it.</p>}
     {pm.note && <p>{pm.note}</p>}
     <Banner code={q.error} />
     {pm.voided && <div className="card" role="note"><strong>Voided on {pm.voidedOn}.</strong> {pm.voidReason}. A voided payment holds no cash and cannot be applied or refunded.</div>}

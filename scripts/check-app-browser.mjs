@@ -435,22 +435,16 @@ try {
   await a11y('overview with payments and plans');
   ok('plan created, installment partly matched, bill balance unchanged, overdue queue on the overview');
 
-  // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
+  // HSA: a payment is eligible by default; claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
   await a11y('HSA list');
-  assert.match(await text(), /Not decided yet\s*\n?\s*1/); // the directly paid allocation is not counted: it takes no decision
+  assert.doesNotMatch(await text(), /Not decided yet/);
   await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'INV-1' }).first().click();
   await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
   const hsaUrl = page.url();
   await a11y('HSA payment page');
-  await page.selectOption('#status', 'eligible');
-  await page.fill('#eligibleAmount', '60.00');
-  await page.fill('#rationale', 'Qualified medical expense');
-  await page.selectOption('#evidenceType', 'receipt');
-  await page.fill('#evidenceNote', 'Clinic receipt on file');
-  await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
-  await page.waitForURL(hsaUrl);
-  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$60\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/decide"]').count(), 0, 'the eligibility decision form is gone');
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$85\.00/);
   await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '50.00');
   await page.fill('#administrator', 'Example HSA Bank');
   await page.fill('#reference', 'CLM-0001');
@@ -468,10 +462,10 @@ try {
   const figures = await text();
   assert.match(figures, /Pending\s*\n?\s*\$30\.00/);
   assert.match(figures, /Received\s*\n?\s*\$20\.00/);
-  assert.match(figures, /Available\s*\n?\s*\$10\.00/);
+  assert.match(figures, /Available\s*\n?\s*\$35\.00/);
   await page.goto(billUrl);
   assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
-  ok('HSA decision, claim and partial receipt reconcile ($30 pending, $20 received, $10 available) and the bill balance is unchanged');
+  ok('HSA claim and partial receipt reconcile against the default-eligible payment ($30 pending, $20 received, $35 available) and the bill balance is unchanged');
   await page.goto(paymentUrl);
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '40.00');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Second provider refund');

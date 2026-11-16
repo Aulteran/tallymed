@@ -14,20 +14,19 @@ export const LINE_LABEL: Record<LineStatus, string> = {
 };
 export const LineStatusPill = ({ status }: { status: LineStatus }) => <span className={status === 'fulfilled' ? 'pill' : 'pill warn'}>{LINE_LABEL[status]}</span>;
 
-export function DecisionPill({ a }: { a: Pick<HsaAllocation, 'decisionStatus' | 'needsReviewCents' | 'directHsa'> }) {
-  // A payment paid directly from an HSA is settled: it takes no eligibility decision, so it is never "not decided".
+export function DecisionPill({ a }: { a: Pick<HsaAllocation, 'decisionStatus' | 'needsReviewCents' | 'directHsa' | 'markedIneligible'> }) {
+  // A payment paid directly from an HSA is settled. Otherwise a payment is eligible unless it was recorded as ineligible or its latest decision says so.
   if (a.directHsa) return <span className="pill">Paid from HSA</span>;
+  if (a.markedIneligible || a.decisionStatus === 'ineligible') return <span className="pill neutral">Ineligible</span>;
   if (BigInt(a.needsReviewCents) > 0n) return <span className="pill warn">Needs review</span>;
-  if (a.decisionStatus === 'eligible') return <span className="pill">Eligible</span>;
-  if (a.decisionStatus === 'ineligible') return <span className="pill neutral">Ineligible</span>;
-  return <span className="pill warn">{a.decisionStatus === 'pending' ? 'Decision pending' : 'Not decided'}</span>;
+  return <span className="pill">Eligible</span>;
 }
 
 /** The five figures of one allocation, each labelled so the screen never shows a bare number. */
 export function FigureCards({ a }: { a: HsaAllocation }) {
   return <section className="metrics" aria-label="HSA figures">
     <div className="card"><span>Net cash paid</span><strong><Money cents={a.netCents} /></strong><span className="muted">After refunds and reversals</span></div>
-    <div className="card"><span>Eligible ceiling</span><strong><Money cents={a.ceilingCents} /></strong><span className="muted">Decided <Money cents={a.decidedCents} />, never above net cash</span></div>
+    <div className="card"><span>Eligible ceiling</span><strong><Money cents={a.ceilingCents} /></strong><span className="muted">Eligible by default, never above net cash</span></div>
     <div className="card"><span>Pending</span><strong><Money cents={a.pendingCents} /></strong><span className="muted">Reserved by open claims</span></div>
     <div className="card"><span>Received</span><strong><Money cents={a.receivedCents} /></strong><span className="muted">Reimbursements, less reversals</span></div>
     <div className="card"><span>Available</span><strong><Money cents={a.availableCents} /></strong><span className="muted">Can still be claimed</span></div>
