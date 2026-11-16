@@ -8,6 +8,9 @@ import * as pay from '../../apps/web/server/services/payments.ts';
 import * as plans from '../../apps/web/server/services/plans.ts';
 import { AppError } from '../../apps/web/server/errors.ts';
 import { retryStats } from '../../apps/web/server/services/support.ts';
+import { withInstallmentList, withInstRowValues } from '../../apps/web/server/plan-installments.ts';
+import { withBillTicks } from '../../apps/web/server/plan-preview-form.ts';
+import { readFlash } from '../../apps/web/server/flash.ts';
 import { post, skipDb } from './helpers.mjs';
 import { setup } from './money-helpers.mjs';
 
@@ -1315,6 +1318,209 @@ test('the preview route writes nothing and redirects with only a marker; the typ
     assert.equal((await run({ preview: 'other', planId: s.plan.id, ...fields })).status, 400);
     assert.equal((await run({ preview: 'revise', planId: '../x', ...fields })).status, 400);
     assert.equal(await counts(), before);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+// ---------- suggested matches: refusals that need a plan in another state ----------
+
+test('applying suggestions is refused on a cancelled plan, a removed plan and a stale version, and a replayed key with other rows is a conflict', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    // A cancelled plan.
+    const a = await suggestionSetup(t);
+    const shownA = await a.suggest();
+    await plans.cancelPlan(t.db.pool, t.actor, { planId: a.plan.id, version: 1, reason: 'Paid elsewhere' }, 'r');
+    await assert.rejects(a.apply(shownA, { version: 2 }), code('conflict'));
+    await assert.rejects(a.apply(shownA, { version: 1 }), code('stale_version'), 'the old version is stale, not applied');
+    // A removed plan (administrator): nothing is applied whichever version the form carries.
+    const b = await suggestionSetup(t);
+    const shownB = await b.suggest();
+    await plans.removePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: b.plan.id, version: 1, reason: 'Entered twice' }, 'r');
+    for (const version of [1, 2, 3]) await assert.rejects(b.apply(shownB, { version }), (e) => e instanceof AppError && ['conflict', 'not_found'].includes(e.code));
+    // A stale version on an active plan: the plan moved on (a revision) after the card was drawn.
+    const c = await suggestionSetup(t);
+    const shownC = await c.suggest();
+    await plans.revisePlan(t.db.pool, t.actor, { idempotencyKey: t.key(), planId: c.plan.id, version: 1, reason: 'Smaller payments', totalAmount: '300.00', installmentCount: '6', firstDueDate: '2026-06-01', cadence: 'monthly' }, 'r');
+    await assert.rejects(c.apply(shownC), code('stale_version'));
+    // The same key replayed with other rows is a conflict, with the same rows a replay.
+    const d = await suggestionSetup(t);
+    const shownD = await d.suggest();
+    const key = t.key();
+    const first = await d.apply(shownD.slice(0, 2), { idempotencyKey: key });
+    assert.equal(first.replayed, false);
+    assert.equal((await d.apply(shownD.slice(0, 2), { idempotencyKey: key })).replayed, true);
+    const matches = await t.count('installment_matches');
+    await assert.rejects(d.apply(shownD, { idempotencyKey: key }), code('conflict'));
+    await assert.rejects(d.apply(shownD.slice(0, 1), { idempotencyKey: key }), code('conflict'));
+    assert.equal(await t.count('installment_matches'), matches, 'the conflicting replay matched nothing');
+    assert.equal(await t.count('installment_matches where plan_id = \'' + a.plan.id + '\''), 0, 'the cancelled plan matched nothing');
+  } finally {
+    await t.db.drop();
+  }
+});
+
+// ---------- "List each installment" ----------
+
+const LIST_ROWS = [['2026-09-01', '75.25'], ['2026-10-01', '40.00'], ['2026-11-01', '40.00'], ['2026-12-01', '40.00'], ['2027-01-01', '4.75']];
+const LIST_AMOUNTS = ['7525', '4000', '4000', '4000', '475'];
+/** The generated-mode fields a browser still posts next to a list, which a list ignores. */
+const IGNORED = { totalAmount: '999.00', installmentCount: '7', installmentAmount: '1.00', firstDueDate: '2030-01-01', cadence: 'weekly', remainder: 'last_short' };
+
+async function listSetup(t) {
+  const s = await planSetup(t, { bill: '200.00', installments: 2, total: '200.00' });
+  const token = t.cookie.split('=')[1];
+  const form = (action, body) => handlers.handleExpenseAction(post(`/api/expenses/${action}`, { csrf: csrfFor(token), ...body }, { cookie: t.cookie, html: true }), t.ctx, action);
+  const table = Object.fromEntries(LIST_ROWS.flatMap(([d, a], i) => [[`inst.${i}.dueDate`, d], [`inst.${i}.amount`, a]]));
+  // The 12 rows of the form: the rows after the typed ones are blank.
+  const padded = { ...table, ...Object.fromEntries(Array.from({ length: 12 - LIST_ROWS.length }, (_, k) => [`inst.${k + LIST_ROWS.length}.dueDate`, '']).concat(Array.from({ length: 12 - LIST_ROWS.length }, (_, k) => [`inst.${k + LIST_ROWS.length}.amount`, '']))) };
+  const text = ['9/1/2026\t$75.25', '', '2026-10-01, 40', '2026-11-01 40.00', '12/1/2026 40.00', '2027-01-01 $4.75'].join('\r\n');
+  const planCount = () => t.count('payment_plans');
+  const shape = (d) => d.installments.map((i) => [i.dueDate, i.amountCents]);
+  return { ...s, form, table, padded, text, planCount, shape };
+}
+
+test('a plan created from the table rows or from pasted text is the same schedule, in cents, and the generated fields are ignored', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await listSetup(t);
+    const base = { name: 'Listed plan', [`bill_${s.b.id}`]: 'on', startedOn: '2026-01-01', inputMode: 'list', ...IGNORED };
+    const before = await s.planCount();
+    const fromRows = await s.form('plans/create', { ...base, idempotencyKey: t.key(), ...s.padded, installmentsText: '' });
+    assert.equal(fromRows.status, 303);
+    const idA = new URL(fromRows.headers.get('location')).pathname.split('/')[2];
+    const fromText = await s.form('plans/create', { ...base, idempotencyKey: t.key(), name: 'Pasted plan', installmentsText: s.text, ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`inst.${i}.dueDate`, '']).concat(Array.from({ length: 12 }, (_, i) => [`inst.${i}.amount`, '']))) });
+    assert.equal(fromText.status, 303);
+    const idB = new URL(fromText.headers.get('location')).pathname.split('/')[2];
+    assert.equal(await s.planCount(), before + 2);
+    const a = await s.detail(idA);
+    const b = await s.detail(idB);
+    assert.deepEqual(s.shape(a), LIST_ROWS.map(([d], i) => [d, LIST_AMOUNTS[i]]));
+    assert.deepEqual(s.shape(b), s.shape(a));
+    for (const d of [a, b]) {
+      assert.equal(d.plan.totalCents, '20000');
+      assert.equal(d.plan.cadence, 'custom');
+      assert.equal(d.plan.installmentCount, 5);
+    }
+    assert.equal(await t.count('payments'), 0, 'a plan moves no cash');
+    // A listed plan in the audit trail records the cents it was saved with, and nothing the person typed as free text.
+    const created = (await t.audit('plan.created')).find((x) => x.entity_id === idA);
+    assert.equal(created.detail.computedTotalCents, '20000');
+    // The idempotency key makes a replayed post one plan.
+    const key = t.key();
+    const post1 = await s.form('plans/create', { ...base, idempotencyKey: key, name: 'Replay plan', ...s.padded });
+    const post2 = await s.form('plans/create', { ...base, idempotencyKey: key, name: 'Replay plan', ...s.padded });
+    assert.equal(post1.headers.get('location'), post2.headers.get('location'));
+    assert.equal(await s.planCount(), before + 3);
+    // With another input mode the table and the text are ignored, even when they are garbage.
+    const generated = await s.form('plans/create', { name: 'Generated plan', [`bill_${s.b.id}`]: 'on', startedOn: '2026-01-01', idempotencyKey: t.key(), inputMode: 'total', totalAmount: '90.00', installmentCount: '3', firstDueDate: '2026-09-01', cadence: 'monthly', 'inst.0.dueDate': 'garbage', 'inst.0.amount': '??', installmentsText: 'not a schedule' });
+    assert.equal(generated.status, 303);
+    const g = await s.detail(new URL(generated.headers.get('location')).pathname.split('/')[2]);
+    assert.deepEqual(s.shape(g), [['2026-09-01', '3000'], ['2026-10-01', '3000'], ['2026-11-01', '3000']]);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('a list given as both table rows and pasted text, or with a bad line, is refused, writes nothing and keeps what was typed', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await listSetup(t);
+    const base = { name: 'Listed plan', [`bill_${s.b.id}`]: 'on', inputMode: 'list', idempotencyKey: t.key(), ...IGNORED };
+    const before = JSON.stringify([await s.planCount(), await t.count('idempotency_records'), await t.count('audit_events')]);
+    const both = await s.form('plans/create', { ...base, ...s.table, installmentsText: s.text });
+    assert.match(new URL(both.headers.get('location')).search, /error=invalid_input/);
+    // The typed rows and the text wait in the flash cookie, the rows as one text.
+    const flash = readFlash(both.headers.get('set-cookie').split(';')[0].split('=')[1], '/plans');
+    assert.equal(flash.installmentsText, s.text.replaceAll('\r\n', '\n'));
+    assert.equal(flash.instRows.split('\n').length, 5);
+    assert.equal(flash.inputMode, 'list');
+    assert.equal(flash['bill.0'], s.b.id, 'the ticked bill is kept too, so fixing the list does not mean ticking it again');
+    const values = withInstRowValues(flash);
+    assert.equal(values['inst.4.amount'], '4.75');
+    const bad = await s.form('plans/create', { ...base, idempotencyKey: t.key(), installmentsText: '2026-09-01 75.25\n2026-10-01 forty\n\n2026-11-01 40.001' });
+    assert.match(new URL(bad.headers.get('location')).search, /error=invalid_input/);
+    const none = await s.form('plans/create', { ...base, idempotencyKey: t.key() });
+    assert.match(new URL(none.headers.get('location')).search, /error=invalid_input/);
+    assert.equal(JSON.stringify([await s.planCount(), await t.count('idempotency_records'), await t.count('audit_events')]), before);
+    // As JSON the message carries the line numbers.
+    await assert.rejects(async () => plans.createPlan(t.db.pool, t.actor, withInstallmentList({ ...base, installmentsText: '2026-09-01 75.25\n\n2026-10-01 forty' }), 'r'), (e) => e.code === 'invalid_input' && e.message === 'Line 3: amount is not a number');
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('revising with a list replaces the schedule, or with keep_paid describes only the unpaid rest', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await planSetup(t); // $300.00 as 3 x $100.00 due 06-01, 07-01, 08-01
+    const token = t.cookie.split('=')[1];
+    const form = (body) => handlers.handleExpenseAction(post('/api/expenses/plans/revise', { csrf: csrfFor(token), ...body }, { cookie: t.cookie, html: true }), t.ctx, 'plans/revise');
+    const pm = await t.pay1({ amount: '100.00', billId: s.b.id });
+    const alloc = (await t.payment(pm.id)).allocations[0].allocationId;
+    const d0 = await s.detail();
+    await s.match(d0.installments[0].id, alloc, '100.00'); // #1 paid in full
+    const common = () => ({ idempotencyKey: t.key(), planId: s.plan.id, reason: 'Provider restructured', inputMode: 'list', ...IGNORED });
+    // Replace: the whole schedule is the list ($200.00, uneven), and the $100.00 match carries onto the earliest installments.
+    const replaced = await form({ ...common(), version: String(d0.plan.version), reviseMode: 'replace', installmentsText: LIST_ROWS.map(([d, a]) => `${d} ${a}`).join('\n') });
+    assert.equal(replaced.status, 303);
+    assert.equal(new URL(replaced.headers.get('location')).pathname, `/plans/${s.plan.id}`);
+    assert.equal(new URL(replaced.headers.get('location')).search, '');
+    const d1 = await s.detail();
+    assert.deepEqual(d1.installments.map((i) => [i.dueDate, i.amountCents, i.matchedCents]), [['2026-09-01', '7525', '7525'], ['2026-10-01', '4000', '2475'], ['2026-11-01', '4000', '0'], ['2026-12-01', '4000', '0'], ['2027-01-01', '475', '0']]);
+    assert.equal(d1.plan.totalCents, '20000');
+    // keep_paid: the first installment is not fully paid any more (it is $75.25 with $75.25 matched = paid; the second is partly paid), so the rest is listed again.
+    const kept = await form({ ...common(), version: String(d1.plan.version), reviseMode: 'keep_paid', ...Object.fromEntries([['2026-12-01', '60.00'], ['2027-02-01', '$14.75']].flatMap(([d, a], i) => [[`inst.${i}.dueDate`, d], [`inst.${i}.amount`, a]])) });
+    assert.equal(kept.status, 303, kept.headers.get('location'));
+    const d2 = await s.detail();
+    assert.deepEqual(d2.installments.map((i) => [i.dueDate, i.amountCents, i.matchedCents]), [['2026-09-01', '7525', '7525'], ['2026-12-01', '6000', '2475'], ['2027-02-01', '1475', '0']]);
+    assert.equal(d2.plan.totalCents, '15000', 'the kept installment plus the listed rest');
+    const a = (await t.audit('plan.revised')).at(-1).detail;
+    assert.deepEqual([a.reviseMode, a.keptInstallmentCount, a.keptCents, a.rescheduledCount, a.rescheduledCents], ['keep_paid', 1, '7525', 2, '7475']);
+    // A bad list in a revision is refused and leaves the plan as it was.
+    const revisions = await t.count('plan_revisions');
+    const refused = await form({ ...common(), version: String(d2.plan.version), reviseMode: 'replace', installmentsText: '2027-03-01 oops' });
+    assert.match(new URL(refused.headers.get('location')).search, /error=invalid_input/);
+    assert.equal(await t.count('plan_revisions'), revisions);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('a preview of a list writes nothing, shows the listed rows exactly, and equals what is saved', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await listSetup(t);
+    const tables = ['payments', 'payment_entries', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches', 'audit_events', 'idempotency_records', 'bills'];
+    const counts = async () => JSON.stringify(await Promise.all(tables.map((x) => t.count(x))));
+    const before = await counts();
+    const body = { name: 'Previewed list', [`bill_${s.b.id}`]: 'on', startedOn: '2026-01-01', inputMode: 'list', ...IGNORED, ...s.padded, installmentsText: '' };
+    const res = await s.form('plans/preview', { preview: 'create', ...body });
+    assert.equal(res.status, 303);
+    assert.equal(new URL(res.headers.get('location')).search, '?preview=create');
+    assert.equal(await counts(), before);
+    // What the page does: read the flash, put the table back, convert and preview.
+    const values = withBillTicks(withInstRowValues(readFlash(res.headers.get('set-cookie').split(';')[0].split('=')[1], '/plans')));
+    assert.equal(values.inputMode, 'list');
+    const preview = await plans.previewNewPlan(t.db.pool, t.actor, withInstallmentList(values));
+    assert.deepEqual(preview.rows.map((r) => [r.dueDate, r.amountCents, r.kept]), LIST_ROWS.map(([d], i) => [d, LIST_AMOUNTS[i], false]));
+    assert.deepEqual([preview.count, preview.totalCents], [5, '20000']);
+    assert.deepEqual(preview.warnings, [], 'the bill owes $200.00 and the list adds up to it');
+    assert.equal(await counts(), before, 'building the preview wrote nothing');
+    // Saving the same form values gives exactly the previewed schedule.
+    const saved = await s.form('plans/create', { idempotencyKey: t.key(), ...body });
+    const d = await s.detail(new URL(saved.headers.get('location')).pathname.split('/')[2]);
+    assert.deepEqual(s.shape(d), preview.rows.map((r) => [r.dueDate, r.amountCents]));
+    assert.equal(d.plan.totalCents, preview.totalCents);
+    // A list that does not match the bill shows the balance warning; a bad list is an error with every line (the page lists them).
+    const off = await plans.previewNewPlan(t.db.pool, t.actor, withInstallmentList({ ...values, 'inst.4.amount': '9.75' }));
+    assert.deepEqual(off.warnings.map((w) => [w.code, w.differenceCents]), [['bill_balance_mismatch', '500']]);
+    assert.throws(() => withInstallmentList({ ...values, 'inst.1.amount': 'x', 'inst.3.dueDate': '2026-02-30' }), (e) => e.lines.length === 2 && e.lines[0] === 'Row 2: amount is not a number');
+    // The revise preview of a list: replace, and keep_paid with nothing paid.
+    const rev = await plans.previewPlanRevision(t.db.pool, t.actor, s.plan.id, withInstallmentList({ inputMode: 'list', reviseMode: 'replace', installmentsText: '2026-09-01 150.00\n2026-10-01 50.00' }));
+    assert.deepEqual(rev.rows.map((r) => [r.dueDate, r.amountCents]), [['2026-09-01', '15000'], ['2026-10-01', '5000']]);
+    assert.equal(await counts(), JSON.stringify(await Promise.all(tables.map((x) => t.count(x)))));
   } finally {
     await t.db.drop();
   }

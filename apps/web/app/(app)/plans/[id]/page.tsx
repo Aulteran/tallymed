@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { ConfirmDialog } from '../../../components/ConfirmDialog.tsx';
 import { AddDialog } from '../../../components/AddDialog.tsx';
-import { PlanPreviewPanel, PreviewButton, tryPreview } from '../../../components/PlanPreview.tsx';
+import { PlanPreviewPanel, PreviewButton, TRIMMED_LIST_PREVIEW, tryPreview } from '../../../components/PlanPreview.tsx';
 import { PlanScheduleFields } from '../../../components/PlanScheduleFields.tsx';
 import { can } from '../../../../server/authz.ts';
 import { centsToUsdInput, formatCents } from '../../../../server/money.ts';
+import { listFormState, withInstallmentList, withInstRowValues } from '../../../../server/plan-installments.ts';
 import { hasPreviewValues } from '../../../../server/plan-preview-form.ts';
 import { getPlanDetail, previewPlanRevision, suggestPlanMatches } from '../../../../server/services/plans.ts';
 import {
@@ -17,7 +18,7 @@ export const metadata = { title: 'Payment plan · TallyMed' };
 export default async function PlanPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
   const { id } = await params;
-  const q = await flatWithFlash(searchParams, `/plans/${id}`);
+  const q = withInstRowValues(await flatWithFlash(searchParams, `/plans/${id}`));
   const { data } = await load(() => getPlanDetail(ctx.pool, actor, id, { allocationId: q.allocationId }), null);
   const { plan, bills, revisions, installments, matches, history, allocations, allocationsTruncated } = data!;
   const active = plan.status === 'active';
@@ -63,7 +64,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   const scheduleOf = (v: Record<string, string>, fields: string[]) => Object.fromEntries(fields.filter((f) => v[f] !== undefined).map((f) => [f, v[f]!]));
   const showPreview = hasPreviewValues(q);
   const revisePreview = q.preview === 'revise' && active && showPreview
-    ? await tryPreview(() => previewPlanRevision(ctx.pool, actor, plan.id, scheduleOf(q, ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode']))) : null;
+    ? (q.flashTrimmed ? TRIMMED_LIST_PREVIEW : await tryPreview(() => previewPlanRevision(ctx.pool, actor, plan.id, withInstallmentList(scheduleOf(q, ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode', 'installmentsText', ...Object.keys(q).filter((k) => k.startsWith('inst.'))]))))) : null;
   const restructurePreview = q.preview === 'restructure' && canRestructure && showPreview
     ? await tryPreview(() => previewPlanRevision(ctx.pool, actor, plan.id, { ...scheduleOf(q, ['totalAmount', 'installmentAmount', 'firstDueDate', 'cadence']), inputMode: 'per_installment', reviseMode: 'keep_paid' })) : null;
   // What "Match selected" would apply, worked out with the same fill the server checks again on submit.
@@ -191,7 +192,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
       <p className="muted">The total and the number of installments start empty so that nothing from the current schedule is reused by mistake. For reference, the current schedule is {plan.installmentCount} installments totalling {formatCents(plan.totalCents)}. With &quot;At this much paid per installment&quot;, leave the number of installments empty to have it worked out from the total, with a smaller last installment for what is left.</p>
       <PlanScheduleFields idPrefix="rv" restart={rv.reviseMode === 'keep_paid'} defaults={{
         inputMode: rv.inputMode, totalAmount: rv.totalAmount, installmentCount: rv.installmentCount,
-        installmentAmount: rv.installmentAmount, remainder: rv.remainder, firstDueDate: rv.firstDueDate, cadence: rv.cadence }} />
+        installmentAmount: rv.installmentAmount, remainder: rv.remainder, firstDueDate: rv.firstDueDate, cadence: rv.cadence, ...listFormState(rv) }} />
       <label htmlFor="rv-why">Reason</label><input id="rv-why" name="reason" required maxLength={500} defaultValue={rv.reason} />
       {revisePreview && <PlanPreviewPanel result={revisePreview} />}
       <div className="actions"><button type="submit">Save new schedule</button><PreviewButton kind="revise" /></div>

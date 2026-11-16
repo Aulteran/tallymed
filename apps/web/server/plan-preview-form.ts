@@ -7,11 +7,13 @@ export const PREVIEW_KINDS = ['create', 'revise', 'restructure'] as const;
 export type PreviewKind = typeof PREVIEW_KINDS[number];
 
 export const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
+/** The "List each installment" fields that travel with the schedule: the pasted text, and the table rows as one `instRows` text (`withInstRowsFlash`). */
+export const LIST_FIELDS = ['installmentsText', 'instRows'];
 /** `readFlash` only accepts names of letters, digits and dots, so the `bill_<id>` ticks of the create form travel as `bill.<n>` with the id as the value. */
 export const PREVIEW_BILL_SLOTS = 20;
-const BILL_KEYS = Array.from({ length: PREVIEW_BILL_SLOTS }, (_, i) => `bill.${i}`);
+export const BILL_KEYS = Array.from({ length: PREVIEW_BILL_SLOTS }, (_, i) => `bill.${i}`);
 /** Every field a preview keeps for re-filling the form it came from (never the idempotency key, the version or the CSRF token). */
-export const PREVIEW_KEEP = ['name', 'startedOn', 'matchExisting', 'billId', 'reason', 'dialog', ...BILL_KEYS, ...SCHEDULE_FIELDS];
+export const PREVIEW_KEEP = ['name', 'startedOn', 'matchExisting', 'billId', 'reason', 'dialog', ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BILL_TICK = /^bill_([0-9a-f-]{36})$/;
