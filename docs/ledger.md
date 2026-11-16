@@ -11,20 +11,20 @@ TallyMed records household expenses and reconciliation. Use integer USD cents st
 
 ## HSA reconciliation
 
-Use the confirmed eligible portion of net paid cash per allocation as the ceiling. Eligibility is a user decision with rationale and evidence. Pending and unknown decisions contribute zero to available totals. Track external evidence and any household-configured HSA eligibility context. A date, category, or AI suggestion alone cannot certify eligibility.
+Every payment allocation is eligible for its full net paid cash by default, and that is the ceiling. The only way to exclude it is the "This payment is ineligible for HSA." checkbox when the payment is recorded: a marked payment has a ceiling of zero. Ceiling = 0 for a marked payment, a payment paid directly from an HSA, or one whose latest eligibility decision is ineligible; least(decision eligible amount, net cash) for an eligible decision; net cash for a pending decision or no decision. Decisions recorded earlier keep their effect and evidence but none is required, and a decision cannot lift the marker. Track external evidence and any household-configured HSA eligibility context. A date, category, or AI suggestion alone cannot certify eligibility.
 
 A submitted claim reserves amounts. A claim line can move through submitted, partially fulfilled, fulfilled, rejected, or canceled, with history. Actual HSA receipts reconcile to specific allocations and reduce their remaining reservation; received cash does not reduce the provider balance. Support receipt splits and partial payments. Keep total received and live reservations within the eligible ceiling for new claims. For externally initiated reimbursements, require explicit source and evidence and apply the same reconciliation rules. Compute:
 
 - **Pending** = open reserved cents remaining after linked receipts and releases.
 - **Received** = allocated reimbursement receipts less linked receipt reversals.
 - **Available** = maximum of zero and eligible cents minus pending and received.
-- **Needs review** = excess pending or received amounts after a refund, reversal or eligibility reduction. Freeze new claims for the affected allocation and expose the mismatch until the operator resolves it. Preserve real historical cash and its audit trail.
+- **Needs review** = excess pending or received amounts after a refund, reversal or eligibility reduction (an ineligible decision). Freeze new claims for the affected allocation and expose the mismatch until the operator resolves it. Preserve real historical cash and its audit trail.
 
-A payment made with an HSA card linked to an HSA account is paid directly from that HSA at the point of service. It is settled: it has nothing available to claim, takes no eligibility decision and no reimbursement, and is shown beside the claim figures as paid directly from the HSA. A refund still lowers its net cash. A card without an account link is only a label and its payments stay claimable.
+A payment made with an HSA card linked to an HSA account is paid directly from that HSA at the point of service. It is settled: it has nothing available to claim, takes no reimbursement (a ceiling of zero), and is shown beside the claim figures as paid directly from the HSA. A refund still lowers its net cash. A card without an account link is only a label and its payments stay claimable.
 
 HSA accounts live on the HSA page, not a page of their own. Adding an account offers "This account also has a spending card": ticking it saves the card as an HSA/FSA payment method (so it appears on Payment methods at once) and links it to the new account in the same step. A second card, or a card added earlier, is linked from its payment method page.
 
-Example: a $120 bill has a $75 applied payment with $60 confirmed eligible. A $50 claim followed by a $20 receipt leaves a $45 provider balance, $30 pending, $20 reimbursed, and $10 available. A later refund changes the bill balance and may reduce eligibility. Record the refund, recompute eligibility from the remaining covered cash, and surface any resulting excess for review.
+Example: a $120 bill has a $75 applied payment with $60 eligible by an earlier eligible decision (with no decision the whole $75 would be eligible). A $50 claim followed by a $20 receipt leaves a $45 provider balance, $30 pending, $20 reimbursed, and $10 available. A later refund changes the bill balance and may reduce eligibility. Record the refund, recompute eligibility from the remaining covered cash, and surface any resulting excess for review.
 
 ## Transactions and verification
 

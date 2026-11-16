@@ -2,6 +2,10 @@
 
 All notable changes to TallyMed are recorded here. The project follows [Semantic Versioning](https://semver.org); before 1.0 any release may change behaviour, and the release notes name every migration and operator step. Dates are UTC.
 
+## Unreleased
+
+- **HSA: eligible by default.** Every payment allocation is now eligible for HSA reimbursement for its full net cash, so no eligibility decision is needed before a claim or an external reimbursement. Recording a payment has one optional checkbox, "This payment is ineligible for HSA.", which sets the ceiling to zero for that payment (migration 0019, new table `payment_hsa_ineligible`; it cannot be combined with paying directly from an HSA). The decision form is removed from the HSA allocation page; existing decisions, history and evidence stay. Behaviour changes: a pending decision now counts as eligible for full net cash; the undecided state, filter and queue are gone (`state=undecided` is refused); the allocations CSV `decision` column is blank instead of `unknown` when there is no decision and gains a final `payment_marked_ineligible` column. Eligibility cannot be changed after a payment is recorded, except by recording a decision through the API.
+
 ## 0.1.0 — first self-hosted release (draft, not yet tagged)
 
 > **Status: prepared, not published.** Nothing below is a stable release until the owner has run the drills in [docs/release-drills.md](docs/release-drills.md), recorded the results in `.project/STATUS.md`, and decided to tag. Fill in the commit, image digests and drill results at the bottom first.
