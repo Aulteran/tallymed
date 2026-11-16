@@ -15,6 +15,8 @@ export interface HsaAllocation {
   /** Net cash held by the allocation after reversals and refunds. */
   netCents: string;
   decisionId: string | null; decisionStatus: DecisionStatus | null; decisionCount: number;
+  /** Version of the decision form: ALL decisions of the allocation (live or removed) plus every removal or restore event of them, so any change invalidates a stale form. */
+  decisionVersion: number;
   /** Eligible cents the person decided on. The ceiling is the lesser of this and the net cash. */
   decidedCents: string;
   ceilingCents: string; pendingCents: string; receivedCents: string; availableCents: string; needsReviewCents: string;
@@ -25,7 +27,10 @@ export interface HsaAllocation {
 const ALLOCATION_SELECT = `select s.allocation_id as "allocationId", s.payment_id as "paymentId", s.bill_id as "billId", s.paid_on::text as "paidOn",
     b.member_id as "memberId", m.name as "memberName", b.provider_id as "providerId", pr.name as "providerName",
     pr.name || coalesce(' ' || b.provider_reference, '') as "billLabel", s.net_cents::text as "netCents",
-    s.decision_id as "decisionId", s.decision_status as "decisionStatus", s.decision_count as "decisionCount", s.decided_cents::text as "decidedCents",
+    s.decision_id as "decisionId", s.decision_status as "decisionStatus", s.decision_count as "decisionCount",
+    ((select count(*) from hsa_eligibility_decisions vd where vd.allocation_id = s.allocation_id)
+      + (select count(*) from hsa_removal_events ve join hsa_eligibility_decisions vd on vd.id = ve.record_id
+          where ve.kind = 'decision' and vd.allocation_id = s.allocation_id))::int as "decisionVersion", s.decided_cents::text as "decidedCents",
     s.ceiling_cents::text as "ceilingCents", s.pending_cents::text as "pendingCents", s.received_cents::text as "receivedCents",
     s.available_cents::text as "availableCents", s.needs_review_cents::text as "needsReviewCents", s.direct_hsa as "directHsa"
   from hsa_allocation_status s

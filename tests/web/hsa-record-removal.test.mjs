@@ -45,7 +45,7 @@ async function fixture() {
     async decide(allocationId, status, amount, o = {}) {
       const cur = await hsaRepo.getAllocation(pool, actor.householdId, allocationId);
       return hsa.recordDecision(pool, actor, {
-        idempotencyKey: t.key(), allocationId, version: String(cur.decisionCount), status, ...(amount ? { eligibleAmount: amount } : {}),
+        idempotencyKey: t.key(), allocationId, version: String(cur.decisionVersion), status, ...(amount ? { eligibleAmount: amount } : {}),
         rationale: RATIONALE, evidenceType: 'receipt', evidenceNote: NOTE, decidedOn: '2026-04-05', ...o,
       }, 'r');
     },
@@ -82,19 +82,21 @@ async function people(t) {
 async function snap(t) {
   const pool = t.db.pool, actor = t.actor;
   const csv = async (kind) => (await hsa.exportHsa(pool, actor, { kind }, 'r')).csv;
-  const allocs = (await hsa.listHsaAllocations(pool, actor, {})).items;
+  // decisionVersion counts removal events on purpose (a delete and an undo invalidate stale forms), so it is not part of the unchanged figures.
+  const allocs = (await hsa.listHsaAllocations(pool, actor, {})).items.map(({ decisionVersion, ...x }) => x);
   const details = [];
   for (const a of allocs) {
     const d = await hsa.getHsaAllocationDetail(pool, actor, a.allocationId);
     details.push({ id: a.allocationId, decisions: d.decisions.map(({ deletable, ...x }) => x), lines: d.lines, entries: d.entries });
   }
-  return {
+  const noVersion = (v) => JSON.parse(JSON.stringify(v, (k, x) => (k === 'decisionVersion' ? undefined : x)));
+  return noVersion({
     totals: await hsa.hsaSummary(pool, actor, {}), allocs, details, claims: (await hsa.listHsaClaims(pool, actor, {})).items,
     receipts: (await hsa.listHsaReceipts(pool, actor, {})).items, queues: await hsa.hsaQueues(pool, actor, {}),
     exports: [await csv('allocations'), await csv('events'), await csv('decisions')],
     status: (await pool.query(`select * from hsa_allocation_status order by allocation_id`)).rows,
     summary: await pay.cashSummary(pool, actor),
-  };
+  });
 }
 
 /** The standard chain: a $75 payment, $60 eligible, a $50 claim with one $20 reimbursement (pending 30, received 20, available 10). */
@@ -374,7 +376,7 @@ test('the not-worse-than-before rule from the service side: on an allocation tha
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '3000', '0', '500', '0']);
     await undoIt(t).then(() => assert.fail('restoring would recreate the excess'), (e) => {
       assert.equal(e.code, 'conflict');
-      assert.match(e.message, /^This cannot be undone: the payment no longer supports that much reimbursement/);
+      assert.match(e.message, /^Undoing this deletion would put pending plus received reimbursement above what the payment.s eligible amount supports, so this deletion cannot be undone\. Enter the record again instead/);
     });
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '3000', '0', '500', '0'], 'the refused undo changed nothing');
     assert.equal((await slotRows(t)).length, 1, 'the slot stays until it expires');
@@ -420,7 +422,7 @@ test('restore refusals: payment removed meanwhile, claim reference reused, ceili
     const [al] = (await t.payment(z.paymentId)).allocations;
     await t.refund(z.paymentId, { allocationId: al.allocationId, amount: '60.00' });
     assert.equal((await t.figs(z.allocationId)).ceilingCents, '1500');
-    await assert.rejects(undoIt(t), (e) => e.code === 'conflict' && /^This cannot be undone: the payment no longer supports that much reimbursement/.test(e.message));
+    await assert.rejects(undoIt(t), (e) => e.code === 'conflict' && /^Undoing this deletion would put pending plus received reimbursement above what the payment.s eligible amount supports, so this deletion cannot be undone\. Enter the record again instead/.test(e.message));
     assert.deepEqual(await events(t, 'claim', cz.id), ['remove']);
     assert.deepEqual(await ledgerViolations(t.db.pool), []);
   } finally { await t.db.drop(); }
@@ -454,7 +456,7 @@ test('concurrency: a removal races a new receipt, claim or decision on the same 
         const cur = await t.figs(a.allocationId);
         results = settled(await Promise.allSettled([
           rm(t, 'claim', c.id), hsa.recordDecision(t.db.pool, t.actor, {
-            idempotencyKey: randomUUID(), allocationId: a.allocationId, version: String(cur.decisionCount), status: 'eligible', eligibleAmount: '70.00',
+            idempotencyKey: randomUUID(), allocationId: a.allocationId, version: String(cur.decisionVersion), status: 'eligible', eligibleAmount: '70.00',
             rationale: RATIONALE, evidenceType: 'receipt', evidenceNote: NOTE, decidedOn: '2026-04-06',
           }, 'r'),
         ]));
@@ -573,4 +575,42 @@ test('backup: removed HSA records round-trip through the services (create, verif
     assert.equal(claims.items.length, 0);
     assert.equal((await hsaRepo.getRemovalRecord(target.pool, t.actor.householdId, 'claim', c.id)).removed, true);
   } finally { await target.drop(); ts.cleanup(); t.ts.cleanup(); await t.db.drop(); }
+});
+
+test('decision form version: a stale form is refused after a delete plus a new decision, after only a delete, after only an undo; a fresh form works', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const a = await t.alloc();
+    const d1 = await t.decide(a.allocationId, 'eligible', '60.00');
+    const submit = (version, o = {}) => hsa.recordDecision(t.db.pool, t.actor, {
+      idempotencyKey: randomUUID(), allocationId: a.allocationId, version: String(version), status: 'eligible', eligibleAmount: '40.00',
+      rationale: RATIONALE, evidenceType: 'receipt', evidenceNote: NOTE, decidedOn: '2026-04-05', ...o,
+    }, 'r');
+    const versionNow = async () => (await t.figs(a.allocationId)).decisionVersion;
+    const stale = code('stale_version');
+
+    // Loaded with one decision; delete it and record another: the live count is 1 again, but the form must be refused.
+    const v1 = await versionNow();
+    await rm(t, 'decision', d1.id);
+    assert.notEqual(await versionNow(), v1, 'a removal changes the version');
+    await t.decide(a.allocationId, 'eligible', '50.00');
+    assert.equal((await t.figs(a.allocationId)).decisionCount, 1);
+    await assert.rejects(submit(v1), stale);
+
+    // Only a delete after loading.
+    const v2 = await versionNow();
+    const live = (await t.figs(a.allocationId)).decisionId;
+    await rm(t, 'decision', live);
+    await assert.rejects(submit(v2), stale);
+
+    // Only an undo after loading.
+    const v3 = await versionNow();
+    await undoIt(t);
+    assert.notEqual(await versionNow(), v3, 'a restore changes the version');
+    await assert.rejects(submit(v3), stale);
+
+    // A fresh form works.
+    await submit(await versionNow());
+    assert.equal((await t.figs(a.allocationId)).decidedCents, '4000');
+  } finally { await t.db.drop(); }
 });

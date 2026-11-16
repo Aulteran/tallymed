@@ -114,6 +114,10 @@ declare
   removed boolean;
   ref text;
 begin
+  -- One advisory lock per (kind, record), taken before the removal state is read: a record with no payment behind it (a claim header without
+  -- entries) locks no payment row, and two concurrent events on it would otherwise both see the same state and both commit. Namespace 7203640
+  -- (the other advisory keys in the code base use other first keys), second key the hash of kind and record id.
+  perform pg_advisory_xact_lock(7203640, hashtext(new.kind || ':' || new.record_id::text));
   perform hsa_removal_lock(new.kind, new.record_id);
   if new.kind = 'decision' then
     select household_id into owner from hsa_eligibility_decisions where id = new.record_id;

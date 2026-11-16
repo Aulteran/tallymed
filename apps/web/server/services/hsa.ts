@@ -132,7 +132,7 @@ export async function getHsaReceiptDetail(pool: Pool, actor: Actor, id: string) 
  * Records an eligibility decision for one payment allocation. A decision is a user judgment with rationale and evidence; a date,
  * a category or a suggestion alone never certifies eligibility. Decisions are immutable rows, the latest is current, and
  * lowering one below what is pending or received is allowed: nothing already received is lost, the allocation shows as "needs
- * review" and new claims are frozen until the excess is resolved. `version` is the number of decisions the person saw.
+ * review" and new claims are frozen until the excess is resolved. `version` is the decision version the person saw (every decision and every removal or restore of one counts).
  */
 export async function recordDecision(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
@@ -144,7 +144,7 @@ export async function recordDecision(pool: Pool, actor: Actor, input: unknown, r
     const links = await lockForAllocations(tx, actor, [allocationId], { newExposure: true });
     const before = await freshAllocation(tx, actor, allocationId);
     if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
-    if (before.decisionCount !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
+    if (before.decisionVersion !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
     const eligible = d.status === 'eligible' ? d.eligibleAmount! : 0n;
     if (eligible > BigInt(before.netCents)) throw new AppError('conflict', 'The eligible amount is more than the net cash this allocation still holds');
     await repo.insertDecision(tx, {
@@ -412,7 +412,9 @@ function mapRemovalError(e: unknown, kind: RemovalKind, action: repo.RemovalActi
   if (/would increase the excess above the eligible ceiling/.test(msg)) {
     return new AppError('conflict', kind === 'decision' ? repo.MSG_DECISION_SUPPORTS : kind === 'receipt' ? repo.MSG_RECEIPT_SUPPORTS : 'Deleting this claim would leave more reimbursement than the payment supports');
   }
-  if (/exceed the eligible ceiling/.test(msg)) return new AppError('conflict', `${undoNote}the payment no longer supports that much reimbursement (its net cash or eligible amount changed). Record the decision or claim again instead.`);
+  if (/exceed the eligible ceiling/.test(msg)) return new AppError('conflict', action === 'restore'
+    ? 'Undoing this deletion would put pending plus received reimbursement above what the payment\'s eligible amount supports, so this deletion cannot be undone. Enter the record again instead if it is still wanted.'
+    : 'That change would put pending plus received reimbursement above what the payment\'s eligible amount supports.');
   if (/payment is removed/.test(msg)) return new AppError('conflict', `${undoNote}the payment was removed, so its HSA records stay deleted.`);
   if (/payment is voided/.test(msg)) return new AppError('conflict', `${undoNote}the payment was voided, so its HSA records stay deleted.`);
   if (/paid directly from an HSA/.test(msg)) return new AppError('conflict', `${undoNote}the payment is now paid directly from an HSA, so it has no claims or decisions.`);

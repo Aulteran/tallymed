@@ -55,7 +55,7 @@ async function fixture() {
     async decide(allocationId, status, amount, o = {}) {
       const cur = await hsaRepo.getAllocation(pool, actor.householdId, allocationId);
       return hsa.recordDecision(pool, actor, {
-        idempotencyKey: t.key(), allocationId, version: String(cur.decisionCount), status, ...(amount ? { eligibleAmount: amount } : {}),
+        idempotencyKey: t.key(), allocationId, version: String(cur.decisionVersion), status, ...(amount ? { eligibleAmount: amount } : {}),
         rationale: 'Qualified medical expense per plan rules', evidenceType: 'receipt', evidenceNote: 'Pharmacy receipt on file', decidedOn: '2026-04-05', ...o,
       }, 'r');
     },
@@ -668,5 +668,33 @@ test('on an allocation that already needs review a removal may reduce or keep th
     await assert.rejects(restore(t, 'claim', c1.id), /exceed the eligible ceiling/, 'the claim would now leave an excess');
     await assert.rejects(restore(t, 'receipt', r1.id), /while its claim is removed/);
     assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('concurrency: two removals of an entry-less claim header race; exactly one commits and the ledger stays alternating', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const pool = t.db.pool;
+    const claimId = randomUUID();
+    await pool.query(`insert into hsa_claims (id, household_id, submitted_on, administrator, created_by) values ($1, $2, '2026-04-10', 'Example HSA Bank', $3)`,
+      [claimId, t.actor.householdId, t.actor.userId]);
+    const c1 = await pool.connect();
+    const c2 = await pool.connect();
+    try {
+      await c1.query('begin');
+      await c2.query('begin');
+      await event(t, c1, 'claim', claimId, 'remove');
+      // The second removal must wait for the first one's transaction (the advisory lock), not read the old state and also insert.
+      let second = 'pending';
+      const p2 = event(t, c2, 'claim', claimId, 'remove').then(() => { second = 'inserted'; }, (e) => { second = e.message; });
+      await new Promise((r) => setTimeout(r, 400));
+      assert.equal(second, 'pending', 'the second event waits while the first is uncommitted');
+      await c1.query('commit');
+      await p2;
+      assert.match(second, /already removed/);
+      await c2.query('rollback');
+    } finally { c1.release(); c2.release(); }
+    assert.deepEqual((await pool.query(`select action from hsa_removal_events where record_id = $1 order by seq`, [claimId])).rows.map((r) => r.action), ['remove']);
+    assert.deepEqual(await ledgerViolations(pool), []);
   } finally { await t.db.drop(); }
 });

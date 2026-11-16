@@ -38,7 +38,7 @@ async function fixture() {
     async decide(allocationId, status, amount, o = {}) {
       const cur = await hsaRepo.getAllocation(pool, actor.householdId, allocationId);
       return hsa.recordDecision(pool, actor, {
-        idempotencyKey: t.key(), allocationId, version: String(cur.decisionCount), status, ...(amount ? { eligibleAmount: amount } : {}),
+        idempotencyKey: t.key(), allocationId, version: String(cur.decisionVersion), status, ...(amount ? { eligibleAmount: amount } : {}),
         rationale: 'Qualified medical expense per plan rules', evidenceType: 'receipt', evidenceNote: 'Pharmacy receipt on file', decidedOn: '2026-04-05', ...o,
       }, 'r');
     },
