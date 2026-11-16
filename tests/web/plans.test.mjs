@@ -616,7 +616,7 @@ test('migration 0013 keeps existing single-provider plans, their matches and the
     } finally {
       c.release();
     }
-    assert.deepEqual(await migrate(db.pool), ['0013', '0014', '0015', '0016', '0017']);
+    assert.deepEqual(await migrate(db.pool), ['0013', '0014', '0015', '0016', '0017', '0018']);
     // Nothing in the ledger changed, and the plan still reads the same.
     assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from installment_matches`)).rows[0], { n: 1, s: '5000' });
     assert.deepEqual((await db.pool.query(`select count(*)::int n, sum(amount_cents)::text s from payment_entries`)).rows[0], { n: 1, s: '5000' });

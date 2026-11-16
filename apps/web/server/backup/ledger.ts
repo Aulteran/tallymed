@@ -110,8 +110,20 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
   },
   {
     rule: 'plan matches on current schedules never exceed what an allocation still holds',
+    unlessTable: 'payment_removal_events',
     sql: `select m.allocation_id from installment_matches m
             join plan_revisions r on r.id = m.revision_id
+           where r.revision_no = (select max(x.revision_no) from plan_revisions x where x.plan_id = m.plan_id)
+           group by m.allocation_id
+          having sum(m.amount_cents) > (select coalesce(sum(e.amount_cents), 0) from payment_entries e where e.allocation_id = m.allocation_id)`,
+  },
+  {
+    rule: 'plan matches on current schedules never exceed what an allocation still holds',
+    table: 'payment_removal_events',
+    // From 0018 the matches of a removed plan count as nothing (they stay as history and count again when the plan is shown again).
+    sql: `select m.allocation_id from installment_matches m
+            join plan_revisions r on r.id = m.revision_id
+            join payment_plans p on p.id = m.plan_id and p.removed_at is null
            where r.revision_no = (select max(x.revision_no) from plan_revisions x where x.plan_id = m.plan_id)
            group by m.allocation_id
           having sum(m.amount_cents) > (select coalesce(sum(e.amount_cents), 0) from payment_entries e where e.allocation_id = m.allocation_id)`,

@@ -52,6 +52,14 @@ export async function allocationPayments(db: Queryable, householdId: string, ids
   return rows;
 }
 
+/** The payments among the given ones that are removed or voided, so no new HSA exposure is recorded on them. Read after the payments are locked. */
+export async function closedPayments(db: Queryable, householdId: string, paymentIds: string[]): Promise<string[]> {
+  const { rows } = await db.query<{ id: string }>(
+    `select p.id from payments p where p.household_id = $1 and p.id = any($2::uuid[])
+        and (payment_is_removed(p.id) or exists (select 1 from payment_voids v where v.payment_id = p.id))`, [householdId, paymentIds]);
+  return rows.map((r) => r.id);
+}
+
 function scopeWhere(f: HsaScope & { state?: string }, params: unknown[]): string[] {
   const where = ['s.household_id = $1'];
   if (f.memberId) where.push(`b.member_id = $${params.push(f.memberId)}`);

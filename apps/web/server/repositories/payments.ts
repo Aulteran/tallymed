@@ -120,7 +120,7 @@ export async function listEntries(db: Queryable, householdId: string, paymentId:
 export interface AllocationNet {
   allocationId: string; paymentId: string; billId: string; paidOn: string; allocatedCents: string; reversedCents: string;
   refundedCents: string; netCents: string; memberId: string; providerId: string; billLabel: string; memberName: string;
-  /** Plan matches still counted against this allocation (current schedule revisions only). */
+  /** Plan matches still counted against this allocation (current schedule revisions of plans that are not removed). */
   matchedCents: string;
 }
 
@@ -129,6 +129,7 @@ const ALLOCATION_SELECT = `select n.allocation_id as "allocationId", n.payment_i
     n.net_cents::text as "netCents", b.member_id as "memberId", b.provider_id as "providerId",
     pr.name || coalesce(' ' || b.provider_reference, '') as "billLabel", m.name as "memberName",
     (select coalesce(sum(x.amount_cents), 0) from installment_matches x join plan_revisions r on r.id = x.revision_id
+       join payment_plans pp on pp.id = x.plan_id and pp.removed_at is null
        where x.household_id = n.household_id and x.allocation_id = n.allocation_id
          and r.revision_no = (select max(q.revision_no) from plan_revisions q where q.plan_id = x.plan_id))::text as "matchedCents"
   from allocation_net n

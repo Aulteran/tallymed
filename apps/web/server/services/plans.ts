@@ -674,11 +674,8 @@ export async function restorePlan(tx: Queryable, actor: Actor, planId: string, r
   const parsed = planRemovalPayload.safeParse(rawPayload);
   if (!parsed.success) throw new AppError('conflict', 'Nothing to undo');
   const payload = parsed.data;
-  // Payments first (the matches' payments), then the plan.
-  const paymentIds = [...new Set(payload.releasedMatches.map((m) => m.paymentId))];
-  if (paymentIds.length > 0) await payments.lockPayments(tx, actor.householdId, paymentIds);
-  const [lock] = await repo.lockPlans(tx, actor.householdId, [planId]);
-  if (!lock) throw new AppError('not_found');
+  // Payments first (every payment the plan ever matched, which includes the released matches' payments), then the plan.
+  const lock = await lockPlanWithPayments(tx, actor, planId);
   if (!lock.removed) throw new AppError('conflict', 'That plan is no longer removed');
   await repo.restorePlanRow(tx, actor.householdId, planId);
   const asOf = todayUtc();
@@ -699,6 +696,28 @@ export async function restorePlan(tx: Queryable, actor: Actor, planId: string, r
       });
       restored += amount;
       restoredCount++;
+    }
+  }
+  // A removed plan's matches counted as nothing while it was hidden, so the cash may have been matched to another plan since. Showing the
+  // plan again counts them again: release, latest due date first, whatever an allocation no longer holds beyond its other matches (listed
+  // with the skipped ones). This is how a cancelled plan, which keeps its matches as history, comes back; an active plan's matches were
+  // released at removal, so for it nothing is left to release here.
+  const cur = await repo.currentRevision(tx, actor.householdId, planId);
+  const pairs = (await repo.currentMatchPairs(tx, actor.householdId, planId)).reverse();
+  const byAllocation = new Map<string, typeof pairs>();
+  for (const m of pairs) byAllocation.set(m.allocationId, [...(byAllocation.get(m.allocationId) ?? []), m]);
+  for (const [allocationId, list] of [...byAllocation].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const alloc = await payments.getAllocation(tx, actor.householdId, allocationId);
+    let excess = alloc ? BigInt(alloc.matchedCents) - BigInt(alloc.netCents) : sum(list.map((m) => m.cents));
+    for (const m of list) {
+      if (excess <= 0n) break;
+      const take = m.cents < excess ? m.cents : excess;
+      await repo.insertMatch(tx, {
+        id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId: cur!.id, installmentId: m.installmentId,
+        paymentId: m.paymentId, allocationId, billId: m.billId, kind: 'unmatch', amountCents: -take, carried: false, reason: 'Released by undo because the cash is matched elsewhere',
+      });
+      skipped.push({ installmentId: m.installmentId, allocationId, cents: take });
+      excess -= take;
     }
   }
   await recordAudit(tx, {

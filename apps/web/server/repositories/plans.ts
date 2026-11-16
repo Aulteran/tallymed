@@ -145,13 +145,14 @@ export async function currentMatchPairs(db: Queryable, householdId: string, plan
   return rows.map((r) => ({ installmentId: r.installment_id, allocationId: r.allocation_id, paymentId: r.payment_id, billId: r.bill_id, dueDate: r.due_date, seq: r.seq, cents: BigInt(r.cents) }));
 }
 
-/** Current-revision matches of one allocation across plans, latest due date first (the first to release when cash shrinks). */
+/** Current-revision matches of one allocation across plans that are not removed (a removed plan's matches count as nothing), latest due date first (the first to release when cash shrinks). */
 export async function currentMatchesOfAllocation(db: Queryable, householdId: string, allocationId: string): Promise<Array<{
   planId: string; revisionId: string; installmentId: string; paymentId: string; billId: string; cents: bigint;
 }>> {
   const { rows } = await db.query<{ plan_id: string; revision_id: string; installment_id: string; payment_id: string; bill_id: string; cents: string }>(
     `select m.plan_id, m.revision_id, m.installment_id, m.payment_id, m.bill_id, sum(m.amount_cents)::text as cents
      from installment_matches m join plan_installments i on i.id = m.installment_id
+     join payment_plans pp on pp.id = m.plan_id and pp.removed_at is null
      where m.household_id = $1 and m.allocation_id = $2
        and m.revision_id = (select x.id from plan_revisions x where x.plan_id = m.plan_id order by x.revision_no desc limit 1)
      group by m.plan_id, m.revision_id, m.installment_id, m.payment_id, m.bill_id, i.due_date, i.seq
@@ -159,17 +160,20 @@ export async function currentMatchesOfAllocation(db: Queryable, householdId: str
   return rows.map((r) => ({ planId: r.plan_id, revisionId: r.revision_id, installmentId: r.installment_id, paymentId: r.payment_id, billId: r.bill_id, cents: BigInt(r.cents) }));
 }
 
-/** Plans that hold matches of any of the allocations, ascending, so a request can lock them all once in order. */
+/** Plans (not removed) that hold matches of any of the allocations, ascending, so a request can lock them all once in order. */
 export async function plansMatchingAllocations(db: Queryable, householdId: string, allocationIds: string[]): Promise<string[]> {
   if (allocationIds.length === 0) return [];
   const { rows } = await db.query<{ plan_id: string }>(
-    `select distinct plan_id from installment_matches where household_id = $1 and allocation_id = any($2::uuid[]) order by plan_id`, [householdId, allocationIds]);
+    `select distinct m.plan_id from installment_matches m join payment_plans p on p.id = m.plan_id and p.removed_at is null
+      where m.household_id = $1 and m.allocation_id = any($2::uuid[]) order by m.plan_id`, [householdId, allocationIds]);
   return rows.map((r) => r.plan_id);
 }
 
-/** Plans that currently hold matches of the allocation, for locking before a refund or reversal releases them. */
+/** Plans (not removed) that currently hold matches of the allocation, for locking before a refund or reversal releases them. */
 export async function plansMatchingAllocation(db: Queryable, householdId: string, allocationId: string): Promise<string[]> {
-  const { rows } = await db.query<{ plan_id: string }>(`select distinct plan_id from installment_matches where household_id = $1 and allocation_id = $2 order by plan_id`, [householdId, allocationId]);
+  const { rows } = await db.query<{ plan_id: string }>(
+    `select distinct m.plan_id from installment_matches m join payment_plans p on p.id = m.plan_id and p.removed_at is null
+      where m.household_id = $1 and m.allocation_id = $2 order by m.plan_id`, [householdId, allocationId]);
   return rows.map((r) => r.plan_id);
 }
 
