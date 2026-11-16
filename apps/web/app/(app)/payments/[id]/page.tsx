@@ -3,6 +3,7 @@ import { can } from '../../../../server/authz.ts';
 import { formatCents } from '../../../../server/money.ts';
 import { pickPaymentMethods } from '../../../../server/services/payment-methods.ts';
 import { getPaymentDetail, pickPayableBills } from '../../../../server/services/payments.ts';
+import { AllocationRows } from '../../../components/AllocationRows.tsx';
 import { ConfirmDialog } from '../../../components/ConfirmDialog.tsx';
 import {
   Banner, Csrf, dateOf, flatWithFlash, label, load, methodName, Money, NarrowForm, newKey, Options, q80, requireSession, todayUtc, Truncated, type SearchParams,
@@ -100,11 +101,10 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     {live && unapplied > 0n && <>
       {(bills.truncated || q.billQ) && <>{bills.truncated && <Truncated what="bills" />}<NarrowForm fields={[{ name: 'billQ', label: 'Find a bill' }]} values={q} /></>}
       <form className="card" method="post" action="/api/expenses/payments/allocate">
-        <h2>Apply unapplied cash to a bill</h2>{base}{key('allocate')}
-        <p className="muted">Up to <Money cents={pm.unappliedCents} /> can be applied, and never more than the open balance of the bill.</p>
-        <label htmlFor="billId">Bill</label>
-        <select id="billId" name="billId" required defaultValue={q.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Choose…" /></select>
-        <label htmlFor="allocateAmount">Amount (USD)</label><input id="allocateAmount" name="allocateAmount" inputMode="decimal" required pattern="\d{1,12}(\.\d{1,2})?" defaultValue={q.allocateAmount} />
+        <h2>Apply unapplied cash to bills</h2>{base}{key('allocate')}
+        <p className="muted">Up to <Money cents={pm.unappliedCents} /> can be applied, across one or several bills, and never more than the open balance of a bill. Blank rows are ignored and each bill can be listed once.</p>
+        <AllocationRows idPrefix="apply" rows={2} bills={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))}
+          values={{ ...q, 'alloc.0.billId': q['alloc.0.billId'] ?? q.billId, 'alloc.0.amount': q['alloc.0.amount'] ?? q.allocateAmount }} fixedTotalCents={pm.unappliedCents} summaryNoun="unapplied cash" />
         <button type="submit">Apply</button>
       </form>
       <form className="card" method="post" action="/api/expenses/payments/refund">

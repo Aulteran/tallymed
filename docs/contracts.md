@@ -82,6 +82,16 @@ Account creation can also save a spending card: `createHsaAccount` accepts `hasC
 - `reviseMode: keep_paid` keeps installments that are fully matched (read under the plan lock) with their own matches, and generates the rest from `firstDueDate`; the new revision's cadence is `custom`. Matches on a kept installment follow it by identity (marked carried, reason "Kept from revision N"); other matches fill the non-kept installments in due-date order. `replace` (default) is unchanged. No cash, allocation or bill balance changes.
 - Status is derived from posted rows and an `asOf` date: `paid`, `partial` or `unpaid`, plus overdue when the due date is before `asOf` and part is unpaid.
 
+## Form row lists
+
+HTML form posts are flat, so a list of rows (payment allocations now; plan installments and match lists later) is spelled with indexed keys, `<prefix>.<index>.<field>`: `alloc.0.billId`, `alloc.0.amount`, `alloc.1.billId`, `alloc.1.amount`. JSON callers keep sending the real array (`allocations: [{ billId, amount }]`). `rowsFromForm(body, prefix, fields, max)` and `withFormRows(body, { prefix, into, fields, max })` in `apps/web/server/form-rows.ts` turn the keys into that array before schema parsing (`prepare` on a route in `server/http.ts`); tested in `tests/web/form-rows.test.mjs`.
+
+- Index is a plain decimal number from 0 with no gaps and no leading zeros. Rows are counted by index, blank rows included, and at most `max` may be present (payments: 25).
+- Rows come back in index order. A row whose fields are all blank is skipped, so a form can show spare rows. A row with only some fields filled is kept (blanks as empty strings) and the schema refuses it.
+- Anything under `<prefix>.` that is not an allowed field, has a bad index or is not a string is refused with `invalid_input`; a body that carries both the rows and the JSON array is refused too. If every row is blank the array is left out, so the one-bill shorthand keeps working.
+- Typed rows survive an error round-trip: list every `<prefix>.<n>.<field>` the form can show in the route's `keep` (`ALLOC_KEEP`); the one-shot cookie accepts dotted names.
+- Payments: `payments/create` and `payments/allocate` read `alloc.<n>.billId` and `alloc.<n>.amount` and still accept the single `billId` plus `allocateAmount`; mixing the two shapes is refused. On `payments/create` only, exactly one row with a bill and no amount applies the whole payment, as the one-bill shorthand does. Each bill may appear once, the total may not exceed the payment (create) or its unapplied cash (allocate), and anything not applied stays unapplied. The forms render several rows without JavaScript; with JavaScript they add a row button and a live sum in whole cents (a hint only, the server decides).
+
 ## HSA reimbursements (M04)
 
 Implemented in `apps/web/server/repositories/hsa.ts`, `services/hsa.ts` and migration `0006_hsa_reimbursements.sql`; tested in `tests/web/hsa.test.mjs`. `listHsaFigures` in `contracts.ts` (and the SQL view `hsa_allocation_status`) is the stable read interface for reports and exports. The MCP deliberately reads no HSA data.

@@ -7,6 +7,7 @@ import type { Actor } from './authz.ts';
 import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
 import { flashSetCookie } from './flash.ts';
+import { withFormRows } from './form-rows.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
@@ -662,7 +663,20 @@ const EXPENSE_ACTIONS: Record<string, {
   'adjustments/reverse': { service: expenses.reverseAdjustment, error: (b) => billPath(b, ''), ok: billPath },
 };
 
-const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount'];
+/** Bill rows of the payment forms: `alloc.<n>.billId` and `alloc.<n>.amount` (see docs/contracts.md, "Form row lists"). The form offers up to ALLOC_FORM_ROWS. */
+const ALLOC_ROWS = { prefix: 'alloc', into: 'allocations', fields: ['billId', 'amount'], max: 25 } as const;
+export const ALLOC_FORM_ROWS = 10;
+const ALLOC_KEEP = Array.from({ length: ALLOC_FORM_ROWS }, (_, i) => [`alloc.${i}.billId`, `alloc.${i}.amount`]).flat();
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
+const allocRows = (b: Record<string, unknown>) => withFormRows(b, ALLOC_ROWS);
+/** A recorded payment with exactly one bill row and no amount applies the whole payment to it, as the single-bill form always did. */
+const createRows = (b: Record<string, unknown>) => {
+  const out = allocRows(b);
+  const rows = out.allocations;
+  if (rows === b.allocations || !Array.isArray(rows) || rows.length !== 1) return out;
+  const only = rows[0] as Record<string, string>;
+  return only.amount === '' && typeof b.amount === 'string' ? { ...out, allocations: [{ ...only, amount: b.amount }] } : out;
+};
 const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str(b.paymentId) ?? id}`;
 const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
@@ -671,9 +685,11 @@ const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cad
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
   service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string }) => string; keep?: string[];
+  /** Turns the flat form body into the service input (row lists). */
+  prepare?: (b: Record<string, unknown>) => Record<string, unknown>;
 }> = {
-  'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, ok: (_b, id) => `/payments/${id}` },
-  'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount'], ok: paymentPath },
+  'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, prepare: createRows, ok: (_b, id) => `/payments/${id}` },
+  'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount', ...ALLOC_KEEP], prepare: allocRows, ok: paymentPath },
   'payments/unapply': { service: payments.reverseAllocation, error: paymentOf, keep: ['amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
@@ -713,14 +729,14 @@ const HSA_ACTIONS: Record<string, {
   'hsa/receipt-reverse': { service: hsa.reverseReceipt, error: receiptOf, keep: ['effectiveDate', 'reason'], ok: receiptOf },
 };
 
-const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS }).map(([name, a]) => [name, route({
+const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS } as Record<string, typeof MONEY_ACTIONS[string]>).map(([name, a]) => [name, route({
   name: `expenses.${name}`,
   session: true,
   errorPath: a.error,
   keepFields: a.keep,
   keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
-    const result = await a.service(ctx.pool, actor!, body, requestId);
+    const result = await a.service(ctx.pool, actor!, a.prepare ? a.prepare(body) : body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
     return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },

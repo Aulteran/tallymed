@@ -30,7 +30,7 @@ export function readFlash(raw: string | null | undefined, path: string): Record<
     const { p, v } = parsed as { p?: unknown; v?: unknown };
     if (p !== path || v === null || typeof v !== 'object') return {};
     const out: Record<string, string> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (typeof val === 'string' && /^[A-Za-z]{1,40}$/.test(k)) out[k] = val.slice(0, MAX_VALUE);
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (typeof val === 'string' && /^[A-Za-z][A-Za-z0-9.]{0,39}$/.test(k)) out[k] = val.slice(0, MAX_VALUE);
     return out;
   } catch {
     return {};

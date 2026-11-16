@@ -282,13 +282,13 @@ try {
   await a11y('payment method detail');
   await page.goto(`${origin}/payments?billId=${billId}`);
   await addDialog.waitFor({ state: 'visible' }); // arriving from a bill opens the form with that bill chosen
-  assert.equal(await page.inputValue('#billId'), billId);
+  assert.equal(await page.inputValue('#alloc-bill-0'), billId);
   await a11y('payments list and entry form');
   await page.fill('#paidOn', '2026-03-05');
   await page.fill('#amount', '100.00');
   await page.fill('#reference', 'CARD-1234');
   await page.selectOption('#paidWithId', { label: 'Example Visa ••4242' });
-  await page.fill('#allocateAmount', '95.00');
+  await page.fill('#alloc-amount-0', '95.00');
   await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
   await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
   const paymentUrl = page.url();
@@ -848,7 +848,7 @@ try {
   await page.fill('#paidOn', '2026-03-09');
   await page.fill('#amount', '12.34');
   await page.fill('#reference', 'UNDO-TEST-1');
-  await page.fill('#allocateAmount', '1.00'); // applied to the bill, so the HSA page lists its allocation
+  await page.fill('#alloc-amount-0', '1.00'); // applied to the bill, so the HSA page lists its allocation
   await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
   await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
   const undoPaymentUrl = page.url();
@@ -987,6 +987,53 @@ try {
   await reuse.click('button[type=submit]');
   await reuse.waitForURL(/\/login\?error=unauthenticated/);
   ok('administrator reset, forced password change and normal change work in a browser; the temporary password is dead afterwards');
+  // One payment split across two bills in the Record payment dialog (fabricated figures: $70.00 as $45.00 and $25.00).
+  await enterBill({ provider: 'Example Clinic', reference: 'SPLIT-A', amount: '45.00', status: 'confirmed' });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  const splitAUrl = page.url();
+  await enterBill({ provider: 'Example Clinic', reference: 'SPLIT-B', amount: '25.00', status: 'confirmed' });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  const splitBUrl = page.url();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${origin}/payments?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#paidOn', '2026-03-10');
+  await page.fill('#amount', '70.00');
+  await page.fill('#reference', 'SPLIT-PAY');
+  const billOption = async (select, reference) => page.locator(`${select} option`, { hasText: reference }).first().getAttribute('value');
+  await page.selectOption('#alloc-bill-0', await billOption('#alloc-bill-0', 'SPLIT-A'));
+  await page.fill('#alloc-amount-0', '45.00');
+  await page.selectOption('#alloc-bill-1', await billOption('#alloc-bill-1', 'SPLIT-B'));
+  await page.fill('#alloc-amount-1', '25.00');
+  assert.equal(await page.locator('#alloc-bill-3').count(), 1, 'four rows are offered');
+  assert.match(await addDialog.locator("[data-alloc-summary]").innerText(), /Applying \$70\.00 of \$70\.00; \$0\.00 left unapplied/);
+  await page.fill('#alloc-amount-1', '30.00');
+  assert.match(await addDialog.locator("[data-alloc-summary]").innerText(), /Applying \$75\.00, which is \$5\.00 more than the payment of \$70\.00/);
+  await page.fill('#alloc-amount-1', '25.00');
+  await a11y('record payment dialog with several bill rows');
+  await page.setViewportSize({ width: 390, height: 800 });
+  await a11y('record payment dialog with several bill rows at phone width');
+  const splitFit = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: document.querySelector('dialog.form-modal').scrollWidth, dialogClient: document.querySelector('dialog.form-modal').clientWidth }));
+  assert.ok(splitFit.scrollWidth <= splitFit.width && splitFit.dialog <= splitFit.dialogClient, `the split dialog fits a phone: ${JSON.stringify(splitFit)}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // The same bill in two rows is refused and the dialog comes back with what was typed.
+  await page.selectOption('#alloc-bill-1', await billOption('#alloc-bill-1', 'SPLIT-A'));
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\?error=invalid_input/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.inputValue('#alloc-amount-0'), '45.00');
+  assert.equal(await page.inputValue('#alloc-amount-1'), '25.00');
+  assert.equal(await page.inputValue('#amount'), '70.00');
+  await page.selectOption('#alloc-bill-1', await billOption('#alloc-bill-1', 'SPLIT-B'));
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /Applied to bills\s*\n?\s*\$70\.00/);
+  assert.match(await text(), /Unapplied\s*\n?\s*\$0\.00/);
+  for (const [url, label] of [[splitAUrl, 'SPLIT-A'], [splitBUrl, 'SPLIT-B']]) {
+    await page.goto(url);
+    assert.match(await text(), /Open balance\s*\n?\s*\$0\.00/, `${label} is paid in full`);
+  }
+  ok('one $70.00 payment split across two bills ($45.00 and $25.00) through the dialog: a repeated bill is refused with the typed rows kept, both balances reach $0.00, dialog passes axe and fits a phone');
   await page.goto(`${origin}/`);
 } finally {
   await cleanup();
