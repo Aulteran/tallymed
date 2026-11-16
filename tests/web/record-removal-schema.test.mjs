@@ -328,7 +328,7 @@ test('upgrade: a database populated at 0016 (plan with a match, refund, HSA deci
     assert.equal(before.ledger.voidedPayments, '1');
     assert.equal(before.ledger.matchedCents, '10000');
 
-    assert.deepEqual(await migrate(db.pool), ['0017', '0018', '0019', '0020', '0021']);
+    assert.deepEqual(await migrate(db.pool), ['0017', '0018', '0019', '0020', '0021', '0022']);
     const after = await legacyFigures(db.pool);
     // 0017 adds two totals to the summary; they are zero here and every other figure is untouched.
     assert.deepEqual([after.ledger.removedPayments, after.ledger.removedPlans], ['0', '0']);

@@ -110,7 +110,7 @@ export async function resetOperatorPassword(
 }
 
 const CHANGE_THROTTLE_PREFIX = 'password-change:';
-const changeKey = (userId: string) => digest(`${CHANGE_THROTTLE_PREFIX}${userId}`);
+export const changeKey = (userId: string) => digest(`${CHANGE_THROTTLE_PREFIX}${userId}`);
 
 export interface ChangePasswordResult { token: string; expiresAt: Date; sessionsRevoked: number }
 
@@ -162,7 +162,9 @@ export async function changePassword(
   }
   const passwordHash = await hashPassword(data.newPassword);
   const token = newToken();
-  const expiresAt = new Date(Date.now() + config.sessionAbsoluteSeconds * 1000);
+  // A session that was kept signed in stays so after a normal change; the restricted session of a temporary password never was.
+  const remember = actor.remember && !forced;
+  const expiresAt = new Date(Date.now() + (remember ? config.rememberSessionAbsoluteSeconds : config.sessionAbsoluteSeconds) * 1000);
   return withTransaction(pool, async (tx) => {
     const locked = await findUserInHousehold(tx, actor.householdId, actor.userId, true);
     // The session, the credential that was verified and the restriction must all be unchanged since this request began.
@@ -173,7 +175,7 @@ export async function changePassword(
     await setChosenPassword(tx, locked.id, passwordHash);
     await completePending(tx, locked.id);
     const sessionsRevoked = await revokeUserSessions(tx, locked.id, 'password_changed');
-    const sessionId = await insertSession(tx, { userId: locked.id, householdId: locked.householdId, tokenHash: digest(token), expiresAt });
+    const sessionId = await insertSession(tx, { userId: locked.id, householdId: locked.householdId, tokenHash: digest(token), expiresAt, remember });
     if (!forced) await clearAccountFailures(tx, changeKey(locked.id));
     await recordAudit(tx, {
       householdId: locked.householdId, actorUserId: locked.id, action: 'auth.password_changed', entityType: 'user', entityId: locked.id, requestId,

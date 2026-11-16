@@ -17,6 +17,12 @@ export interface Actor {
   sessionId: string;
   /** True until the person replaces an administrator-issued temporary password. Such an actor may only change the password or sign out. */
   mustChangePassword: boolean;
+  /** True while the session is locked: it is still signed in, but every route except unlock, lock and sign-out refuses it until the PIN is entered. */
+  locked: boolean;
+  /** Whether the account has a PIN. An account without one is never locked. */
+  hasPin: boolean;
+  /** Whether this session was started with "Keep me signed in". */
+  remember: boolean;
 }
 
 export function can(actor: Actor, capability: Capability): boolean {

@@ -1,4 +1,4 @@
-// Default-eligible HSA reimbursements and the payment-level ineligible marker (migration 0021). Fabricated data only.
+// Default-eligible HSA reimbursements and the payment-level ineligible marker (migration 0022). Fabricated data only.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';

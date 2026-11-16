@@ -133,7 +133,7 @@ async function richFixture() {
   await pay.reverseRefund(pool, actor, { idempotencyKey: t.key(), eventId: refund2.id, effectiveDate: '2026-05-02', reason: 'Entered in error' }, 'r');
   const allocC = (await t.payment(p2.id)).allocations[0].allocationId;
   await pay.reverseAllocation(pool, actor, { idempotencyKey: t.key(), allocationId: allocC, amount: '5.00', effectiveDate: '2026-05-03', reason: 'Wrong bill' }, 'r');
-  // A payment recorded as ineligible for HSA (0021).
+  // A payment recorded as ineligible for HSA (0022).
   await t.pay1({ amount: '21.00', hsaIneligible: 'yes' });
   const p3 = await t.pay1({ amount: '12.34' });
   await pay.voidPayment(pool, actor, { idempotencyKey: t.key(), paymentId: p3.id, voidedOn: '2026-04-02', reason: 'Entered twice' }, 'r');

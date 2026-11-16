@@ -19,6 +19,11 @@ export default async function InvitePage({ params, searchParams }: {
       <input id="displayName" name="displayName" required maxLength={80} autoComplete="name" />
       <label htmlFor="password">Password (12 to 128 characters)</label>
       <input id="password" name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" />
+      <label htmlFor="pin">Security PIN (six digits)</label>
+      <input id="pin" name="pin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" className="pin-input" />
+      <label htmlFor="confirmPin">Confirm PIN</label>
+      <input id="confirmPin" name="confirmPin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" className="pin-input" />
+      <p className="muted">TallyMed locks itself when you step away and asks for this PIN, without signing you out. You can change it later in User settings.</p>
       <button type="submit">Create account</button>
     </form>
   </AuthShell>;

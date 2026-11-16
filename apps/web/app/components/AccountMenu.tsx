@@ -11,8 +11,8 @@ import { THEMES, THEME_ICON, THEME_LABEL, useTheme, type Theme } from './ThemeTo
  * Both pop-ups are native modal dialogs, so the browser centres them, traps focus, closes on Escape and returns focus
  * to the button that opened them. Sign out stays a real form post after the confirmation.
  */
-export function AccountMenu({ displayName, roleLabel, initials, csrf, initialTheme }: {
-  displayName: string; roleLabel: string; initials: string; csrf: string; initialTheme: Theme;
+export function AccountMenu({ displayName, roleLabel, initials, csrf, initialTheme, hasPin }: {
+  displayName: string; roleLabel: string; initials: string; csrf: string; initialTheme: Theme; hasPin: boolean;
 }) {
   const settings = useRef<HTMLDialogElement>(null);
   const confirm = useRef<HTMLDialogElement>(null);
@@ -26,6 +26,7 @@ export function AccountMenu({ displayName, roleLabel, initials, csrf, initialThe
         <Icon name="gear" />
       </button>
     </div>
+    {!hasPin && <p className="account-pin-note"><Link href="/account/pin">Set a PIN</Link> so TallyMed can lock when you step away.</p>}
 
     <dialog ref={settings} className="modal" aria-labelledby="user-settings-title" onClick={closeOnBackdrop}>
       <div className="modal-head">
@@ -38,6 +39,24 @@ export function AccountMenu({ displayName, roleLabel, initials, csrf, initialThe
           <Link href="/account/password" className="settings-item" onClick={() => settings.current?.close()}>
             <Icon name="key" />
             <span><strong>Change password</strong><span className="muted">The password for your own account.</span></span>
+          </Link>
+        </li>
+        {hasPin && <li>
+          {/* A real form post: it works without scripts. The page path rides along so unlocking returns here. */}
+          <form method="post" action="/api/auth/lock" onSubmit={(e) => {
+            (e.currentTarget.elements.namedItem('next') as HTMLInputElement).value = `${location.pathname}${location.search}`;
+          }}>
+            <input type="hidden" name="csrf" value={csrf} /><input type="hidden" name="next" value="/" />
+            <button type="submit" className="settings-item">
+              <Icon name="lock" />
+              <span><strong>Lock now</strong><span className="muted">Hide this screen until you enter your PIN. You stay signed in.</span></span>
+            </button>
+          </form>
+        </li>}
+        <li>
+          <Link href="/account/pin" className="settings-item" onClick={() => settings.current?.close()}>
+            <Icon name="lock" />
+            <span><strong>{hasPin ? 'Change PIN' : 'Set a PIN'}</strong><span className="muted">The six digits that unlock the screen.</span></span>
           </Link>
         </li>
         <li>

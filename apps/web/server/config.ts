@@ -10,6 +10,11 @@ export interface AppConfig {
   proxySecret: string | null;
   sessionAbsoluteSeconds: number;
   sessionIdleSeconds: number;
+  /** Lifetime and idle limit of a session started with "Keep me signed in". */
+  rememberSessionAbsoluteSeconds: number;
+  rememberSessionIdleSeconds: number;
+  /** Seconds without activity after which a session of an account that has a PIN is locked. */
+  lockIdleSeconds: number;
   invitationSeconds: number;
   /** How long an administrator-issued temporary password can still be used to sign in. */
   temporaryPasswordSeconds: number;
@@ -208,6 +213,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     proxySecret,
     sessionAbsoluteSeconds: intEnv(env, 'TALLYMED_SESSION_ABSOLUTE_SECONDS', 12 * 3600, 60, 30 * 86400),
     sessionIdleSeconds: intEnv(env, 'TALLYMED_SESSION_IDLE_SECONDS', 2 * 3600, 60, 7 * 86400),
+    rememberSessionAbsoluteSeconds: intEnv(env, 'TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS', 30 * 86400, 3600, 90 * 86400),
+    rememberSessionIdleSeconds: intEnv(env, 'TALLYMED_REMEMBER_SESSION_IDLE_SECONDS', 14 * 86400, 3600, 90 * 86400),
+    lockIdleSeconds: intEnv(env, 'TALLYMED_LOCK_IDLE_SECONDS', 300, 180, 86400),
     invitationSeconds: intEnv(env, 'TALLYMED_INVITATION_SECONDS', 72 * 3600, 60, 14 * 86400),
     temporaryPasswordSeconds: intEnv(env, 'TALLYMED_TEMP_PASSWORD_SECONDS', 4 * 3600, 300, 7 * 86400),
     passwordChangeSessionSeconds: intEnv(env, 'TALLYMED_PASSWORD_CHANGE_SESSION_SECONDS', 15 * 60, 120, 3600),

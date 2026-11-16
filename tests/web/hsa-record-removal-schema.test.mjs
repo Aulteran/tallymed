@@ -185,9 +185,9 @@ test('upgrade: a database populated at 0018 (decisions, a claim, a partial and a
     // Removal events are empty and the old payment-removal blockers are unchanged (HSA records block removing a payment).
     assert.equal(await eventCount({ db }), 0);
     assert.deepEqual(await payRepo.removalBlockers(db.pool, x.h, x.p1), { refunds: true, hsa: true });
-    // Then 0021 (default-eligible, built on this migration): every allocation here has a decision or is paid directly, so no figure moves;
+    // Then 0022 (default-eligible, built on this migration): every allocation here has a decision or is paid directly, so no figure moves;
     // the only difference is the trailing marked_ineligible column, false everywhere.
-    assert.deepEqual(await migrate(db.pool), ['0021']);
+    assert.deepEqual(await migrate(db.pool), ['0021', '0022']);
     const last = await allStatus(db.pool);
     assert.deepEqual(last.map(({ marked_ineligible, ...r }) => r), before.status);
     assert.ok(last.every((r) => r.marked_ineligible === false));
@@ -204,7 +204,7 @@ test('removal events are immutable, alternate per record, name a record of their
     const d = await t.decide(a.allocationId, 'eligible', '60.00');
     const c = await t.claim([{ allocationId: a.allocationId, amount: '20.00' }]);
     assert.equal((await one(t.db.pool, `select hsa_record_removed('decision', $1) as v`, [d.id])).v, false);
-    // Default-eligible (0021): a removed decision falls back to the whole net cash, so removing one never lowers the ceiling and is allowed; the restore returns the decision's own (lower) ceiling.
+    // Default-eligible (0022): a removed decision falls back to the whole net cash, so removing one never lowers the ceiling and is allowed; the restore returns the decision's own (lower) ceiling.
     await remove(t, 'decision', d.id);
     assert.deepEqual(figs(await status(t, a.allocationId)), ['10000', '2000', '0', '8000', '0']);
     await restore(t, 'decision', d.id);
@@ -627,8 +627,8 @@ test('backup: a backup made before 0020 restores, and the upgrade then leaves ev
     assert.deepEqual(after, { ...before.ledger, auditEvents: after.auditEvents });
     assert.deepEqual(await allStatus(target.pool), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
-    // 0021 afterwards: the same figures, plus the trailing marked_ineligible column (false everywhere).
-    assert.deepEqual(await migrate(target.pool), ['0021']);
+    // 0022 afterwards: the same figures, plus the trailing marked_ineligible column (false everywhere).
+    assert.deepEqual(await migrate(target.pool), ['0021', '0022']);
     assert.deepEqual((await allStatus(target.pool)).map(({ marked_ineligible, ...r }) => r), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
   } finally { ts.cleanup(); await target.drop(); await old.drop(); }
