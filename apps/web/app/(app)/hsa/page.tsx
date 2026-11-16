@@ -48,7 +48,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
           <label className="checkbox" htmlFor="hasCard"><input id="hasCard" type="checkbox" name="hasCard" value="yes" defaultChecked={p.hasCard === 'yes'} /> This account also has a spending card</label>
           <div className="conditional-fields">
             <label htmlFor="cardNickname">Card nickname</label><input id="cardNickname" name="cardNickname" maxLength={60} placeholder="HSA Visa" defaultValue={p.cardNickname} />
-            <label htmlFor="cardLastFour">Card last four digits (optional)</label><input id="cardLastFour" name="cardLastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.cardLastFour} />
+            <label htmlFor="cardLastFour">Card last four digits (optional)</label><input id="cardLastFour" name="cardLastFour" inputMode="numeric" maxLength={4} placeholder="0000" defaultValue={p.cardLastFour} />
             <p className="muted">The card is saved as an HSA/FSA card payment method. A nickname is required when this box is ticked, and it must not match an active payment method's nickname.</p>
           </div>
           <button type="submit">Add HSA account</button>

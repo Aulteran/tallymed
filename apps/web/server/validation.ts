@@ -218,11 +218,11 @@ export const paymentSchemas = {
   // fields are read only when the box is ticked, so an unticked form with stale card text behaves as a plain account.
   createHsaAccount: z.strictObject({
     name: hsaAccountName, administrator: hsaAdministrator, lastFour: optional(lastFour),
-    hasCard: checkbox, cardNickname: optionalText(60), cardLastFour: z.string().optional(), ...csrf,
+    hasCard: checkbox, cardNickname: z.string().optional(), cardLastFour: z.string().optional(), ...csrf,
   }).transform((d, ctx) => {
     const { hasCard, cardNickname, cardLastFour, ...rest } = d;
     if (!hasCard) return { ...rest, card: null };
-    const nickname = methodNickname.safeParse(cardNickname);
+    const nickname = methodNickname.safeParse(cardNickname ?? '');
     if (!nickname.success) {
       ctx.addIssue({ code: 'custom', message: 'a spending card needs a nickname' });
       return z.NEVER;

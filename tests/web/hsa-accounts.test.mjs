@@ -71,7 +71,7 @@ test('an account created with a spending card saves the card as a linked HSA/FSA
     assert.equal(plain.paymentMethodId, null);
     assert.equal((await pm.listPaymentMethods(t.db.pool, t.actor)).items.length, 1);
     // Stale card text with the box unticked is ignored, even if it would be invalid.
-    assert.equal((await account(t, { name: 'Stale text', cardNickname: '', cardLastFour: '12' })).paymentMethodId, null);
+    assert.equal((await account(t, { name: 'Stale text', cardNickname: 'x'.repeat(80), cardLastFour: '12' })).paymentMethodId, null);
     // A ticked box needs a valid nickname and last four.
     await assert.rejects(account(t, { name: 'Needs nick', hasCard: 'yes', cardNickname: '' }), code('invalid_input'));
     await assert.rejects(account(t, { name: 'Bad four', hasCard: 'yes', cardNickname: 'Card', cardLastFour: '12' }), code('invalid_input'));

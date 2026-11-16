@@ -335,7 +335,13 @@ try {
   await page.fill('#name', 'Family HSA');
   await page.fill('#administrator', 'Example HSA Bank');
   await page.fill('#lastFour', '7788');
+  // Ticking, typing a partial value and unticking must not leave a hidden field that blocks the submit.
   await page.check('#hasCard');
+  await page.fill('#cardLastFour', '12');
+  await page.uncheck('#hasCard');
+  assert.equal(await page.evaluate(() => document.querySelector('form[action="/api/expenses/hsa-accounts/create"]').checkValidity()), true, 'stale hidden card text does not block the form');
+  await page.check('#hasCard');
+  await page.fill('#cardLastFour', '');
   await page.fill('#cardNickname', 'HSA Visa');
   await page.fill('#cardLastFour', '0042');
   await a11y('HSA add account form with the spending card fields');

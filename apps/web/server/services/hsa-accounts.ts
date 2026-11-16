@@ -8,6 +8,7 @@ import { recordAudit } from '../repositories/audit.ts';
 import * as repo from '../repositories/hsa-accounts.ts';
 import * as payRepo from '../repositories/payments.ts';
 import { paymentSchemas, parse, schemas } from '../validation.ts';
+import { withRetry } from './support.ts';
 import { insertMethodWithLink, PAYMENT_METHOD_NICKNAME_TAKEN } from './payment-methods.ts';
 export { requireActiveAccount } from './hsa-account-guard.ts';
 
@@ -47,7 +48,9 @@ export async function createHsaAccount(pool: Pool, actor: Actor, input: unknown,
   authorize(actor, 'expenses:write');
   const d = parse(paymentSchemas.createHsaAccount, input);
   try {
-    return await withTransaction(pool, async (tx) => {
+    // The card's nickname is claimed after the account name, which is not the documented lock order (payment method before account), so a rare
+    // three-way wait can end in a PostgreSQL deadlock abort. Each attempt is a fresh transaction, so retrying it is safe.
+    return await withRetry(() => withTransaction(pool, async (tx) => {
       const id = await repo.insertAccount(tx, { householdId: actor.householdId, userId: actor.userId, name: d.name, administrator: d.administrator, lastFour: d.lastFour });
       await recordAudit(tx, {
         householdId: actor.householdId, actorUserId: actor.userId, action: 'hsa_account.created', entityType: 'hsa_account', entityId: id, requestId,
@@ -55,7 +58,7 @@ export async function createHsaAccount(pool: Pool, actor: Actor, input: unknown,
       });
       const paymentMethodId = d.card ? await insertMethodWithLink(tx, actor, { ...d.card, hsaAccountId: id }, requestId) : null;
       return { id, paymentMethodId };
-    });
+    }));
   } catch (e) {
     if (isUniqueViolation(e, 'hsa_accounts_active_name')) throw new AppError('conflict', NAME_TAKEN);
     if (isUniqueViolation(e, 'payment_methods_active_nickname')) throw new AppError('conflict', PAYMENT_METHOD_NICKNAME_TAKEN);
