@@ -77,7 +77,7 @@ export async function getHsaAllocationDetail(pool: Pool, actor: Actor, id: strin
   authorize(actor, 'expenses:read');
   const allocationId = parse(schemas.id, id);
   const allocation = await repo.getAllocation(pool, actor.householdId, allocationId);
-  if (!allocation) throw new AppError('not_found');
+  if (!allocation || await repo.paymentRemoved(pool, actor.householdId, allocation.paymentId)) throw new AppError('not_found');
   const [decisions, lines, entries, history] = await Promise.all([
     repo.listDecisions(pool, actor.householdId, allocationId), repo.linesOfAllocation(pool, actor.householdId, allocationId),
     repo.listEntriesOfAllocation(pool, actor.householdId, allocationId), repo.history(pool, actor.householdId, 'allocationId', allocationId),

@@ -82,10 +82,10 @@ export async function insertFunding(db: Queryable, v: { householdId: string; use
 
 export interface AccountUse { accountId: string; paymentCount: number; netCashCents: string }
 
-/** Per account: payments paid directly and their net cash, by the cash summary's definition. `from` is the payments query's FROM clause. */
+/** Per account: payments paid directly and their net cash, by the cash summary's definition (a voided payment counts zero cash, so it is not counted as a payment here). `from` is the payments query's FROM clause. */
 export async function accountUse(db: Queryable, from: string, householdId: string): Promise<AccountUse[]> {
   const { rows } = await db.query<AccountUse>(
-    `select hf.hsa_account_id as "accountId", count(*)::int as "paymentCount",
+    `select hf.hsa_account_id as "accountId", (count(*) filter (where v.payment_id is null))::int as "paymentCount",
        coalesce(sum(case when v.payment_id is null then p.amount_cents - c.refunded else 0 end), 0)::text as "netCashCents"
      ${from} where p.household_id = $1 and hf.payment_id is not null group by hf.hsa_account_id`, [householdId]);
   return rows;
