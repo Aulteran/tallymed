@@ -11,7 +11,9 @@ import * as pay from '../../apps/web/server/services/payments.ts';
 import { retryStats } from '../../apps/web/server/services/support.ts';
 import { ledgerViolations } from '../../apps/web/server/backup/ledger.ts';
 import { setup } from './money-helpers.mjs';
-import { skipDb } from './helpers.mjs';
+import * as handlers from '../../apps/web/server/http.ts';
+import { csrfFor } from '../../apps/web/server/tokens.ts';
+import { post, skipDb } from './helpers.mjs';
 
 const code = (c) => ({ code: c });
 const account = (t, o = {}) => acc.createHsaAccount(t.db.pool, t.actor, { name: 'Family HSA', administrator: 'Example HSA Bank', lastFour: '7788', ...o }, 'r');
@@ -119,6 +121,25 @@ test('cards: only an HSA/FSA card can be linked, only to an active account; the 
     const arch = await acc.getHsaAccount(t.db.pool, t.actor, b.id);
     await acc.archiveHsaAccount(t.db.pool, t.actor, { id: b.id, version: arch.version, archived: 'yes' }, 'r');
     await assert.rejects(card(t, b.id, { nickname: 'Another' }), code('conflict'));
+  } finally { await t.db.drop(); }
+});
+
+test('the payment method form drops a stale HSA account choice when Type is not HSA/FSA card; the service and JSON stay strict', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const a = await account(t);
+    const h = { 'x-csrf-token': csrfFor(t.cookie.split('=')[1]) };
+    const form = (body, o = {}) => handlers.handleExpenseAction(post('/api/expenses/payment-methods/create', body, { cookie: t.cookie, headers: h, ...o }), t.ctx, 'payment-methods/create');
+    // A browser form (the select is hidden, not cleared, when Type changes) saves the card without a link.
+    const res = await form({ nickname: 'Plain Visa', kind: 'credit_card', lastFour: '', hsaAccountId: a.id }, { html: true });
+    assert.equal(res.status, 303);
+    const rows = (await t.db.pool.query(`select 1 from payment_method_hsa_links l join payment_methods m on m.id = l.method_id where m.nickname = 'Plain Visa'`)).rows;
+    assert.equal(rows.length, 0, 'a non-HSA/FSA method never ends up with a link');
+    const linked = await form({ nickname: 'Linked HSA', kind: 'hsa_fsa_card', lastFour: '', hsaAccountId: a.id }, { html: true });
+    assert.equal(linked.status, 303);
+    assert.equal((await t.db.pool.query(`select 1 from payment_method_hsa_links`)).rows.length, 1, 'an HSA/FSA card keeps its link');
+    // JSON requests are still refused.
+    assert.equal((await form({ nickname: 'Json Visa', kind: 'credit_card', lastFour: '', hsaAccountId: a.id }, { type: 'json' })).status, 400);
   } finally { await t.db.drop(); }
 });
 

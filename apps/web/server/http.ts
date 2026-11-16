@@ -720,7 +720,10 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   keepFields: a.keep,
   keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
-    const result = await a.service(ctx.pool, actor!, body, requestId);
+    // The HSA account field is hidden unless Type is HSA/FSA card (CSS only), so a form can still submit a stale choice after Type was changed.
+    // A browser form drops it here; the service stays strict, so a JSON request or a direct call with a link on another type is still refused.
+    const input = (name === 'payment-methods/create' || name === 'payment-methods/update') && wantsHtml(req) && body.kind !== 'hsa_fsa_card' ? { ...body, hsaAccountId: '' } : body;
+    const result = await a.service(ctx.pool, actor!, input, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
     return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },

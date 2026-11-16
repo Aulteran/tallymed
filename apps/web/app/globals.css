@@ -381,6 +381,9 @@ main.auth .card > p { color: var(--fg-muted); }
 .provider-form:has(#provider option[value="generic"]:checked) .only-microsoft { display: none; }
 .provider-form details { margin-top: var(--space-4); border-top: 1px solid var(--line); padding-top: var(--space-3); }
 .provider-form h3 { margin: var(--space-5) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); font-size: var(--text-md); }
+/* The HSA account link applies only to HSA/FSA cards, so it shows only for that Type (CSS only, so the form still works without JavaScript). */
+.hsa-link-fields { display: none; }
+.hsa-link-form:has(#kind option[value="hsa_fsa_card"]:checked) .hsa-link-fields { display: block; }
 .status-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
 /* Inline rather than flex, so each row reads as one line ("Password sign-in: On") to assistive technology and copy-paste. */
 .card .status-list li { padding: var(--space-2) 0; line-height: 1.8; }

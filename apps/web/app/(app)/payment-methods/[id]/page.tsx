@@ -16,14 +16,16 @@ export default async function PaymentMethodPage({ params, searchParams }: { para
     <p className="crumb"><Link href="/payment-methods">← Payment methods</Link></p>
     <h1>{methodName(m!.nickname, m!.lastFour)} {m!.archivedAt && <span className="pill warn">Archived</span>}</h1>
     <Banner code={q.error} />
-    <form className="card" method="post" action="/api/expenses/payment-methods/update">
+    <form className="card hsa-link-form" method="post" action="/api/expenses/payment-methods/update">
       <Csrf token={csrf} /><input type="hidden" name="id" value={m!.id} /><input type="hidden" name="version" value={m!.version} />
       <label htmlFor="nickname">Nickname</label><input id="nickname" name="nickname" required maxLength={60} defaultValue={m!.nickname} />
       <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={m!.kind}>{METHOD_KINDS.map((k) => <option key={k} value={k}>{methodKindLabel(k)}</option>)}</select>
       <label htmlFor="lastFour">Last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} defaultValue={m!.lastFour ?? ''} />
-      <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
-      <select id="hsaAccountId" name="hsaAccountId" defaultValue={m!.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>
-      <p className="muted">A payment recorded with a linked card is paid directly from that HSA account. Changing the link affects only payments recorded afterwards.</p>
+      <div className="hsa-link-fields">
+        <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
+        <select id="hsaAccountId" name="hsaAccountId" defaultValue={m!.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>
+        <p className="muted">A payment recorded with a linked card is paid directly from that HSA account. Changing the link affects only payments recorded afterwards.</p>
+      </div>
       <button type="submit">Save changes</button> <span className="muted">Updated {dateOf(m!.updatedAt)}. Payments show the current nickname. Only the last four digits are kept, never a full number.</span>
     </form>
     <form className="card" method="post" action="/api/expenses/payment-methods/archive">

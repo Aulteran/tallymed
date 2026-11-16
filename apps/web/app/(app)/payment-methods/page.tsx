@@ -20,15 +20,17 @@ export default async function PaymentMethodsPage({ searchParams }: { searchParam
       <h1>Payment methods</h1>
       <AddDialog label="Add payment method" open={open} keep={keep}>
         {p.error && <Banner code={p.error} />}
-        <form method="post" action="/api/expenses/payment-methods/create">
+        <form className="hsa-link-form" method="post" action="/api/expenses/payment-methods/create">
           <Csrf token={csrf} />
           <p className="muted">Name the cards and accounts you pay bills with, then choose one when you record a payment. Enter only the last four digits, never a full card or account number. Each active nickname must be unique.</p>
           <label htmlFor="nickname">Nickname</label><input id="nickname" name="nickname" required maxLength={60} placeholder="Family Visa" defaultValue={p.nickname} />
           <label htmlFor="kind">Type</label><select id="kind" name="kind" defaultValue={p.kind ?? 'credit_card'}>{METHOD_KINDS.map((k) => <option key={k} value={k}>{methodKindLabel(k)}</option>)}</select>
           <label htmlFor="lastFour">Last four digits (optional)</label><input id="lastFour" name="lastFour" inputMode="numeric" pattern="\d{4}" maxLength={4} placeholder="0000" defaultValue={p.lastFour} />
-          <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
-          <select id="hsaAccountId" name="hsaAccountId" defaultValue={p.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>
-          <p className="muted">Link an HSA/FSA card to an HSA account and a payment recorded with it is paid directly from that HSA: nothing to claim. Without a link the card is only a label. <Link href="/hsa?add=1">Add an HSA account</Link></p>
+          <div className="hsa-link-fields">
+            <label htmlFor="hsaAccountId">HSA account (HSA/FSA cards only)</label>
+            <select id="hsaAccountId" name="hsaAccountId" defaultValue={p.hsaAccountId ?? ''}><Options items={accounts.items.map((a) => ({ id: a.id, name: a.name, archived: a.archivedAt !== null }))} blank="Not linked" /></select>
+            <p className="muted">Link an HSA/FSA card to an HSA account and a payment recorded with it is paid directly from that HSA: nothing to claim. Without a link the card is only a label. <Link href="/hsa?add=1">Add an HSA account</Link></p>
+          </div>
           <button type="submit">Add payment method</button>
         </form>
       </AddDialog>
