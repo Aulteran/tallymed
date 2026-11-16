@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import { ConfirmDialog } from '../../../components/ConfirmDialog.tsx';
 import { AddDialog } from '../../../components/AddDialog.tsx';
-import { PlanPreviewPanel, PreviewButton, SaveButton, tryPreview } from '../../../components/PlanPreview.tsx';
+import { PlanPreviewPanel, PreviewButton, tryPreview } from '../../../components/PlanPreview.tsx';
 import { PlanScheduleFields } from '../../../components/PlanScheduleFields.tsx';
 import { can } from '../../../../server/authz.ts';
 import { centsToUsdInput, formatCents } from '../../../../server/money.ts';
-import { getPlanDetail, previewPlanRevision } from '../../../../server/services/plans.ts';
+import { hasPreviewValues } from '../../../../server/plan-preview-form.ts';
+import { getPlanDetail, previewPlanRevision, suggestPlanMatches } from '../../../../server/services/plans.ts';
 import {
   Banner, Csrf, CADENCES, dateOf, flatWithFlash, label, load, Money, newKey, Options, requireSession, StatePill, todayUtc, type SearchParams,
 } from '../../../components/ui.tsx';
@@ -59,12 +60,17 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
   const roundingNote = String(saved?.detail.warningCodes ?? '').split(',').includes('unequal_installments');
   const stillToSchedule = BigInt(plan.totalCents) - paidCents;
   const canRestructure = active && paidCount > 0 && paidCount < installments.length;
-  const planAction = `/plans/${plan.id}`;
   const scheduleOf = (v: Record<string, string>, fields: string[]) => Object.fromEntries(fields.filter((f) => v[f] !== undefined).map((f) => [f, v[f]!]));
-  const revisePreview = q.preview === 'revise' && active
+  const showPreview = hasPreviewValues(q);
+  const revisePreview = q.preview === 'revise' && active && showPreview
     ? await tryPreview(() => previewPlanRevision(ctx.pool, actor, plan.id, scheduleOf(q, ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode']))) : null;
-  const restructurePreview = q.preview === 'restructure' && canRestructure
+  const restructurePreview = q.preview === 'restructure' && canRestructure && showPreview
     ? await tryPreview(() => previewPlanRevision(ctx.pool, actor, plan.id, { ...scheduleOf(q, ['totalAmount', 'installmentAmount', 'firstDueDate', 'cadence']), inputMode: 'per_installment', reviseMode: 'keep_paid' })) : null;
+  // What "Match selected" would apply, worked out with the same fill the server checks again on submit.
+  const suggestions = active ? (await load(() => suggestPlanMatches(ctx.pool, actor, plan.id), [])).data : [];
+  const SUGGESTION_ROWS = 120;
+  const shown = suggestions.slice(0, SUGGESTION_ROWS);
+  const shownCents = shown.reduce((t, x) => t + BigInt(x.amountCents), 0n);
   const unmatched = allocations.filter((a) => BigInt(a.netCents) > BigInt(a.matchedCents));
   const unmatchedCents = unmatched.reduce((t, a) => t + BigInt(a.netCents) - BigInt(a.matchedCents), 0n);
   return <main id="main" className="wide">
@@ -83,7 +89,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
       {canRestructure && <AddDialog label="Plan was restructured" title="The plan was restructured" icon={null} secondary marker="restructure" open={restructureOpen}>
         {restructureFailed && <Banner code={q.error} />}
         <form method="post" action="/api/expenses/plans/revise">
-          <input type="hidden" name="planId" value={plan.id} />{key()}<input type="hidden" name="version" value={plan.version} />
+          <Csrf token={csrf} /><input type="hidden" name="planId" value={plan.id} />{key()}<input type="hidden" name="version" value={plan.version} />
           <input type="hidden" name="dialog" value="restructure" /><input type="hidden" name="reviseMode" value="keep_paid" /><input type="hidden" name="inputMode" value="per_installment" />
           <p>{paidCount} installment{paidCount === 1 ? ' is' : 's are'} fully paid ({formatCents(paidCents.toString())}). Still to schedule: <strong>{formatCents(stillToSchedule.toString())}</strong>.</p>
           <p className="muted">The paid installments stay exactly as they are, with their own payments. The rest is scheduled again from the date below at the amount you give; the last installment is smaller if the total does not divide evenly. No cash or bill balance changes.</p>
@@ -94,7 +100,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
           <select id="rs-cadence" name="cadence" defaultValue={rs.cadence ?? 'monthly'}>{CADENCES.map((c) => <option key={c} value={c}>{label(c)}</option>)}</select>
           <label htmlFor="rs-why">Reason</label><input id="rs-why" name="reason" required maxLength={500} defaultValue={rs.reason} />
           {restructurePreview && <PlanPreviewPanel result={restructurePreview} />}
-          <div className="modal-actions"><SaveButton csrf={csrf}>Save new schedule</SaveButton><PreviewButton action={planAction} kind="restructure" /></div>
+          <div className="modal-actions"><button type="submit">Save new schedule</button><PreviewButton kind="restructure" /></div>
         </form>
       </AddDialog>}
       {can(actor, 'records:remove') && <ConfirmDialog id="delete-plan" label="Delete plan" title="Delete this payment plan?">
@@ -114,7 +120,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
     {!renameFailed && !restructureFailed && <Banner code={q.error} />}
     {totalGap !== 0n && enteredCents !== null && computedCents !== null && <div className="card" role="note"><strong>The entered total did not match the installments.</strong> When this schedule was saved you entered a total of {formatCents(enteredCents.toString())}, but the installments entered come to {formatCents(computedCents.toString())}, {formatCents((totalGap < 0n ? -totalGap : totalGap).toString())} {totalGap > 0n ? 'more' : 'less'}. The schedule was saved as the installments add up. Revise it if that is not what you meant.</div>}
     {roundingNote && <div className="card" role="note"><strong>Some installments differ by a few cents.</strong> The total does not divide evenly, so the leftover cents were placed as you chose when the schedule was saved.</div>}
-    {active && balanceGap !== 0n && <div className="card" role="note"><strong>Check the plan against the bills.</strong> The plan still schedules {formatCents(stillScheduled.toString())} (its total minus what is matched), and the bills it covers still owe {formatCents(billsOpen.toString())}: the plan is {formatCents((balanceGap < 0n ? -balanceGap : balanceGap).toString())} {balanceGap > 0n ? 'above' : 'below'} the balance. {balanceGap > 0n ? 'Payments cannot be applied above a bill\'s open balance, so the last installments may not be payable in full.' : 'The installments will not clear the bills on their own.'} {unmatchedCents > 0n ? ` ${formatCents(unmatchedCents.toString())} of payments applied to these bills is not matched to any installment yet, which can explain it: use Match all existing payments.` : ''} This is only a warning. Revise the schedule or record a bill adjustment if it is not what you expect.</div>}
+    {active && balanceGap !== 0n && <div className="card" role="note"><strong>Check the plan against the bills.</strong> The plan still schedules {formatCents(stillScheduled.toString())} (its total minus what is matched), and the bills it covers still owe {formatCents(billsOpen.toString())}: the plan is {formatCents((balanceGap < 0n ? -balanceGap : balanceGap).toString())} {balanceGap > 0n ? 'above' : 'below'} the balance. {balanceGap > 0n ? 'Payments cannot be applied above a bill\'s open balance, so the last installments may not be payable in full.' : 'The installments will not clear the bills on their own.'} {unmatchedCents > 0n ? ` ${formatCents(unmatchedCents.toString())} of payments applied to these bills is not matched to any installment yet, which can explain it: use Suggested matches.` : ''} This is only a warning. Revise the schedule or record a bill adjustment if it is not what you expect.</div>}
     {!active && <div className="card" role="note"><strong>Cancelled {plan.cancelledAt ? dateOf(plan.cancelledAt) : ''}.</strong> {plan.cancelReason}. History is kept; no new matches or revisions.</div>}
     <section className="metrics" aria-label="Plan totals">
       <div className="card"><span>Plan total</span><strong><Money cents={plan.totalCents} /></strong><span className="muted">{plan.installmentCount} installments, {label(plan.cadence)}</span></div>
@@ -134,11 +140,22 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
           <td data-label="Status"><StatePill state={i.state} overdue={i.overdue && active} /></td></tr>)}</tbody></table>
       <p className="muted">Status as of {data!.asOf} (UTC).</p>
     </div>
-    {active && open.length > 0 && unmatched.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match-existing">
-      <h2>Match all existing payments</h2>{base}{key()}<input type="hidden" name="version" value={plan.version} />
-      <p>{unmatched.length}{allocationsTruncated ? '+' : ''} payment{unmatched.length === 1 ? '' : 's'} applied to this plan's bills ({formatCents(unmatchedCents.toString())}{allocationsTruncated ? '+' : ''}) not yet matched to any installment.</p>
-      <p className="muted">Only payments made on or after the plan's start date ({plan.startedOn}) are used. Matches them to the earliest installments that still owe, oldest payment first. It only links to cash already recorded: no cash is added and no bill balance changes. You can remove a match afterwards.</p>
-      <button type="submit">Match all existing payments</button>
+    {active && shown.length > 0 && <form className="card" method="post" action="/api/expenses/plans/apply-suggestions">
+      <h2>Suggested matches</h2>{base}{key()}<input type="hidden" name="version" value={plan.version} />
+      <p>{shown.length}{suggestions.length > shown.length ? '+' : ''} suggested match{shown.length === 1 ? '' : 'es'} totalling {formatCents(shownCents.toString())}: payments applied to this plan&apos;s bills and not yet matched to any installment, made on or after the plan&apos;s start date ({plan.startedOn}).</p>
+      <p className="muted">Untick any you do not want, then use Match selected. A match only links an installment to cash already recorded: no cash is added and no bill balance changes. If something changes before you submit, nothing is matched and the suggestions are shown again. You can remove a match afterwards.</p>
+      {suggestions.length > shown.length && <p className="muted" role="note">Only the first {SUGGESTION_ROWS} are shown. Match them, then the next ones are suggested.</p>}
+      <table className="stack"><thead><tr><th>Match</th><th>Installment</th><th>Payment</th><th className="num">Amount to match</th><th>Why</th></tr></thead>
+        <tbody>{shown.map((x, n) => <tr key={`${x.installmentId}:${x.allocationId}`}>
+          <td data-label="Match">
+            <input type="hidden" name={`sug.${n}.installmentId`} value={x.installmentId} /><input type="hidden" name={`sug.${n}.allocationId`} value={x.allocationId} /><input type="hidden" name={`sug.${n}.amount`} value={centsToUsdInput(x.amountCents)} />
+            <input type="checkbox" name={`sug.${n}.apply`} value="1" defaultChecked aria-label={`Match installment ${x.installmentSeq} due ${x.dueDate} with the payment of ${x.paidOn}`} />
+          </td>
+          <td data-label="Installment">#{x.installmentSeq} due {x.dueDate}</td>
+          <td data-label="Payment"><Link href={`/payments/${x.paymentId}`}>{x.paidOn}</Link>, <Money cents={x.paymentAmountCents} /></td>
+          <td data-label="Amount to match" className="num"><Money cents={x.amountCents} /></td>
+          <td data-label="Why">{x.why}</td></tr>)}</tbody></table>
+      <button type="submit">Match selected</button>
     </form>}
     {active && open.length > 0 && <form className="card" method="post" action="/api/expenses/plans/match">
       <h2>Match a payment to an installment</h2>{base}{key()}
@@ -162,7 +179,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
       </form>)}
     </div>}
     {active && <form className="card" method="post" action="/api/expenses/plans/revise">
-      <h2>Revise the schedule</h2><input type="hidden" name="planId" value={plan.id} />{key()}<input type="hidden" name="version" value={plan.version} />
+      <h2>Revise the schedule</h2><Csrf token={csrf} /><input type="hidden" name="planId" value={plan.id} />{key()}<input type="hidden" name="version" value={plan.version} />
       <p className="muted">A revision replaces the schedule going forward. Earlier schedules and what was matched on them stay in the history, and matches carry onto the new installments in date order. The new total cannot be below what is already matched.</p>
       <fieldset>
         <legend>What should the revision do?</legend>
@@ -177,7 +194,7 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
         installmentAmount: rv.installmentAmount, remainder: rv.remainder, firstDueDate: rv.firstDueDate, cadence: rv.cadence }} />
       <label htmlFor="rv-why">Reason</label><input id="rv-why" name="reason" required maxLength={500} defaultValue={rv.reason} />
       {revisePreview && <PlanPreviewPanel result={revisePreview} />}
-      <div className="actions"><SaveButton csrf={csrf}>Save new schedule</SaveButton><PreviewButton action={planAction} kind="revise" /></div>
+      <div className="actions"><button type="submit">Save new schedule</button><PreviewButton kind="revise" /></div>
     </form>}
     <div className="card"><h2>Schedule versions</h2>
       <table className="stack"><thead><tr><th>Version</th><th>Created</th><th className="num">Total</th><th>Installments</th><th className="num">Matched</th><th>Reason</th></tr></thead>

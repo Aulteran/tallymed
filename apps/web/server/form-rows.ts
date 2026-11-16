@@ -54,3 +54,27 @@ export function withFormRows(
   const rest = Object.fromEntries(Object.entries(body).filter(([k]) => !k.startsWith(lead)));
   return rows.length > 0 ? { ...rest, [spec.into]: rows } : rest;
 }
+
+/**
+ * Like `withFormRows` for a list of rows that each carry a checkbox (`<prefix>.<n>.<flag>`, "1" when ticked). An unticked checkbox is not
+ * sent at all, so a row without the flag is simply left out; a flag with any value other than "1" is refused. The flag is not part of
+ * the rows that come out, and every other field of a kept row is validated by the schema as usual. Indexes still count every row,
+ * ticked or not, so a form can show a fixed list with no gaps.
+ */
+export function withCheckedRows(
+  body: Record<string, unknown>, spec: { prefix: string; into: string; fields: readonly string[]; flag: string; max: number },
+): Record<string, unknown> {
+  const lead = `${spec.prefix}.`;
+  if (!Object.keys(body).some((k) => k.startsWith(lead))) return body;
+  if (spec.into in body) throw new AppError('invalid_input');
+  const all = rowsFromForm(body, spec.prefix, [...spec.fields, spec.flag], spec.max);
+  const picked: Array<Record<string, string>> = [];
+  for (const row of all) {
+    const { [spec.flag]: flag, ...rest } = row;
+    if (flag === '') continue;
+    if (flag !== '1') throw new AppError('invalid_input');
+    picked.push(rest);
+  }
+  const rest = Object.fromEntries(Object.entries(body).filter(([k]) => !k.startsWith(lead)));
+  return picked.length > 0 ? { ...rest, [spec.into]: picked } : rest;
+}

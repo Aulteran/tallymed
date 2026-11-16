@@ -46,10 +46,11 @@ export function PlanPreviewPanel({ result }: { result: { preview: PlanPreview } 
   </section>;
 }
 
-/** The save button carries the CSRF token itself, so the Preview button (a GET) never sends it and it cannot reach the address bar. Keep this first in the form so Enter saves. */
-export const SaveButton = ({ csrf, children, className }: { csrf: string; children: string; className?: string }) => <button type="submit" name="csrf" value={csrf} className={className}>{children}</button>;
-
-/** A GET back to the same page: the form's named fields arrive as query values and the page renders the preview from them. Writes nothing. */
-export const PreviewButton = ({ action, kind }: { action: string; kind: 'create' | 'revise' | 'restructure' }) => (
-  <button type="submit" className="secondary" formMethod="get" formAction={action} formNoValidate name="preview" value={kind}>Preview</button>
+/**
+ * A POST to the no-write preview route. The form's own CSRF token travels in its hidden input like any other post; the route keeps the typed
+ * fields in the flash cookie and redirects back with only `?preview=<kind>`, so nothing typed (the reason and the name included) is in the address.
+ * Put it after the save button, so Enter in a field saves.
+ */
+export const PreviewButton = ({ kind }: { kind: 'create' | 'revise' | 'restructure' }) => (
+  <button type="submit" className="secondary" formMethod="post" formAction="/api/expenses/plans/preview" formNoValidate name="preview" value={kind}>Preview</button>
 );

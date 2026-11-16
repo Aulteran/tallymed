@@ -6,8 +6,10 @@ import type { ObjectStore } from './storage.ts';
 import type { Actor } from './authz.ts';
 import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
-import { flashSetCookie } from './flash.ts';
-import { withFormRows } from './form-rows.ts';
+import { flashCookieName, flashSetCookie } from './flash.ts';
+import { withCheckedRows, withFormRows } from './form-rows.ts';
+import { PREVIEW_KEEP, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
+import { authorize } from './authz.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
@@ -682,7 +684,9 @@ const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.pla
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
 const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
 const withoutFormMarker = (b: Record<string, unknown>) => { const { dialog: _dialog, ...rest } = b; return rest; };
-const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
+/** Rows of the "Suggested matches" card: `sug.<n>.installmentId`, `.allocationId`, `.amount` and the tick `.apply` ("1"; an unticked box is not sent). */
+const SUGGESTION_ROWS = { prefix: 'sug', into: 'rows', fields: ['installmentId', 'allocationId', 'amount'], flag: 'apply', max: 120 } as const;
+const suggestionRows = (b: Record<string, unknown>) => withCheckedRows(b, SUGGESTION_ROWS);
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
   service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string }) => string; keep?: string[];
@@ -712,6 +716,8 @@ const MONEY_ACTIONS: Record<string, {
   'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
+  // No `keep`: after any refusal the suggestions are computed again and every row starts ticked, so row indexes from the old list would mislead.
+  'plans/apply-suggestions': { service: plans.applySuggestedMatches, error: planOf, prepare: suggestionRows, ok: planPath },
   'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },
   'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },
 };
@@ -743,6 +749,29 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
     return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
+
+/**
+ * The Preview buttons of the plan forms. A POST with the CSRF token that writes nothing: the submitted schedule fields (and the dialog
+ * marker) go into the flash cookie, which is HttpOnly and bound to the page, and the redirect carries only `?preview=<kind>`, so the
+ * reason, the name and the CSRF token never reach the address bar, history, logs or Referer. The page reads the cookie and runs the
+ * same read-only preview as before. It is not a mutation, so it keeps the actor's undo slot.
+ */
+expenseRoutes.set('plans/preview', route({
+  name: 'expenses.plans.preview',
+  session: true,
+  errorPath: (b) => previewPage(previewKind(b), b),
+  keepFields: PREVIEW_KEEP,
+  keepsUndo: true,
+  async run({ ctx, actor, body, req }) {
+    authorize(actor!, 'expenses:write');
+    const kind = previewKind(body);
+    const page = previewPage(kind, body);
+    // Always set the cookie, an expired one when there is nothing to keep, so an older flash for this page cannot show up in its place.
+    const flash = flashSetCookie(ctx.config, page, withBillSlots(body), PREVIEW_KEEP) ?? `${flashCookieName(ctx.config)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${ctx.config.secureCookies ? '; Secure' : ''}`;
+    if (wantsHtml(req)) return { response: redirect(ctx.config, `${page}?preview=${kind}`, { 'Set-Cookie': flash }) };
+    return { json: { ok: true, preview: kind } };
+  },
+}));
 
 /** Single entry point for every expense mutation. The action comes from a fixed allow-list, never from the body. */
 export async function handleExpenseAction(req: Request, ctx: AppContext, action: string): Promise<Response> {

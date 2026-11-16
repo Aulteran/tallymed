@@ -262,6 +262,11 @@ export const paymentSchemas = {
     return { ...rest, billIds };
   }),
   matchExistingPayments: z.strictObject({ idempotencyKey, planId: uuid, version, ...csrf }),
+  // The ticked rows of the "Suggested matches" card. Each must equal a suggestion the server computes again under its locks.
+  applySuggestedMatches: z.strictObject({
+    idempotencyKey, planId: uuid, version, ...csrf,
+    rows: z.array(z.strictObject({ installmentId: uuid, allocationId: uuid, amount: positiveUsd })).min(1).max(120),
+  }).refine((d) => new Set(d.rows.map((r) => `${r.installmentId}:${r.allocationId}`)).size === d.rows.length, { message: 'each installment and payment pair can appear once' }),
   revisePlan: z.strictObject({
     idempotencyKey, planId: uuid, version, reason: text(500).min(1), ...scheduleInput,
     // "replace" swaps the whole schedule. "keep_paid" keeps fully paid installments and restarts the rest from firstDueDate.

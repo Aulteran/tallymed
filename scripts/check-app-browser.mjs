@@ -460,10 +460,16 @@ try {
   await page.fill('#rs-amount', '15.00');
   await page.fill('#rs-first', '2026-05-01');
   await page.fill('#rs-why', 'Provider restructured the plan');
-  // Preview is a GET back to this page: the typed values come back, nothing is written and no secret reaches the address.
+  // Preview is a POST (with the CSRF token) that redirects back with only a marker: the typed values come back from a cookie, nothing is
+  // written, and neither the reason, the name, the token nor the idempotency key reaches the address.
+  const cleanPreviewUrl = (kind) => {
+    const u = new URL(page.url());
+    assert.equal(u.search, `?preview=${kind}`, `only the marker is in the preview address: ${page.url()}`);
+    assert.ok(!/reason|name|csrf|idempotencyKey|Provider|Previewed/i.test(u.href), `the preview address carries no typed text or token: ${u.href}`);
+  };
   await restructure.locator('button:has-text("Preview")').click();
   await page.waitForURL(/preview=restructure/);
-  assert.ok(!/csrf/i.test(page.url()), `the preview address carries no CSRF token: ${page.url()}`);
+  cleanPreviewUrl('restructure');
   await restructure.waitFor({ state: 'visible' });
   const previewRows = restructure.locator('.preview tbody tr');
   assert.equal(await previewRows.count(), 3);
@@ -511,7 +517,7 @@ try {
   await page.fill('#rv-first', '2026-07-01');
   await page.click('form.card[action="/api/expenses/plans/revise"] button:has-text("Preview")');
   await page.waitForURL(/preview=revise/);
-  assert.ok(!/csrf/i.test(page.url()));
+  cleanPreviewUrl('revise');
   const revisePreviewRows = page.locator('form.card .preview tbody tr');
   assert.equal(await revisePreviewRows.count(), 4);
   assert.match(await revisePreviewRows.nth(3).innerText(), /\$4\.00/);
@@ -520,8 +526,18 @@ try {
   await a11y('plan detail with the revise preview');
   // The restructure dialog and its preview fit a phone.
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto(`${planUrl}?preview=restructure&installmentAmount=7.00&totalAmount=20.00&firstDueDate=2026-09-01`);
+  await page.goto(planUrl);
+  await page.click('.page-head .page-action button:has-text("Plan was restructured")');
   await restructure.waitFor({ state: 'visible' });
+  await page.fill('#rs-amount', '7.00');
+  await page.fill('#rs-total', '20.00');
+  await page.fill('#rs-first', '2026-09-01');
+  await page.fill('#rs-why', 'Phone check');
+  await restructure.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=restructure/);
+  cleanPreviewUrl('restructure');
+  await restructure.waitFor({ state: 'visible' });
+  assert.ok((await restructure.locator('.preview tbody tr').count()) > 0, 'the preview shows at phone width');
   await a11y('restructure dialog with a preview at phone width');
   const rsFit = await page.evaluate(() => { const d = document.querySelector('dialog[open]'); return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: d.scrollWidth, dialogClient: d.clientWidth, right: d.getBoundingClientRect().right }; });
   assert.ok(rsFit.scrollWidth <= rsFit.width && rsFit.dialog <= rsFit.dialogClient && rsFit.right <= rsFit.width, `the restructure dialog fits a phone: ${JSON.stringify(rsFit)}`);
@@ -539,7 +555,8 @@ try {
   await page.fill('#new-first', '2026-09-01');
   await addDialog.locator('button:has-text("Preview")').click();
   await page.waitForURL(/preview=create/);
-  assert.ok(!/csrf/i.test(page.url()));
+  cleanPreviewUrl('create');
+  assert.ok(await page.locator(`#bill_${billId}`).isChecked(), 'the ticked bill is still ticked after Preview');
   await addDialog.waitFor({ state: 'visible' });
   assert.equal(await addDialog.locator('.preview tbody tr').count(), 3);
   assert.match(await addDialog.locator('.preview').innerText(), /3 installments totalling \$30\.00/);
@@ -547,7 +564,7 @@ try {
   assert.equal(await page.inputValue('#name'), 'Previewed plan');
   await a11y('plans list with the create preview');
   assert.equal(await planCount(), plansBefore, 'Preview created no plan');
-  ok('plan restructure dialog: keeps the paid installment, previews $10.00 kept + $15.00 + $5.00 without saving or putting a token in the address, saves it, reopens with an error; revise and create forms preview; dialog fits a phone');
+  ok('plan restructure dialog: keeps the paid installment, previews $10.00 kept + $15.00 + $5.00 without saving or putting a token or typed text in the address, saves it, reopens with an error; revise and create forms preview; dialog fits a phone');
 
   // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
@@ -1145,6 +1162,62 @@ try {
     assert.match(await text(), /Open balance\s*\n?\s*\$0\.00/, `${label} is paid in full`);
   }
   ok('one $70.00 payment split across two bills ($45.00 and $25.00) through the dialog: a repeated bill is refused with the typed rows kept, both balances reach $0.00, dialog passes axe and fits a phone');
+  // Suggested matches: payments already applied to a plan's bill are offered as ticked rows; unticking one leaves it out.
+  // Fabricated figures: a $30.00 bill, a plan of 3 x $10.00, and payments of $12.00 and $18.00 applied to the bill. The oldest cash fills the
+  // earliest installments: #1 $10.00 from the first payment, #2 $2.00 from it and $8.00 from the second, #3 $10.00 from the second.
+  await page.goto(`${origin}/bills/new`);
+  await enterBill({ provider: 'Example Clinic', reference: 'SUGGEST-1', amount: '30.00', responsibility: '30.00', status: 'confirmed' });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  const sugBillId = page.url().split('/').pop();
+  await page.goto(`${origin}/plans`);
+  await openAdd('Create plan');
+  await page.fill('#name', 'Suggestion plan');
+  await page.check(`#bill_${sugBillId}`);
+  await page.fill('#startedOn', '2026-01-01');
+  await page.uncheck('#matchExisting');
+  await page.fill('#new-total', '30.00');
+  await page.fill('#new-count', '3');
+  await page.fill('#new-first', '2026-04-01');
+  await page.click('form[action="/api/expenses/plans/create"] button[type=submit]');
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const sugPlanUrl = page.url();
+  assert.equal(await page.locator('h2:has-text("Suggested matches")').count(), 0, 'no suggestions while no payment is applied');
+  for (const [paidOn, amount] of [['2026-03-01', '12.00'], ['2026-03-05', '18.00']]) {
+    await page.goto(`${origin}/payments?billId=${sugBillId}`);
+    await addDialog.waitFor({ state: 'visible' });
+    await page.fill('#paidOn', paidOn);
+    await page.fill('#amount', amount);
+    await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+    await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  }
+  await page.goto(sugPlanUrl);
+  const sugCard = page.locator('form.card:has(h2:has-text("Suggested matches"))');
+  const sugRows = sugCard.locator('tbody tr');
+  assert.equal(await sugRows.count(), 4);
+  assert.equal(await sugCard.locator('input[type=checkbox]:checked').count(), 4, 'every suggestion starts ticked');
+  assert.match(await sugRows.nth(0).innerText(), /#1 due 2026-04-01\s+2026-03-01, \$12\.00\s+\$10\.00\s+Oldest unmatched payment, earliest unpaid installment/);
+  assert.match(await sugRows.nth(1).innerText(), /#2 due 2026-05-01\s+2026-03-01, \$12\.00\s+\$2\.00/);
+  assert.match(await sugRows.nth(3).innerText(), /#3 due 2026-06-01\s+2026-03-05, \$18\.00\s+\$10\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/plans/match-existing"]').count(), 0, 'the all-or-nothing button is gone');
+  await a11y('plan detail with suggested matches');
+  // The card fits a phone (the table stacks into labelled rows).
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(sugPlanUrl);
+  await a11y('plan detail with suggested matches at phone width');
+  const sugFit = await page.evaluate(() => { const f = document.querySelector('form[action="/api/expenses/plans/apply-suggestions"]'); return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, card: f.scrollWidth, cardClient: f.clientWidth, right: f.getBoundingClientRect().right }; });
+  assert.ok(sugFit.scrollWidth <= sugFit.width && sugFit.card <= sugFit.cardClient && sugFit.right <= sugFit.width, `the suggestions card fits a phone: ${JSON.stringify(sugFit)}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(sugPlanUrl);
+  // Untick the $2.00 row and match the rest: $10.00 + $8.00 + $10.00.
+  await sugCard.locator('input[type=checkbox]').nth(1).uncheck();
+  await sugCard.locator('button:has-text("Match selected")').click();
+  await page.waitForURL(sugPlanUrl);
+  assert.match(await text(), /Matched to payments\s*\n?\s*\$28\.00/);
+  assert.equal(await sugRows.count(), 1, 'the unticked row is suggested again');
+  assert.match(await sugRows.nth(0).innerText(), /#2 due 2026-05-01\s+2026-03-01, \$12\.00\s+\$2\.00/);
+  await a11y('plan detail with the remaining suggestion');
+  ok('plan page suggests matches for payments already applied (4 rows, $28.00 + $2.00, ticked), passes axe and fits a phone; unticking one and Match selected matches only the other three ($28.00)');
+
   await page.goto(`${origin}/`);
 } finally {
   await cleanup();
