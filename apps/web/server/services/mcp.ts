@@ -10,7 +10,9 @@ import { recordAudit } from '../repositories/audit.ts';
 import * as repo from '../repositories/mcp.ts';
 import type { McpScope } from '../repositories/mcp.ts';
 import type { ObjectStore } from '../storage.ts';
+import { planProposalInput } from '../plan-proposal.ts';
 import { digest } from '../tokens.ts';
+import { cleanText } from '../untrusted-text.ts';
 
 export const MCP_TOKEN_PATTERN = /^tmcp_[A-Za-z0-9_-]{43}$/;
 export const MAX_PAGE = 25;
@@ -34,10 +36,8 @@ function need(p: McpPrincipal, scope: McpScope): void {
   if (!p.scopes.includes(scope)) throw new AppError('forbidden', `This credential does not have the ${scope} scope`);
 }
 
-// Control, bidirectional-override and zero-width characters are stripped from text a client supplies, so a rationale cannot
-// spoof what a reviewer sees. The text is still untrusted and is only ever rendered as plain text.
-const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g;
-export const cleanText = (v: string) => v.replace(HIDDEN, '').replace(/\r\n?/g, '\n').trim();
+// Text a client supplies is cleaned by `cleanText` (server/untrusted-text.ts): the rationale and plan name cannot spoof what a reviewer sees.
+export { cleanText };
 
 const uuid = z.uuid();
 const cursor = z.string().max(300).optional();
@@ -55,6 +55,8 @@ export const inputs = {
     rationale: z.string().max(2000).transform(cleanText).pipe(z.string().min(1).max(500)),
   }),
   listProposals: z.strictObject({ status: z.enum(['pending', 'approved', 'rejected']).optional(), limit, cursor }),
+  proposePlan: planProposalInput,
+  listPlanProposals: z.strictObject({ status: z.enum(['pending', 'approved', 'rejected', 'expired', 'superseded']).optional(), limit, cursor }),
 };
 
 function parseInput<T extends z.ZodType>(schema: T, raw: unknown): z.infer<T> {
@@ -154,6 +156,47 @@ export async function listOwnProposals(pool: Pool, p: McpPrincipal, raw: unknown
   };
 }
 
+/**
+ * Records a suggestion that a payment plan that is already in progress be created (the data of the app's "Add a plan already in progress" form).
+ * It writes one pending proposal row and nothing else: no plan, no match, no change to a bill. Needs the separate `plans:propose` scope. The payload is
+ * the strict schema of server/plan-proposal.ts (the app's own limits), the note is cleaned plain text, and the bills must be in the household with a
+ * confirmed amount. A person reviews a full preview in the app and approves or rejects; the app validates the stored payload again and rechecks
+ * the bills, the payments and the credential under locks. The same household cap as document proposals applies, counted across both kinds.
+ */
+export async function proposePaymentPlan(pool: Pool, caps: { pendingPerClient: number; pendingPerHousehold: number }, p: McpPrincipal, raw: unknown) {
+  need(p, 'plans:propose');
+  const { note, ...plan } = parseInput(inputs.proposePlan, raw);
+  if (plan.startedOn > new Date().toISOString().slice(0, 10)) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
+  const id = randomUUID();
+  await withTransaction(pool, async (tx) => {
+    // The same lock as document proposals, so the caps hold across both kinds; released with the transaction.
+    await tx.query(`select pg_advisory_xact_lock(hashtextextended('mcp-proposals:' || $1::text, 0))`, [p.householdId]);
+    const open = await repo.pendingCounts(tx, p.clientId, p.householdId);
+    if (open.client >= caps.pendingPerClient || open.household >= caps.pendingPerHousehold) {
+      throw new AppError('conflict', 'Too many proposals are waiting for review. A person must approve or reject some first.');
+    }
+    if (!await repo.insertPlanProposal(tx, { id, householdId: p.householdId, clientId: p.clientId, payload: plan, note, billIds: plan.billIds })) {
+      throw new AppError('not_found', 'One of those bills was not found or does not have a confirmed amount');
+    }
+    await recordAudit(tx, {
+      householdId: p.householdId, actorUserId: null, action: 'plan_proposal.created', entityType: 'plan_proposal', entityId: id,
+      detail: { clientId: p.clientId, billCount: plan.billIds.length, scheduleMode: plan.schedule.mode, restructured: plan.restructure !== undefined, matchExisting: plan.matchExisting },
+    });
+  });
+  return { notice: DATA_NOTICE, proposalId: id, status: 'pending' as const };
+}
+
+export async function listOwnPlanProposals(pool: Pool, p: McpPrincipal, raw: unknown) {
+  need(p, 'plans:propose');
+  const q = parseInput(inputs.listPlanProposals, raw);
+  const page = await repo.listClientPlanProposals(pool, p.clientId, q.status, q.limit, q.cursor);
+  return {
+    notice: DATA_NOTICE,
+    proposals: page.items.map(({ sortKey: _k, createdAt, decidedAt, ...r }) => ({ ...r, createdAt: createdAt.toISOString(), decidedAt: decidedAt?.toISOString() ?? null })),
+    nextCursor: page.nextCursor,
+  };
+}
+
 /** Records one tool call (name, outcome code and size only) after it finishes, whether it succeeded or was refused. */
 export async function auditCall(pool: Pool, p: McpPrincipal, tool: string, outcome: string): Promise<void> {
   await recordAudit(pool, {
@@ -162,7 +205,7 @@ export async function auditCall(pool: Pool, p: McpPrincipal, tool: string, outco
   }).catch((error) => logError('mcp.audit_failed', error));
 }
 
-/** The only columns the MCP role may read. Must match tallymed_apply_mcp_grants in migration 0008. */
+/** The only columns the MCP role may read. Must match tallymed_apply_mcp_grants (migrations 0008 and 0019). */
 const READABLE_COLUMNS: Record<string, string[]> = {
   documents: ['id', 'household_id', 'title', 'kind', 'note', 'version', 'removed_at', 'created_at'],
   document_versions: ['id', 'household_id', 'document_id', 'version_no', 'storage_key', 'sha256', 'size_bytes', 'media_type', 'original_name', 'state', 'created_at'],
@@ -172,8 +215,13 @@ const READABLE_COLUMNS: Record<string, string[]> = {
   visits: ['id', 'household_id', 'service_date', 'description', 'member_name_snapshot', 'provider_name_snapshot', 'version'],
   mcp_clients: ['id', 'household_id', 'name', 'token_hash', 'scopes', 'expires_at', 'revoked_at', 'last_used_at'],
   document_match_proposals: ['id', 'household_id', 'client_id', 'document_id', 'document_version_id', 'document_version_no', 'target_type', 'bill_id', 'visit_id', 'target_id', 'target_version', 'rationale', 'confidence', 'status', 'decided_at', 'version', 'created_at'],
+  plan_proposals: ['id', 'household_id', 'client_id', 'status', 'decided_at', 'created_at'],
 };
-const INSERTABLE_TABLES = new Set(['document_match_proposals', 'audit_events']);
+/** Tables the role may insert into: every column ('*'), or only the listed ones (a plan proposal's decision and created time are never the role's to set). */
+const INSERTABLE: Record<string, '*' | string[]> = {
+  document_match_proposals: '*', audit_events: '*', plan_proposals: ['id', 'household_id', 'client_id', 'payload', 'bill_versions', 'note'],
+};
+const insertAllowed = (table: string, column: string) => { const a = INSERTABLE[table]; return a === '*' || (a !== undefined && a.includes(column)); };
 const UPDATABLE_COLUMNS: Record<string, string[]> = { mcp_clients: ['last_used_at'] };
 
 /**
@@ -199,7 +247,7 @@ export async function assertRestrictedRole(pool: Pool): Promise<void> {
   // Every column is compared with the allow-lists, so a hand-made role with a wider grant (a notes column, a decision note) is refused.
   const bad = new Set<string>();
   for (const r of rows) {
-    if ((r.sel && !READABLE_COLUMNS[r.t]?.includes(r.c)) || (r.ins && !INSERTABLE_TABLES.has(r.t)) || (r.upd && !UPDATABLE_COLUMNS[r.t]?.includes(r.c))) bad.add(`${r.t}.${r.c}`);
+    if ((r.sel && !READABLE_COLUMNS[r.t]?.includes(r.c)) || (r.ins && !insertAllowed(r.t, r.c)) || (r.upd && !UPDATABLE_COLUMNS[r.t]?.includes(r.c))) bad.add(`${r.t}.${r.c}`);
   }
   const { rows: tables } = await pool.query<{ t: string }>(
     `select c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace

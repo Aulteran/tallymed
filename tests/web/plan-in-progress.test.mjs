@@ -366,3 +366,118 @@ test('a refused form post goes back to the plans page with its values kept and t
     await t.db.drop();
   }
 });
+
+// ---------- follow-ups: parity with the separate steps, a partly paid installment, and the route's negatives ----------
+
+/** What a plan ended up as, ignoring ids and free text: revisions, installments with their matches, and the match rows. */
+const shape = (d) => ({
+  revisions: d.revisions.map((r) => [r.revisionNo, r.totalCents, r.installmentCount, r.cadence]),
+  installments: d.installments.map((i) => [i.dueDate, i.amountCents, i.matchedCents, i.state]),
+  matchedCents: d.plan.matchedCents,
+  matches: d.matches.map((m) => [m.kind, m.revisionNo, m.installmentSeq, m.amountCents, m.carried]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+});
+
+test('parity: one save ends in the same state as create, match existing payments, then revise with keep paid', { skip: skipDb }, async () => {
+  const one = await setup();
+  const steps = await setup();
+  try {
+    const a = await progressSetup(one);
+    const saved = await a.run();
+    const b = await progressSetup(steps);
+    const created = await plans.createPlan(steps.db.pool, steps.actor, {
+      idempotencyKey: steps.key(), name: 'Imaging plan', billIds: [b.a.id, b.b.id], startedOn: START(), inputMode: 'per_installment', installmentAmount: '60.00', installmentCount: '12', firstDueDate: START(), cadence: 'monthly',
+    }, 'r');
+    await plans.matchExistingPayments(steps.db.pool, steps.actor, { idempotencyKey: steps.key(), planId: created.id, version: 1 }, 'r');
+    const version = (await b.detail(created.id)).plan.version;
+    await plans.revisePlan(steps.db.pool, steps.actor, {
+      idempotencyKey: steps.key(), planId: created.id, version, reason: 'Provider restructured the plan', reviseMode: 'keep_paid',
+      inputMode: 'per_installment', installmentAmount: '45.00', totalAmount: '540.00', firstDueDate: due(3), cadence: 'monthly',
+    }, 'r');
+    const left = shape(await a.detail(saved.id));
+    const right = shape(await b.detail(created.id));
+    assert.deepEqual(left, right);
+    // The shape really is the interesting one: revision 2 holds the kept paid installments' matches (carried) and nothing else matched.
+    assert.equal(left.matchedCents, '18000');
+    assert.equal(left.matches.filter((m) => m[4]).length, 3);
+    assert.deepEqual(left.revisions, [[1, '72000', 12, 'monthly'], [2, '72000', 15, 'custom']]);
+    // The reasons differ by design (the one-step save records where each match came from), and are the only difference.
+    assert.equal((await one.db.pool.query(`select count(*)::int n from installment_matches`)).rows[0].n, (await steps.db.pool.query(`select count(*)::int n from installment_matches`)).rows[0].n);
+  } finally {
+    await one.db.drop();
+    await steps.db.drop();
+  }
+});
+
+test('a partly paid installment is carried onto the new schedule, in date order, while the fully paid ones are kept', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await progressSetup(t);
+    // $25.00 more, paid on the fourth due date: it only partly fills the fourth installment of the original agreement.
+    await t.pay1({ paidOn: due(3), amount: '25.00', billId: s.b.id });
+    const preview = await plans.previewPlanInProgress(t.db.pool, t.actor, { ...s.input(), idempotencyKey: undefined });
+    assert.deepEqual(preview.original.rows.slice(0, 5).map((r) => [r.matchedCents, r.state]), [['6000', 'paid'], ['6000', 'paid'], ['6000', 'paid'], ['2500', 'partial'], ['0', 'unpaid']]);
+    assert.ok(preview.plan.notes.some((n) => /only partly fill/.test(n)));
+    const saved = await s.run();
+    const d = await s.detail(saved.id);
+    assert.deepEqual(d.installments.slice(0, 5).map((i) => [i.dueDate, i.amountCents, i.matchedCents, i.state]), [
+      [due(0), '6000', '6000', 'paid'], [due(1), '6000', '6000', 'paid'], [due(2), '6000', '6000', 'paid'], [monthStart(7), '4500', '2500', 'partial'], [monthStart(6), '4500', '0', 'unpaid'],
+    ]);
+    assert.equal(d.plan.matchedCents, '20500');
+    const carried = d.matches.filter((m) => m.revisionNo === 2).map((m) => [m.installmentSeq, m.amountCents, m.carried, m.reason]);
+    assert.deepEqual(carried, [[1, '6000', true, 'Kept from revision 1'], [2, '6000', true, 'Kept from revision 1'], [3, '6000', true, 'Kept from revision 1'], [4, '2500', true, 'Carried forward from revision 1']]);
+    // Revision 1 matched the partial cash on the fourth original installment; revision 2 only references it again. No cash moved.
+    assert.deepEqual(d.matches.filter((m) => m.revisionNo === 1).map((m) => [m.installmentSeq, m.amountCents]), [[1, '6000'], [2, '6000'], [3, '6000'], [4, '2500']]);
+    assert.equal(await t.count('payments'), 4);
+    const summary = (await t.audit('plan.created_in_progress'))[0].detail;
+    assert.deepEqual([summary.matchedCents, summary.keptInstallmentCount, summary.keptCents, summary.finalTotalCents, summary.finalInstallmentCount], ['20500', 3, '18000', '72000', 15]);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+/** A second household with its own administrator, member, provider and bill; returns the bill id. */
+async function foreignBill(t) {
+  const { hashPassword } = await import('../../apps/web/server/passwords.ts');
+  const { authenticate } = await import('../../apps/web/server/services/auth.ts');
+  const { PASSWORD, loginJson } = await import('./helpers.mjs');
+  const svc = await import('../../apps/web/server/services/expenses.ts');
+  const h2 = (await t.db.pool.query(`insert into households (name) values ('Other Family') returning id`)).rows[0].id;
+  await t.db.pool.query(`insert into users (household_id, email, display_name, role, password_hash) values ($1, 'other@example.test', 'Other Admin', 'admin', $2)`, [h2, await hashPassword(PASSWORD)]);
+  const r = await loginJson(handlers, t.ctx, 'other@example.test');
+  const actor = await authenticate(t.db.pool, t.config, r.cookie.split('=')[1]);
+  const member = (await svc.createMember(t.db.pool, actor, { name: 'Sam Other' }, 'r')).id;
+  const provider = (await svc.createProvider(t.db.pool, actor, { name: 'Other Clinic', kind: 'clinician' }, 'r')).id;
+  return (await svc.createBill(t.db.pool, actor, { idempotencyKey: t.key(), memberId: member, providerId: provider, statementDate: '2026-01-05', originalAmount: '200.00', amountStatus: 'confirmed', amountSource: 'statement' }, 'r')).id;
+}
+
+test('the create-in-progress route refuses a missing or foreign CSRF token, a caller without the right, and a bill of another household, and writes nothing', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await progressSetup(t);
+    const foreign = await foreignBill(t);
+    const token = t.cookie.split('=')[1];
+    const before = await s.counts();
+    const json = (body, o = {}) => handlers.handleExpenseAction(post('/api/expenses/plans/create-in-progress', body, { cookie: t.cookie, type: 'json', ...o }), t.ctx, 'plans/create-in-progress');
+    const body = (o = {}) => ({ idempotencyKey: t.key(), name: 'Route plan', billIds: [s.a.id, s.b.id], startedOn: START(), matchExisting: true, inputMode: 'per_installment', installmentAmount: '60.00', installmentCount: '12', firstDueDate: START(), ...o });
+    // A missing token and a token of another session: forbidden, and for a form post the redirect names the code.
+    assert.equal((await json(body())).status, 403);
+    assert.equal((await json(body({ csrf: csrfFor('x'.repeat(43)) }))).status, 403);
+    const form = await handlers.handleExpenseAction(post('/api/expenses/plans/create-in-progress', { ...s.input(), csrf: csrfFor('y'.repeat(43)), dialog: 'progress' }, { cookie: t.cookie, html: true }), t.ctx, 'plans/create-in-progress');
+    assert.match(form.headers.get('location'), /error=csrf_failed/);
+    // No session at all.
+    assert.equal((await json(body({ csrf: csrfFor(token) }), { cookie: undefined })).status, 401);
+    // A caller without expenses:write (a role the app does not know) is refused by the service before anything is read or written.
+    await assert.rejects(plans.createPlanInProgress(t.db.pool, { ...t.actor, role: 'viewer' }, body(), 'r'), code('forbidden'));
+    await assert.rejects(plans.previewPlanInProgress(t.db.pool, { ...t.actor, role: 'viewer' }, body()), code('forbidden'));
+    // A bill of another household is not found, whether alone or among the household's own.
+    for (const billIds of [[foreign], [s.a.id, foreign]]) {
+      const res = await json(body({ csrf: csrfFor(token), billIds }));
+      assert.equal(res.status, 404);
+    }
+    assert.equal(await s.counts(), before, 'nothing was written by any refusal');
+    // The same request with the right token and the household's own bills is saved.
+    assert.equal((await json(body({ csrf: csrfFor(token) }))).status, 201);
+  } finally {
+    await t.db.drop();
+  }
+});

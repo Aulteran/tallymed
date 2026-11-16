@@ -447,6 +447,11 @@ export async function previewPlanInProgress(pool: Pool, actor: Actor, raw: unkno
   if (!known) notes.push('Tick the bills the plan covers to match your payments and to compare the plan with what they owe.');
   const sources = known && d.matchExisting ? await unmatchedCash(pool, actor, billIds, null, d.startedOn) : [];
   const c = composeInProgress({ original, sources, restructure, openBalanceCents: known ? sum(bills.map((b) => BigInt(b.openBalanceCents))) : null });
+  return progressPreviewOf(original, restructure, c, notes);
+}
+
+/** Pure. The preview of a composition, so the read-only preview and an approval that checks it under locks build exactly the same thing. */
+export function progressPreviewOf(original: Schedule, restructure: InProgressRestructure | null, c: InProgressComposition, notes: string[]): ProgressPreview {
   if (c.matchedCents > 0n) notes.push(`${formatCents(c.matchedCents)} of payments already applied to these bills would be matched to the earliest installments of the original schedule.`);
   if (c.looseMatchedCents > 0n) notes.push(`${formatCents(c.looseMatchedCents)} of payments only partly fill an installment, so they would move onto the new schedule in date order.`);
   const rows = original.lines.map((l, i) => ({
@@ -568,7 +573,7 @@ function withBillChecks(input: unknown): unknown {
 const fillLines = (sources: FillSource[], lines: ScheduleLine[]): FillMatch[] => fillInstallments(sources, lines.map((l, i) => ({ id: String(i), left: l.amountCents })));
 
 /** The bills a new plan covers, locked and checked (payments first when existing cash is matched, then the bills): the first half of every plan creation. */
-interface CreateScope { lockedPayments: Set<string>; locks: Awaited<ReturnType<typeof expenseRepo.lockBills>>; providerIds: string[]; openBalanceCents: bigint }
+export interface CreateScope { lockedPayments: Set<string>; locks: Awaited<ReturnType<typeof expenseRepo.lockBills>>; providerIds: string[]; openBalanceCents: bigint }
 
 async function lockCreateScope(tx: Queryable, actor: Actor, billIds: string[], matchExisting: boolean): Promise<CreateScope> {
   const lockedPayments = matchExisting ? await lockBillPayments(tx, actor, billIds) : new Set<string>();
@@ -637,12 +642,12 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
 
 /**
  * The write half of every revision, inside the caller's transaction with the plan locked: the new immutable revision, the matches carried
- * onto it and the `plan.revised` audit event. `kept` and `restSchedule` are decided by the caller (`revisePlan` reads the kept installments
+ * onto it and the `plan.revised` audit event, and returns the written revision's total and installment count. `kept` and `restSchedule` are decided by the caller (`revisePlan` reads the kept installments
  * under its plan lock; `createPlanInProgress` composes them before it writes anything), so the revision is saved the same way for both.
  */
 async function writeRevision(tx: Queryable, actor: Actor, requestId: string, c: {
   planId: string; revisionId: string; reason: string; reviseMode: 'replace' | 'keep_paid'; restSchedule: Schedule; remainder: Remainder | undefined; kept: KeptInstallment[]; currentCount: number;
-}): Promise<void> {
+}): Promise<{ totalCents: bigint; installmentCount: number }> {
   const { planId, revisionId, reason, reviseMode, restSchedule, kept } = c;
   const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
   const before = await repo.getPlan(tx, actor.householdId, planId, todayUtc());
@@ -677,6 +682,8 @@ async function writeRevision(tx: Queryable, actor: Actor, requestId: string, c: 
       warningCodes: revisionWarningList.map((w) => w.code).join(','),
     },
   });
+  // What was actually written, so a summary event can report the stored revision rather than a second computation of it.
+  return { totalCents: schedule.totalCents, installmentCount: installments.length };
 }
 
 /**
@@ -725,42 +732,74 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
 export async function createPlanInProgress(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
   const { csrf: _csrf, idempotencyKey, ...d } = parse(paymentSchemas.createPlanInProgress, withBillChecks(input));
+  const prepared = prepareInProgress(d);
+  const id = randomUUID();
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, 'plan.create_in_progress', idempotencyKey, prepared.fingerprint, id);
+    if (replayId) return { id: replayId, replayed: true };
+    await saveInProgress(tx, actor, requestId, id, prepared);
+    return { id, replayed: false };
+  }));
+}
+
+/** An in-progress plan's parsed input, validated and turned into its schedule and restructure before any lock is taken. */
+export interface PreparedInProgress {
+  d: Omit<z.infer<typeof paymentSchemas.createPlanInProgress>, 'csrf' | 'idempotencyKey'>;
+  original: Schedule; restructure: InProgressRestructure | null; reason: string;
+  /** The logical input only (never anything read from the database), so a replay after the cash changed is still a replay. */
+  fingerprint: Record<string, unknown>;
+}
+
+/** Pure but for the refusals every save would make (a bad schedule, a start date in the future, a restructure missing its fields). */
+export function prepareInProgress(d: PreparedInProgress['d']): PreparedInProgress {
   const original = buildSchedule(d);
   if (d.startedOn > todayUtc()) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
   const restructure = progressRestructure(d);
   const reason = restructure ? d.reason : '';
-  const id = randomUUID();
-  const revisionId = randomUUID();
-  // The logical input only (never anything read from the database), so a replay after the cash changed is still a replay.
   const fingerprint = {
     name: d.name, billIds: [...d.billIds].sort(), startedOn: d.startedOn, matchExisting: !!d.matchExisting, lines: original.lines, cadence: original.cadence,
     expectedTotalCents: original.expectedTotalCents === null ? null : cents(original.expectedTotalCents), restructure, reason,
   };
-  return withRetry(() => withTransaction(pool, async (tx) => {
-    const replayId = await idempotent(tx, actor, 'plan.create_in_progress', idempotencyKey, fingerprint, id);
-    if (replayId) return { id: replayId, replayed: true };
-    const scope = await lockCreateScope(tx, actor, d.billIds, !!d.matchExisting);
-    const sources = d.matchExisting ? await unmatchedCash(tx, actor, d.billIds, scope.lockedPayments, d.startedOn) : [];
-    const c = composeInProgress({ original, sources, restructure, openBalanceCents: scope.openBalanceCents });
-    const created = await writeNewPlan(tx, actor, requestId, { id, name: d.name, billIds: d.billIds, startedOn: d.startedOn, schedule: original, remainder: d.remainder, matchExisting: !!d.matchExisting, scope, fill: c.fill });
-    if (c.rest) {
-      // The database checks every new match at commit ("only the current schedule of an active plan"). Revision 2 makes revision 1 stale, so the
-      // matches just written are checked now, while revision 1 is still the current one; revision 2's carried matches are then checked as they are written.
-      await tx.query('set constraints installment_matches_guard immediate');
-      const kept = c.kept.map((k) => ({ ...k, id: created.installments[Number(k.id)]!.id }));
-      await writeRevision(tx, actor, requestId, { planId: id, revisionId, reason, reviseMode: 'keep_paid', restSchedule: c.rest, remainder: undefined, kept, currentCount: original.lines.length });
-    }
-    await recordAudit(tx, {
-      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created_in_progress', entityType: 'payment_plan', entityId: id, requestId,
-      detail: {
-        planId: id, billCount: d.billIds.length, startedOn: d.startedOn, matchExisting: !!d.matchExisting, matchedCents: cents(c.matchedCents), matchedAllocations: new Set(c.fill.map((f) => f.source.allocationId)).size,
-        originalTotalCents: cents(original.totalCents), originalInstallmentCount: original.lines.length, restructured: restructure !== null,
-        keptInstallmentCount: c.kept.length, keptCents: cents(sum(c.kept.map((k) => k.amountCents))), restCents: c.rest ? cents(c.rest.totalCents) : null, restInstallmentCount: c.rest ? c.rest.lines.length : null,
-        restartOn: restructure ? restructure.restartOn : null, finalTotalCents: cents(c.final.totalCents), finalInstallmentCount: c.final.lines.length,
-      },
-    });
-    return { id, replayed: false };
-  }));
+  return { d, original, restructure, reason, fingerprint };
+}
+
+/**
+ * The transaction-level body of `createPlanInProgress`, after the idempotency claim: the locks in the global order, the composition, the writes
+ * and the summary event. The caller owns the transaction and the one idempotency key. `gate`, when given, runs once everything is locked and composed
+ * and before the first write (`locked` runs once the payments and bills are locked and `gate` once the plan is composed; an approval locks its
+ * proposal row in `locked`, after payments and bills, and refuses a stale or already decided one there, so a refusal writes nothing); `summaryExtra` adds fields to the summary event only when it is given, so the ordinary event keeps its exact shape.
+ */
+export async function saveInProgress(tx: Queryable, actor: Actor, requestId: string, id: string, p: PreparedInProgress, hooks: {
+  locked?: (scope: CreateScope) => Promise<void>; gate?: (c: InProgressComposition) => Promise<void>; summaryExtra?: Record<string, string | number | boolean | null>;
+} = {}): Promise<{ composition: InProgressComposition; final: { totalCents: bigint; installmentCount: number } }> {
+  const { d, original, restructure, reason } = p;
+  const revisionId = randomUUID();
+  const scope = await lockCreateScope(tx, actor, d.billIds, !!d.matchExisting);
+  if (hooks.locked) await hooks.locked(scope);
+  const sources = d.matchExisting ? await unmatchedCash(tx, actor, d.billIds, scope.lockedPayments, d.startedOn) : [];
+  const c = composeInProgress({ original, sources, restructure, openBalanceCents: scope.openBalanceCents });
+  if (hooks.gate) await hooks.gate(c);
+  const created = await writeNewPlan(tx, actor, requestId, { id, name: d.name, billIds: d.billIds, startedOn: d.startedOn, schedule: original, remainder: d.remainder, matchExisting: !!d.matchExisting, scope, fill: c.fill });
+  // The summary reports the revision that is current when the save ends: the one just written when restructured, else revision 1.
+  let final = { totalCents: original.totalCents, installmentCount: original.lines.length };
+  if (c.rest) {
+    // The database checks every new match at commit ("only the current schedule of an active plan"). Revision 2 makes revision 1 stale, so the
+    // matches just written are checked now, while revision 1 is still the current one; revision 2's carried matches are then checked as they are written.
+    await tx.query('set constraints installment_matches_guard immediate');
+    const kept = c.kept.map((k) => ({ ...k, id: created.installments[Number(k.id)]!.id }));
+    final = await writeRevision(tx, actor, requestId, { planId: id, revisionId, reason, reviseMode: 'keep_paid', restSchedule: c.rest, remainder: undefined, kept, currentCount: original.lines.length });
+  }
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created_in_progress', entityType: 'payment_plan', entityId: id, requestId,
+    detail: {
+      planId: id, billCount: d.billIds.length, startedOn: d.startedOn, matchExisting: !!d.matchExisting, matchedCents: cents(c.matchedCents), matchedAllocations: new Set(c.fill.map((f) => f.source.allocationId)).size,
+      originalTotalCents: cents(original.totalCents), originalInstallmentCount: original.lines.length, restructured: restructure !== null,
+      keptInstallmentCount: c.kept.length, keptCents: cents(sum(c.kept.map((k) => k.amountCents))), restCents: c.rest ? cents(c.rest.totalCents) : null, restInstallmentCount: c.rest ? c.rest.lines.length : null,
+      restartOn: restructure ? restructure.restartOn : null, finalTotalCents: cents(final.totalCents), finalInstallmentCount: final.installmentCount,
+      ...hooks.summaryExtra,
+    },
+  });
+  return { composition: c, final };
 }
 
 export async function cancelPlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string }> {

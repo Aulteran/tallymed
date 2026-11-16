@@ -459,16 +459,21 @@ export const assistantSchemas = {
   createClient: z.strictObject({
     name: text(80).min(1),
     expiryDays: z.preprocess(blank, z.coerce.number().int().min(1).max(365).default(90)),
-    documentsRead: checkbox.optional(), recordsRead: checkbox.optional(), documentsContent: checkbox.optional(), proposalsCreate: checkbox.optional(),
+    documentsRead: checkbox.optional(), recordsRead: checkbox.optional(), documentsContent: checkbox.optional(), proposalsCreate: checkbox.optional(), plansPropose: checkbox.optional(),
     ...csrf,
   }),
   revokeClient: z.strictObject({ clientId: uuid, reason: text(300).min(1), ...csrf }),
   /** `documentVersion` and `targetVersion` are the versions the person was shown; either having moved on refuses the approval. */
   approve: z.strictObject({ idempotencyKey, proposalId: uuid, documentVersion: version, targetVersion: version, documentRevision: version, ...csrf }),
   reject: z.strictObject({ proposalId: uuid, reason: text(300).min(1), ...csrf }),
+  /** `previewDigest` is the fingerprint of the preview the person was shown; a different preview under the locks refuses the approval. */
+  approvePlan: z.strictObject({ idempotencyKey, proposalId: uuid, previewDigest: z.string().regex(/^[0-9a-f]{64}$/), ...csrf }),
+  rejectPlan: z.strictObject({ proposalId: uuid, reason: optionalText(300), ...csrf }),
 };
 
 export const assistantFilterSchemas = {
   proposals: z.object({ status: optionalFilter(z.enum(['pending', 'approved', 'rejected'])), cursor, limit: pageSize }),
+  planProposals: z.object({ status: optionalFilter(z.enum(['pending', 'approved', 'rejected', 'expired', 'superseded'])), cursor, limit: pageSize }),
 };
 export type ProposalFilter = z.infer<typeof assistantFilterSchemas.proposals>;
+export type PlanProposalFilter = z.infer<typeof assistantFilterSchemas.planProposals>;
