@@ -1339,7 +1339,8 @@ try {
   const delAllocUrl = page.url();
   // The decision form is gone from the page. An existing-style decision (kept for the record) is posted through the same endpoint the API
   // uses, with the hidden fields of the claim form, so the delete-and-undo flow below still has a decision to delete.
-  await page.evaluate(() => {
+  // The page is already at this URL, so waiting on the URL would return at once: wait for the navigation the submit causes.
+  await Promise.all([page.waitForNavigation(), page.evaluate(() => {
     const claim = document.querySelector('form[action="/api/expenses/hsa/claim"]');
     const f = document.createElement('form');
     f.method = 'post';
@@ -1350,7 +1351,7 @@ try {
     add('evidenceType', 'receipt'); add('evidenceNote', 'Fabricated receipt on file'); add('decidedOn', '2026-03-10');
     document.body.append(f);
     f.submit();
-  });
+  })]);
   await page.waitForURL(delAllocUrl);
   assert.match(await text(), /Eligible ceiling\s*\n?\s*\$80\.00/, 'the recorded decision lowers the ceiling to $80.00');
   await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '60.00');
