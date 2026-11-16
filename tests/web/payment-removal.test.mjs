@@ -275,9 +275,7 @@ test('HSA: releasing a direct funding makes the payment claimable; a funded one 
     await decide(t, al.allocationId, '40.00');
     await hsa.submitClaim(t.db.pool, t.actor, { idempotencyKey: randomUUID(), submittedOn: '2026-04-10', administrator: 'Example HSA Bank', lines: [{ allocationId: al.allocationId, amount: '25.00' }] }, 'r');
     await assert.rejects(setPaidWith(t, funded.id, card.id), /only be chosen when the payment is recorded/);
-    // Known slice-1 defect (reported, not patched here): backup/ledger.ts still tests payment_hsa_funding existence, so a released and
-    // then claimed payment is flagged "paid directly from an HSA has no HSA claim". Every other rule must hold.
-    assert.deepEqual((await ledgerViolations(t.db.pool)).filter((v) => !/paid directly from an HSA/.test(v)), []);
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
     // Account totals no longer count the released payment as paid directly.
     assert.equal((await acc.listHsaAccounts(t.db.pool, t.actor)).items.find((x) => x.id === a.id).paymentCount, 0);
 

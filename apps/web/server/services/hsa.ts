@@ -28,15 +28,20 @@ function figures(before: repo.HsaAllocation, after: repo.HsaAllocation): Detail 
 
 /**
  * Locks the payments behind the allocations (ascending id). The allocation-to-payment link never changes, so the unlocked probe is
- * safe. Every figure is read after this returns.
+ * safe. Every figure is read after this returns. With `newExposure` (a decision, a claim or an external reimbursement) a removed or
+ * voided payment is refused: it would gain HSA rows that can never be undone, and a removed payment could then not be removed again.
+ * Settling what already exists (release, receipt, reversal) passes no flag and stays possible.
  */
-async function lockForAllocations(tx: Queryable, actor: Actor, allocationIds: string[]): Promise<Map<string, string>> {
+async function lockForAllocations(tx: Queryable, actor: Actor, allocationIds: string[], o: { newExposure?: boolean } = {}): Promise<Map<string, string>> {
   const unique = [...new Set(allocationIds)];
   const links = await repo.allocationPayments(tx, actor.householdId, unique);
   if (links.length !== unique.length) throw new AppError('not_found');
   const paymentIds = [...new Set(links.map((l) => l.paymentId))];
   const locked = await paymentRepo.lockPayments(tx, actor.householdId, paymentIds);
   if (locked.length !== paymentIds.length) throw new AppError('not_found');
+  if (o.newExposure && (await repo.closedPayments(tx, actor.householdId, paymentIds)).length > 0) {
+    throw new AppError('conflict', 'That payment was removed or voided, so it takes no eligibility decisions, claims or reimbursements.');
+  }
   return new Map(links.map((l) => [l.allocationId, l.paymentId]));
 }
 
@@ -128,7 +133,7 @@ export async function recordDecision(pool: Pool, actor: Actor, input: unknown, r
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.decide', idempotencyKey, { allocationId, version, ...d }, id);
     if (replayId) return { id: replayId, replayed: true };
-    const links = await lockForAllocations(tx, actor, [allocationId]);
+    const links = await lockForAllocations(tx, actor, [allocationId], { newExposure: true });
     const before = await freshAllocation(tx, actor, allocationId);
     if (before.directHsa) throw new AppError('conflict', 'This payment was paid directly from an HSA at the point of service, so there is nothing to claim and no eligibility decision to record.');
     if (before.decisionCount !== version) throw new AppError('stale_version', 'The eligibility decision changed since you loaded it. Reload and decide again.');
@@ -162,7 +167,7 @@ export async function submitClaim(pool: Pool, actor: Actor, input: unknown, requ
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.claim', idempotencyKey, { ...c, lines }, claimId);
     if (replayId) return { id: replayId, replayed: true };
-    const links = await lockForAllocations(tx, actor, lines.map((l) => l.allocationId));
+    const links = await lockForAllocations(tx, actor, lines.map((l) => l.allocationId), { newExposure: true });
     if (c.reference && await repo.claimReferenceExists(tx, actor.householdId, c.reference)) throw new AppError('conflict', 'A claim with that reference was already recorded');
     await repo.insertClaim(tx, { id: claimId, householdId: actor.householdId, userId: actor.userId, submittedOn: c.submittedOn, administrator: c.administrator, reference: c.reference, note: c.note });
     const eventId = randomUUID();
@@ -293,7 +298,7 @@ export async function recordExternalReceipt(pool: Pool, actor: Actor, input: unk
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'hsa.external_receipt', idempotencyKey, { ...r, lines }, receiptId);
     if (replayId) return { id: replayId, replayed: true };
-    const links = await lockForAllocations(tx, actor, lines.map((l) => l.allocationId));
+    const links = await lockForAllocations(tx, actor, lines.map((l) => l.allocationId), { newExposure: true });
     const total = sum(lines.map((l) => l.amount));
     await repo.insertReceipt(tx, {
       id: receiptId, householdId: actor.householdId, userId: actor.userId, receivedOn: r.receivedOn, amountCents: total, origin: 'external', source: r.source,
