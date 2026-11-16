@@ -21,6 +21,7 @@ const MESSAGES: Record<string, string> = {
   password_change_required: 'Choose a new password before continuing.',
   locked: 'The screen is locked. Enter your PIN to continue.',
   invalid_pin: 'That PIN is not correct.',
+  weak_pin: 'Choose a PIN that is not a simple pattern: not one repeated digit, a run such as 123456, or a repeated pair or triple.',
   pin_not_set: 'Set a PIN first (User settings, then Change PIN).',
   pin_attempts_exceeded: 'Too many wrong PINs, so you were signed out. Sign in again.',
   temporary_password_expired: 'That temporary password has expired or was already used. Ask an administrator for a new one.',

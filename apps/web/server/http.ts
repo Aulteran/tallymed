@@ -338,7 +338,13 @@ function route(opts: {
       }
       // A browser form post from a locked session lands on the PIN screen, and the unlock returns the person to the page they were on.
       if (error instanceof AppError && error.code === 'locked' && wantsHtml(req)) {
-        return redirect(ctx.config, '/locked', BASE_HEADERS);
+        // The page the form was on comes from Referer (same origin only, and only a plain application path), so unlocking returns there.
+        let next = '/';
+        try {
+          const from = new URL(req.headers.get('referer') ?? '');
+          if (from.origin === new URL(ctx.config.canonicalOrigin).origin) next = safeReturnPath(`${from.pathname}${from.search}`);
+        } catch { /* no usable Referer: the overview */ }
+        return redirect(ctx.config, next === '/' ? '/locked' : `/locked?next=${encodeURIComponent(next)}`, BASE_HEADERS);
       }
       return errorResponse(req, ctx, error, errorPath, flash, opts.redirectAllErrors);
     }

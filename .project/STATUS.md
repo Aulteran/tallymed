@@ -319,6 +319,11 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Reviewer focus: no route or read reachable while locked (`route()`, `pageActor`, `requireSession`, `authenticate` callers); the per-session counter under concurrency; the lock never signing out except at the attempt limit; the PIN never in a log, audit row, URL or flash value; the `remember` lifetime and idle path leaving unchecked sign-ins unchanged; PIN change proof rules; backup and restore of `users`.
 - Owner decisions flagged: five attempts then sign-out; PIN required on the forms but optional at the API; limits are environment values (not on Server settings yet); provider sign-ins are not remembered and are not gated by the PIN (a live provider session bypasses the lock; see DECISIONS).
 
+### Screen lock follow-ups handoff
+
+- Branch: `fix/pin-followups-gate-tests-blocklist-reset` (PR against `dev`). No migration. Closes review items M1, L1, L2, L3 and L5 from #44 (M2, provider sign-in, stays an accepted limit; L4 is a documented tradeoff). Independent security review pending on the PR head.
+- Changed: `isTrivialPin` and `weak_pin` (passwords, errors, messages), PIN cleared in `setTemporaryPassword`, `TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS=0` switch (config, login, login page, change password), General settings note, locked-redirect `next` from Referer in `http.ts`, `tests/web/lock-page-gates.test.mjs` and new cases in `tests/web/lock-and-pin.test.mjs`, docs and decisions.
+
 ### Keep me signed in, screen lock and PIN: acceptance evidence
 
 - PR: Aulteran/tallymed#44, squash-merged into `dev` as `7b0ac5408bb0ac70933a8939117b8d9096f7d9f8` by Claude under the owner's merge authorization (CLAUDE.md). Final reviewed and tested head `841af69fc41ed0431e67899d28a9eb2d7ce1d691` (after merging `dev`; the migration was renumbered to `0021` because `dev` took 0019 and 0020). CI `verify` (Node 24, PostgreSQL 17) and `compose-smoke` green on it. Independent security review (separate agent, comment on the PR) APPROVE on that head with no blocking findings; 468 tests pass.

@@ -75,10 +75,14 @@ export async function updatePasswordHash(db: Queryable, id: string, passwordHash
   await db.query(`update users set password_hash = $2, version = version + 1, updated_at = now() where id = $1`, [id, passwordHash]);
 }
 
-/** Replaces the password with an administrator-issued temporary one that must be changed at the next sign-in. */
+/**
+ * Replaces the password with a temporary one that must be changed at the next sign-in. A reset is recovery from a possibly compromised
+ * account, so the PIN goes too: one planted by someone holding a stolen session must not outlive it, and the person sets a new one.
+ */
 export async function setTemporaryPassword(db: Queryable, id: string, passwordHash: string): Promise<void> {
   await db.query(
-    `update users set password_hash = $2, must_change_password = true, version = version + 1, updated_at = now() where id = $1`,
+    `update users set password_hash = $2, must_change_password = true, pin_hash = null, pin_changed_at = null, version = version + 1, updated_at = now()
+      where id = $1`,
     [id, passwordHash],
   );
 }
