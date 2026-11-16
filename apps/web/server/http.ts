@@ -6,7 +6,11 @@ import type { ObjectStore } from './storage.ts';
 import type { Actor } from './authz.ts';
 import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
-import { flashSetCookie } from './flash.ts';
+import { flashCookieName, flashSetCookie } from './flash.ts';
+import { withCheckedRows, withFormRows } from './form-rows.ts';
+import { BILL_KEYS, LIST_FIELDS, PREVIEW_KEEP, PROGRESS_FIELDS, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
+import { withInstallmentList, withInstRowsFlash } from './plan-installments.ts';
+import { authorize } from './authz.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
 import { authenticate, login, logout } from './services/auth.ts';
@@ -253,6 +257,8 @@ function route(opts: {
   errorPath: (body: Record<string, unknown>) => string;
   /** Fields to keep for re-filling the form at errorPath after a validation error (sent as a flash cookie, not in the URL). */
   keepFields?: string[];
+  /** Rewrites the body before its `keepFields` go into the flash cookie (a row list is spelled as one text there). */
+  flashBody?: (body: Record<string, unknown>) => Record<string, unknown>;
   /** Replaces the bounded form/JSON reader (uploads read multipart). */
   readBody?: (req: Request, ctx: AppContext) => Promise<Record<string, unknown>>;
   /** Authenticate before reading the body, so an unauthenticated caller cannot make the server buffer a large upload. */
@@ -322,7 +328,7 @@ function route(opts: {
       let flash: string | null = null;
       try {
         errorPath = opts.errorPath(body);
-        if (opts.keepFields) flash = flashSetCookie(ctx.config, errorPath, body, opts.keepFields);
+        if (opts.keepFields) flash = flashSetCookie(ctx.config, errorPath, opts.flashBody ? opts.flashBody(body) : body, opts.keepFields);
       } catch {
         errorPath = null;
       }
@@ -761,18 +767,36 @@ const EXPENSE_ACTIONS: Record<string, {
   'adjustments/reverse': { service: expenses.reverseAdjustment, error: (b) => billPath(b, ''), ok: billPath },
 };
 
-const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount'];
+/** Bill rows of the payment forms: `alloc.<n>.billId` and `alloc.<n>.amount` (see docs/contracts.md, "Form row lists"). The form offers up to ALLOC_FORM_ROWS. */
+const ALLOC_ROWS = { prefix: 'alloc', into: 'allocations', fields: ['billId', 'amount'], max: 25 } as const;
+export const ALLOC_FORM_ROWS = 10;
+const ALLOC_KEEP = Array.from({ length: ALLOC_FORM_ROWS }, (_, i) => [`alloc.${i}.billId`, `alloc.${i}.amount`]).flat();
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
+const allocRows = (b: Record<string, unknown>) => withFormRows(b, ALLOC_ROWS);
+/** A recorded payment with exactly one bill row and no amount applies the whole payment to it, as the single-bill form always did. */
+const createRows = (b: Record<string, unknown>) => {
+  const out = allocRows(b);
+  const rows = out.allocations;
+  if (rows === b.allocations || !Array.isArray(rows) || rows.length !== 1) return out;
+  const only = rows[0] as Record<string, string>;
+  return only.amount === '' && typeof b.amount === 'string' ? { ...out, allocations: [{ ...only, amount: b.amount }] } : out;
+};
 const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str(b.paymentId) ?? id}`;
 const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
 const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
-const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
+const withoutFormMarker = (b: Record<string, unknown>) => { const { dialog: _dialog, ...rest } = b; return rest; };
+/** Rows of the "Suggested matches" card: `sug.<n>.installmentId`, `.allocationId`, `.amount` and the tick `.apply` ("1"; an unticked box is not sent). */
+const SUGGESTION_ROWS = { prefix: 'sug', into: 'rows', fields: ['installmentId', 'allocationId', 'amount'], flag: 'apply', max: 120 } as const;
+const suggestionRows = (b: Record<string, unknown>) => withCheckedRows(b, SUGGESTION_ROWS);
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
-  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string }) => string; keep?: string[];
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string; path?: string | null }) => string; keep?: string[];
+  /** Turns the flat form body into the service input (row lists). */
+  prepare?: (b: Record<string, unknown>) => Record<string, unknown>;
 }> = {
-  'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, ok: (_b, id) => `/payments/${id}` },
-  'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount'], ok: paymentPath },
+  'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, prepare: createRows, ok: (_b, id) => `/payments/${id}` },
+  'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount', ...ALLOC_KEEP], prepare: allocRows, ok: paymentPath },
   'payments/unapply': { service: payments.reverseAllocation, error: paymentOf, keep: ['amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund': { service: payments.recordRefund, error: paymentOf, keep: ['allocationId', 'amount', 'effectiveDate', 'reason'], ok: paymentPath },
   'payments/refund-reverse': { service: payments.reverseRefund, error: paymentOf, keep: ['effectiveDate', 'reason'], ok: paymentPath },
@@ -785,14 +809,25 @@ const MONEY_ACTIONS: Record<string, {
   'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa/accounts/${str(b.id)}`, ok: entity('/hsa/accounts') },
   'payments/remove': { service: payments.removePayment, error: paymentOf, keep: ['reason'], ok: () => '/payments' },
   // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
-  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
+  // HSA records land on their own page (`path`, an allocation page for a decision); payments and plans on theirs.
+  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => r?.path ?? (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
-  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
-  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
+  // `prepare: withInstallmentList` reads the form's "List each installment" table or pasted text (docs/contracts.md, "Plans").
+  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: withInstallmentList, ok: (_b, id) => `/plans/${id}` },
+  // One guided form for a plan that started earlier: original agreement, payments already made, optional restructure, one save. `dialog=progress`
+  // reopens this dialog (not "Create plan") after an error; it is not part of the service input.
+  'plans/create-in-progress': {
+    service: plans.createPlanInProgress, error: () => '/plans', keep: ['name', 'startedOn', 'matchExisting', 'reason', 'dialog', ...PROGRESS_FIELDS, ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS],
+    prepare: (b) => withInstallmentList(withoutFormMarker(b)), ok: (_b, id) => `/plans/${id}`,
+  },
+  // `dialog` marks a post from the "Plan was restructured" dialog so an error reopens that dialog; it is not part of the service input.
+  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', 'dialog', ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: (b) => withInstallmentList(withoutFormMarker(b)), ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
   'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
+  // No `keep`: after any refusal the suggestions are computed again and every row starts ticked, so row indexes from the old list would mislead.
+  'plans/apply-suggestions': { service: plans.applySuggestedMatches, error: planOf, prepare: suggestionRows, ok: planPath },
   'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },
   'plans/unmatch': { service: plans.unmatchInstallment, error: planOf, keep: ['reason', 'amount'], ok: planPath },
 };
@@ -810,20 +845,51 @@ const HSA_ACTIONS: Record<string, {
   'hsa/receipt': { service: hsa.recordReceipt, error: claimOf, keep: ['receivedOn', 'source', 'reference', 'note', 'lineId', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
   'hsa/external-receipt': { service: hsa.recordExternalReceipt, error: allocationOf, keep: ['receivedOn', 'source', 'reference', 'note', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
   'hsa/receipt-reverse': { service: hsa.reverseReceipt, error: receiptOf, keep: ['effectiveDate', 'reason'], ok: receiptOf },
+  // Administrator removal (records:remove) with undo. Each lands on the record's list or parent page; a failure returns to the record's own page.
+  // The optional allocationId (decision) and claimId (receipt) of the form only steer the redirect.
+  'hsa/decision-remove': { service: hsa.removeHsaDecision, error: (b) => (str(b.allocationId) ? allocationOf(b) : '/hsa'), keep: ['reason'], ok: (b) => (str(b.allocationId) ? allocationOf(b) : '/hsa') },
+  'hsa/claim-remove': { service: hsa.removeHsaClaim, error: claimOf, keep: ['reason'], ok: () => '/hsa/claims' },
+  'hsa/receipt-remove': { service: hsa.removeHsaReceipt, error: receiptOf, keep: ['reason'], ok: (b) => (str(b.claimId) ? claimOf(b) : '/hsa/claims') },
 };
 
-const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS }).map(([name, a]) => [name, route({
+const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS } as Record<string, typeof MONEY_ACTIONS[string]>).map(([name, a]) => [name, route({
   name: `expenses.${name}`,
   session: true,
   errorPath: a.error,
   keepFields: a.keep,
+  // The create form also keeps its ticked bills (as `bill.<n>`), so a refused list does not lose them.
+  flashBody: a.keep?.includes('instRows') ? (b) => withInstRowsFlash(a.keep!.includes('bill.0') ? withBillSlots(b) : b) : undefined,
   keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
-    const result = await a.service(ctx.pool, actor!, body, requestId);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
-    return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
+    const result = await a.service(ctx.pool, actor!, a.prepare ? a.prepare(body) : body, requestId);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string; path?: string | null })) };
+    return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'plans/create-in-progress' || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
+
+/**
+ * The Preview buttons of the plan forms. A POST with the CSRF token that writes nothing: the submitted schedule fields (and the dialog
+ * marker) go into the flash cookie, which is HttpOnly and bound to the page, and the redirect carries only `?preview=<kind>`, so the
+ * reason, the name and the CSRF token never reach the address bar, history, logs or Referer. The page reads the cookie and runs the
+ * same read-only preview as before. It is not a mutation, so it keeps the actor's undo slot.
+ */
+expenseRoutes.set('plans/preview', route({
+  name: 'expenses.plans.preview',
+  session: true,
+  errorPath: (b) => previewPage(previewKind(b), b),
+  keepFields: PREVIEW_KEEP,
+  flashBody: (b) => withInstRowsFlash(withBillSlots(b)),
+  keepsUndo: true,
+  async run({ ctx, actor, body, req }) {
+    authorize(actor!, 'expenses:write');
+    const kind = previewKind(body);
+    const page = previewPage(kind, body);
+    // Always set the cookie, an expired one when there is nothing to keep, so an older flash for this page cannot show up in its place.
+    const flash = flashSetCookie(ctx.config, page, withInstRowsFlash(withBillSlots(body)), PREVIEW_KEEP) ?? `${flashCookieName(ctx.config)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${ctx.config.secureCookies ? '; Secure' : ''}`;
+    if (wantsHtml(req)) return { response: redirect(ctx.config, `${page}?preview=${kind}`, { 'Set-Cookie': flash }) };
+    return { json: { ok: true, preview: kind } };
+  },
+}));
 
 /** Single entry point for every expense mutation. The action comes from a fixed allow-list, never from the body. */
 export async function handleExpenseAction(req: Request, ctx: AppContext, action: string): Promise<Response> {
@@ -1010,6 +1076,7 @@ export async function handleDocumentDownload(req: Request, ctx: AppContext, id: 
 // ---------- optional assistant: client credentials and proposal review ----------
 
 const proposalPage = (b: Record<string, unknown>) => (str(b.proposalId) ? `/proposals/${str(b.proposalId)}` : '/proposals');
+const planProposalPage = (b: Record<string, unknown>) => (str(b.proposalId) ? `/proposals/plans/${str(b.proposalId)}` : '/proposals');
 
 const createAssistantClient = route({
   name: 'assistant.clients.create',
@@ -1061,6 +1128,28 @@ const ASSISTANT_ROUTES = new Map<string, ReturnType<typeof route>>([
     async run({ ctx, actor, body, requestId, req }) {
       const r = await assistant.rejectProposal(ctx.pool, actor!, body, requestId);
       if (wantsHtml(req)) return { response: redirect(ctx.config, proposalPage(body)) };
+      return { json: { ok: true, ...r } };
+    },
+  })],
+  // A payment plan proposal is applied only here, by a signed-in person: the approval creates the plan and lands on its page.
+  ['proposals/plan-approve', route({
+    name: 'assistant.proposals.plan_approve',
+    session: true,
+    errorPath: planProposalPage,
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.approvePlanProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `/plans/${r.planId}`) };
+      return { json: { ok: true, ...r }, status: r.replayed ? 200 : 201 };
+    },
+  })],
+  ['proposals/plan-reject', route({
+    name: 'assistant.proposals.plan_reject',
+    session: true,
+    errorPath: planProposalPage,
+    keepFields: ['reason'],
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.rejectPlanProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, planProposalPage(body)) };
       return { json: { ok: true, ...r } };
     },
   })],

@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { AttachmentsPanel } from '../../../../components/documents.tsx';
 import { getHsaAllocationDetail } from '../../../../../server/services/hsa.ts';
-import { AMOUNT_PATTERN, DecisionPill, EvidenceOptions, FigureCards, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
+import { can } from '../../../../../server/authz.ts';
+import { AMOUNT_PATTERN, DELETE_EFFECT, DecisionPill, DeleteHsaRecord, EvidenceOptions, FigureCards, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
 import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, q80, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,7 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
   const frozen = BigInt(a.needsReviewCents) > 0n;
   const canClaim = !frozen && BigInt(a.availableCents) > 0n;
   const current = decisions[0];
+  const admin = can(actor, 'records:remove');
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/hsa">← HSA</Link></p>
     <h1>HSA: {a.memberName} · {a.billLabel}</h1>
@@ -27,7 +29,7 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
     {a.directHsa && <div className="card" role="note"><strong>Paid directly from an HSA.</strong> This payment was made with an HSA card at the point of service, so the HSA has already paid it. There is nothing to claim and no eligibility decision to record. A refund still lowers the net cash shown here. <Link href={`/payments/${a.paymentId}`}>See the payment</Link></div>}
     {frozen && <div className="card" role="alert"><strong>This payment needs review.</strong> Pending plus received reimbursement is above its eligible ceiling, usually after a refund, a reversal or a lower decision. Real receipts stay on record. New claims are frozen until you cancel or reject pending amounts, reverse a receipt that was returned, or record a new decision with evidence.</div>}
     {!a.directHsa && <form className="card" method="post" action="/api/expenses/hsa/decide">
-      <h2>Eligibility decision</h2>{base}{key}<input type="hidden" name="version" value={a.decisionCount} />
+      <h2>Eligibility decision</h2>{base}{key}<input type="hidden" name="version" value={a.decisionVersion} />
       <p className="muted">{current ? <>Current: {label(current.status)}{current.status === 'eligible' ? <> <Money cents={current.eligibleCents} /></> : null}, decided {current.decidedOn}. A new decision replaces it and keeps this one in the history.</> : 'No decision yet. Until you decide, this payment contributes nothing to available totals.'} A date or category alone does not make a payment eligible: record why, and what evidence supports it.</p>
       <label htmlFor="status">Decision</label>
       <select id="status" name="status" defaultValue={q.status ?? 'eligible'}><option value="eligible">Eligible (part or all)</option><option value="ineligible">Not eligible</option><option value="pending">Pending, still checking</option></select>
@@ -75,10 +77,13 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
     </div>
     <div className="card"><h2>Decisions</h2>
       {decisions.length === 0 ? <p>None yet.</p> : <table className="stack">
-        <thead><tr><th>Decided</th><th>Decision</th><th className="num">Eligible</th><th>Rationale</th><th>Evidence</th><th>By</th></tr></thead>
+        <thead><tr><th>Decided</th><th>Decision</th><th className="num">Eligible</th><th>Rationale</th><th>Evidence</th><th>By</th>{admin && <th>Delete</th>}</tr></thead>
         <tbody>{decisions.map((d) => <tr key={d.id}><td data-label="Decided">{d.decidedOn}</td><td data-label="Decision">{label(d.status)}</td><td data-label="Eligible" className="num"><Money cents={d.eligibleCents} /></td>
           <td data-label="Rationale">{d.rationale}</td><td data-label="Evidence">{d.evidenceType ? `${label(d.evidenceType)}: ${d.evidenceNote ?? ''}` : 'None'}{d.contextNote ? ` · ${d.contextNote}` : ''}</td>
-          <td data-label="By">{d.createdByName ?? ''} {dateOf(d.createdAt)}</td></tr>)}</tbody></table>}
+          <td data-label="By">{d.createdByName ?? ''} {dateOf(d.createdAt)}</td>
+          {admin && <td data-label="Delete"><DeleteHsaRecord id={`delete-decision-${d.id}`} label="Delete decision" title="Delete this eligibility decision?" action="/api/expenses/hsa/decision-remove" csrf={csrf}
+            fields={{ decisionId: d.id, allocationId: a.allocationId }} deletable={d.deletable} effect={DELETE_EFFECT.decision}
+            record={<>{label(d.status)} decision of {d.decidedOn}{d.status === 'eligible' ? <> (eligible <Money cents={d.eligibleCents} />)</> : null}</>} /></td>}</tr>)}</tbody></table>}
       <p className="muted">Decisions are immutable. The newest one is current.</p>
     </div>
     <div className="card"><h2>Ledger</h2>

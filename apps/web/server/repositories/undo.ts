@@ -4,7 +4,7 @@ import type { Actor } from '../authz.ts';
 import { UNDO_WINDOW_SECONDS } from '../contracts.ts';
 import type { Queryable } from '../db.ts';
 
-export type UndoKind = 'payment_remove' | 'plan_remove' | 'method_change';
+export type UndoKind = 'payment_remove' | 'plan_remove' | 'method_change' | 'hsa_decision_remove' | 'hsa_claim_remove' | 'hsa_receipt_remove';
 
 export interface UndoSlot { kind: UndoKind; entityId: string; payload: Record<string, unknown>; secondsRemaining: number }
 

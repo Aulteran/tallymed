@@ -4,6 +4,7 @@ import { pickParties } from '../../../server/services/expenses.ts';
 import { cashSummary, listPayments, pickPayableBills } from '../../../server/services/payments.ts';
 import { pickPaymentMethods } from '../../../server/services/payment-methods.ts';
 import { AddDialog } from '../../components/AddDialog.tsx';
+import { AllocationRows } from '../../components/AllocationRows.tsx';
 import {
   Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, methodName, PAYMENT_METHODS, pick, q80, requireSession, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
@@ -22,6 +23,9 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
   const filters = Object.fromEntries(['q', 'memberId', 'providerId', 'paidWith', 'from', 'to', 'unapplied'].filter((k) => p[k]).map((k) => [k, p[k]!]));
   const { data, invalid } = await load(() => listPayments(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const opt = (r: typeof members) => r.items.map((i) => ({ id: i.id, name: i.name, archived: i.archivedAt !== null }));
+  const billChoices = bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }));
+  // Typed values come back as alloc.<n>.billId / alloc.<n>.amount; a bill chosen from a bill page (?billId=) or the old one-bill fields fill the first row.
+  const rowValues: Record<string, string | undefined> = { ...p, 'alloc.0.billId': p['alloc.0.billId'] ?? p.billId, 'alloc.0.amount': p['alloc.0.amount'] ?? p.allocateAmount };
   const open = !!p.error || p.add === '1' || !!p.billId;
   return <main id="main" className="wide">
     <div className="page-head">
@@ -43,11 +47,9 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
           <p className="muted">Pick the card or account that paid. An HSA card linked to an HSA account records the payment as paid directly from that HSA, so there is nothing to claim. <Link href="/payment-methods?add=1">Add a payment method</Link> first if it is not listed.</p>
           <label htmlFor="reference">Reference (optional)</label><input id="reference" name="reference" maxLength={80} defaultValue={p.reference} />
           <label htmlFor="note">Note (optional)</label><input id="note" name="note" maxLength={500} defaultValue={p.note} />
-          <label htmlFor="billId">Apply to a bill (optional)</label>
-          <select id="billId" name="billId" defaultValue={p.billId ?? ''}><Options items={bills.items.map((b) => ({ id: b.id, name: `${b.label} · ${b.statementDate} · open ${formatCents(b.openBalanceCents)}` }))} blank="Leave unapplied for now" /></select>
-          <label htmlFor="allocateAmount">Amount to apply (blank applies the whole payment)</label><input id="allocateAmount" name="allocateAmount" inputMode="decimal" pattern="\d{1,12}(\.\d{1,2})?" defaultValue={p.allocateAmount} />
+          <AllocationRows idPrefix="alloc" bills={billChoices} values={rowValues} totalFrom="amount" wholeIfSole summaryNoun="payment" />
           <button type="submit">Record payment</button>
-          <p className="muted">Only bills with confirmed amounts and an open balance are listed. You can apply the rest to other bills from the payment page.</p>
+          <p className="muted">Split one payment across several bills by filling several rows; blank rows are ignored, and each bill can be listed once. Choose a single bill and leave its amount blank to apply the whole payment. Cash you do not apply stays unapplied, and you can apply it later from the payment page. Only bills with confirmed amounts and an open balance are listed.</p>
         </form>
       </AddDialog>
     </div>

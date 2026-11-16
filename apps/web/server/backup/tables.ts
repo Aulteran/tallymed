@@ -55,6 +55,8 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'hsa_claims', orderBy: 'id' },
   { name: 'hsa_receipts', orderBy: 'id' },
   { name: 'hsa_entries', orderBy: `(case kind when 'reserve' then 0 when 'receipt_reversal' then 2 else 1 end), seq` },
+  // Who removed or restored an HSA decision, claim or receipt, in the order it happened. Ids and a reason only; the removed records themselves stay in their tables.
+  { name: 'hsa_removal_events', orderBy: 'seq', since: '0020' },
   { name: 'documents', orderBy: 'id' },
   { name: 'document_versions', orderBy: 'id' },
   { name: 'document_attachments', orderBy: 'id' },
@@ -62,6 +64,9 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   // credential never travels in a backup, and the restored instance needs new credentials.
   { name: 'mcp_clients', orderBy: 'id', replace: { token_hash: `sha256(convert_to('tallymed-backup:no-credential:' || id::text, 'UTF8'))` } },
   { name: 'document_match_proposals', orderBy: 'id' },
+  // A client's suggested payment plan, with the JSON payload, the bill versions it was made against, the client's plain-text note and the decision.
+  // Kept like the document proposals (an approved one names the plan it created, so it comes after payment_plans and mcp_clients).
+  { name: 'plan_proposals', orderBy: 'id', since: '0019' },
   { name: 'idempotency_records', orderBy: 'id' },
   // Only the groups that describe the household's preferences. Email, sign-in provider and reverse-proxy settings describe the old server's network, and the
   // encrypted SMTP password and provider client secret could not be read without the old server's key anyway; they are entered again on the new server.

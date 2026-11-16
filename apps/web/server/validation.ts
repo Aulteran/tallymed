@@ -180,11 +180,33 @@ const scheduleInput = {
   totalAmount: optional(positiveUsd), installmentCount: intField(1, 120), firstDueDate: optional(isoDate),
   installments: z.array(installmentLine).max(120).optional(),
   // "total": this many installments at this much price. "per_installment": this many installments at this much paid per installment.
+  // (The form's "list each installment" choice never reaches here: `withInstallmentList` turns it into `installments` first.)
   inputMode: z.preprocess(blank, z.enum(['total', 'per_installment']).default('total')),
   installmentAmount: optional(positiveUsd),
   // Where the leftover cents of a generated "total" split go. The default keeps the original behavior.
   remainder: z.preprocess(blank, z.enum(['earliest', 'last_extra', 'last_short']).default('earliest')),
 };
+
+/** The schedule fields alone (a form preview reads them from its flash cookie). Same field rules as creating and revising a plan, a listed schedule included. */
+export const schedulePreviewSchema = z.object({
+  ...scheduleInput, reviseMode: z.preprocess(blank, z.enum(['replace', 'keep_paid']).default('replace')),
+});
+
+/** Creating a plan adds a start date and whether existing payments are matched; the bills come from `bill_<id>` ticks. */
+export const createPlanPreviewSchema = schedulePreviewSchema.extend({ startedOn: optional(isoDate), matchExisting: checkbox.optional() });
+
+/**
+ * What "Add a plan that's already in progress" adds to a plan's fields: whether the plan was restructured (a Yes/No radio, or JSON `true`) and
+ * the restructure itself. With "No" the restart fields are accepted and ignored, since a form without JavaScript always sends them.
+ */
+const inProgressFields = {
+  restructured: checkbox.optional(),
+  restartOn: optional(isoDate), restartAmount: optional(positiveUsd), restartCadence: z.preprocess(blank, z.enum(['weekly', 'biweekly', 'monthly']).default('monthly')),
+  reason: optionalText(500),
+};
+
+/** The in-progress form's fields alone (a preview reads them from its flash cookie). The start date is required, though a preview names it itself. */
+export const createPlanInProgressPreviewSchema = z.object({ ...scheduleInput, startedOn: optional(isoDate), matchExisting: checkbox.optional(), ...inProgressFields });
 
 export const paymentSchemas = {
   createPayment: z.strictObject({
@@ -261,7 +283,23 @@ export const paymentSchemas = {
     const { billId: _b, billIds: _l, ...rest } = d;
     return { ...rest, billIds };
   }),
+  createPlanInProgress: z.strictObject({
+    idempotencyKey, name: text(120).min(1), billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), startedOn: isoDate, matchExisting: checkbox.optional(), ...scheduleInput, ...inProgressFields, ...csrf,
+  }).transform((d, ctx) => {
+    const billIds = d.billIds && d.billIds.length > 0 ? d.billIds : d.billId ? [d.billId] : [];
+    if ((d.billIds?.length && d.billId) || billIds.length === 0 || new Set(billIds).size !== billIds.length) {
+      ctx.addIssue({ code: 'custom', message: 'choose the bills the plan covers' });
+      return z.NEVER;
+    }
+    const { billId: _b, billIds: _l, ...rest } = d;
+    return { ...rest, billIds };
+  }),
   matchExistingPayments: z.strictObject({ idempotencyKey, planId: uuid, version, ...csrf }),
+  // The ticked rows of the "Suggested matches" card. Each must equal a suggestion the server computes again under its locks.
+  applySuggestedMatches: z.strictObject({
+    idempotencyKey, planId: uuid, version, ...csrf,
+    rows: z.array(z.strictObject({ installmentId: uuid, allocationId: uuid, amount: positiveUsd })).min(1).max(120),
+  }).refine((d) => new Set(d.rows.map((r) => `${r.installmentId}:${r.allocationId}`)).size === d.rows.length, { message: 'each installment and payment pair can appear once' }),
   revisePlan: z.strictObject({
     idempotencyKey, planId: uuid, version, reason: text(500).min(1), ...scheduleInput,
     // "replace" swaps the whole schedule. "keep_paid" keeps fully paid installments and restarts the rest from firstDueDate.
@@ -307,7 +345,14 @@ const decisionVersion = z.coerce.number().int().min(0).max(1_000_000);
 const claimLine = z.strictObject({ allocationId: uuid, amount: positiveUsd });
 const receiptLine = z.strictObject({ lineId: uuid, amount: positiveUsd });
 
+// Removing an HSA record hides it (undo brings it back); the reason is kept on the removal event, never in the audit row. The optional claim and
+// allocation fields only steer the redirect after the action; the service refuses a value that does not belong to the record.
+const removalReason = z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), text(500).min(1).default('Removed by administrator'));
+
 export const hsaSchemas = {
+  removeDecision: z.strictObject({ idempotencyKey, decisionId: uuid, allocationId: uuid.optional(), reason: removalReason, ...csrf }),
+  removeClaim: z.strictObject({ idempotencyKey, claimId: uuid, reason: removalReason, ...csrf }),
+  removeReceipt: z.strictObject({ idempotencyKey, receiptId: uuid, claimId: uuid.optional(), reason: removalReason, ...csrf }),
   /** An eligibility decision. `version` is the number of decisions the person saw, so a stale form is refused. */
   decide: z.strictObject({
     idempotencyKey, allocationId: uuid, version: decisionVersion, status: decisionStatus, eligibleAmount: optional(positiveUsd),
@@ -430,19 +475,24 @@ export const assistantSchemas = {
   createClient: z.strictObject({
     name: text(80).min(1),
     expiryDays: z.preprocess(blank, z.coerce.number().int().min(1).max(365).default(90)),
-    documentsRead: checkbox.optional(), recordsRead: checkbox.optional(), documentsContent: checkbox.optional(), proposalsCreate: checkbox.optional(),
+    documentsRead: checkbox.optional(), recordsRead: checkbox.optional(), documentsContent: checkbox.optional(), proposalsCreate: checkbox.optional(), plansPropose: checkbox.optional(),
     ...csrf,
   }),
   revokeClient: z.strictObject({ clientId: uuid, reason: text(300).min(1), ...csrf }),
   /** `documentVersion` and `targetVersion` are the versions the person was shown; either having moved on refuses the approval. */
   approve: z.strictObject({ idempotencyKey, proposalId: uuid, documentVersion: version, targetVersion: version, documentRevision: version, ...csrf }),
   reject: z.strictObject({ proposalId: uuid, reason: text(300).min(1), ...csrf }),
+  /** `previewDigest` is the fingerprint of the preview the person was shown; a different preview under the locks refuses the approval. */
+  approvePlan: z.strictObject({ idempotencyKey, proposalId: uuid, previewDigest: z.string().regex(/^[0-9a-f]{64}$/), ...csrf }),
+  rejectPlan: z.strictObject({ proposalId: uuid, reason: optionalText(300), ...csrf }),
 };
 
 export const assistantFilterSchemas = {
   proposals: z.object({ status: optionalFilter(z.enum(['pending', 'approved', 'rejected'])), cursor, limit: pageSize }),
+  planProposals: z.object({ status: optionalFilter(z.enum(['pending', 'approved', 'rejected', 'expired', 'superseded'])), cursor, limit: pageSize }),
 };
 export type ProposalFilter = z.infer<typeof assistantFilterSchemas.proposals>;
+export type PlanProposalFilter = z.infer<typeof assistantFilterSchemas.planProposals>;
 
 /** A same-site path to return to after unlocking. Anything else (another origin, a protocol-relative URL, a sign-in or API address) becomes the overview. */
 export function safeReturnPath(next: unknown): string {

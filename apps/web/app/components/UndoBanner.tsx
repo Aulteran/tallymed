@@ -8,6 +8,9 @@ const WHAT: Record<string, string> = {
   payment_remove: 'Payment removed.',
   plan_remove: 'Payment plan removed.',
   method_change: 'Payment method changed.',
+  hsa_decision_remove: 'HSA eligibility decision deleted.',
+  hsa_claim_remove: 'HSA claim deleted.',
+  hsa_receipt_remove: 'HSA reimbursement deleted.',
 };
 
 /**

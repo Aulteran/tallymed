@@ -232,12 +232,12 @@ export async function insertRemovalEvent(db: Queryable, v: { householdId: string
     [v.householdId, v.paymentId, v.action, v.reason, v.userId]);
 }
 
-/** What stands in the way of removing a payment: refunded cash that is still out (a refund that was reversed again no longer counts), any HSA entry, any HSA eligibility decision. */
+/** What stands in the way of removing a payment: refunded cash that is still out (a refund that was reversed again no longer counts), any live HSA entry, any live HSA eligibility decision (removed ones are not). */
 export async function removalBlockers(db: Queryable, householdId: string, paymentId: string): Promise<{ refunds: boolean; hsa: boolean }> {
   const { rows } = await db.query<{ refunds: boolean; hsa: boolean }>(
     `select coalesce((select sum(e.amount_cents) from payment_entries e where e.household_id = $1 and e.payment_id = $2 and e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) <> 0 as refunds,
-       (exists (select 1 from hsa_entries h where h.household_id = $1 and h.payment_id = $2)
-        or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where d.household_id = $1 and a.payment_id = $2)) as hsa`,
+       (exists (select 1 from hsa_live_entries h where h.household_id = $1 and h.payment_id = $2)
+        or exists (select 1 from hsa_live_decisions d join payment_entries a on a.id = d.allocation_id where d.household_id = $1 and a.payment_id = $2)) as hsa`,
     [householdId, paymentId]);
   return rows[0]!;
 }
