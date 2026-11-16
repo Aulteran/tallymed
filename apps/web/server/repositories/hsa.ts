@@ -412,3 +412,124 @@ export async function queue(db: Queryable, householdId: string, kind: 'available
     `${ALLOCATION_SELECT} where ${where.join(' and ')} order by ${kind === 'available' ? 's.available_cents' : 's.needs_review_cents'} desc, s.paid_on desc, s.allocation_id desc limit $${params.push(limit)}`, params);
   return rows;
 }
+
+// ---------- removal of decisions, claims and receipts (administrator, with undo) ----------
+
+export type RemovalKind = 'decision' | 'claim' | 'receipt';
+export type RemovalAction = 'remove' | 'restore';
+
+/** Appends a removal or restore marker. The database checks the household, the alternation and (deferred) every money rule. */
+export async function insertRemovalEvent(db: Queryable, v: { kind: RemovalKind; recordId: string; action: RemovalAction; reason: string; householdId: string; userId: string }): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, $2, $3, $4, $5, $6) returning id`,
+    [v.householdId, v.kind, v.recordId, v.action, v.reason, v.userId]);
+  return rows[0]!.id;
+}
+
+/** A decision, claim or receipt whether or not it is removed, with what it touches. Cents: eligible amount, reserved total or receipt amount. */
+export interface RemovalRecord {
+  kind: RemovalKind; id: string; removed: boolean; allocationIds: string[]; paymentIds: string[]; cents: string;
+  /** Decision: its allocation (the page it lives on). Claim and receipt: null. */
+  allocationId: string | null;
+  /** Receipt: the claim of its entries, when it has one (null for an external reimbursement). */
+  claimId: string | null;
+}
+
+/** Reads a record that can be live OR removed (the ordinary getters hide removed ones), scoped to the household. Null when it is not there. */
+export async function getRemovalRecord(db: Queryable, householdId: string, kind: RemovalKind, id: string): Promise<RemovalRecord | null> {
+  const removed = `hsa_record_removed('${kind}', $2)`;
+  if (kind === 'decision') {
+    const { rows } = await db.query<{ allocation_id: string; payment_id: string; eligible_cents: string; removed: boolean }>(
+      `select d.allocation_id, d.payment_id, d.eligible_cents::text, ${removed} as removed from hsa_eligibility_decisions d where d.household_id = $1 and d.id = $2`, [householdId, id]);
+    const r = rows[0];
+    return r ? { kind, id, removed: r.removed, allocationIds: [r.allocation_id], paymentIds: [r.payment_id], cents: r.eligible_cents, allocationId: r.allocation_id, claimId: null } : null;
+  }
+  const own = kind === 'claim' ? 'claim_id' : 'receipt_id';
+  const head = kind === 'claim' ? 'hsa_claims' : 'hsa_receipts';
+  const { rows: h } = await db.query<{ removed: boolean; amount: string | null }>(
+    `select ${removed} as removed, ${kind === 'receipt' ? 'r.amount_cents::text' : 'null::text'} as amount from ${head} r where r.household_id = $1 and r.id = $2`, [householdId, id]);
+  if (!h[0]) return null;
+  const { rows } = await db.query<{ allocation_ids: string[]; payment_ids: string[]; claim_id: string | null; reserved: string }>(
+    `select coalesce(array_agg(distinct e.allocation_id order by e.allocation_id), '{}') as allocation_ids,
+            coalesce(array_agg(distinct e.payment_id order by e.payment_id), '{}') as payment_ids, (array_agg(e.claim_id))[1] as claim_id,
+            coalesce(sum(e.amount_cents) filter (where e.kind = 'reserve'), 0)::text as reserved
+       from hsa_entries e where e.household_id = $1 and e.${own} = $2`, [householdId, id]);
+  const x = rows[0]!;
+  return { kind, id, removed: h[0].removed, allocationIds: x.allocation_ids, paymentIds: x.payment_ids, cents: kind === 'receipt' ? h[0].amount! : x.reserved, allocationId: null, claimId: kind === 'receipt' ? x.claim_id : null };
+}
+
+/** True when the record's newest removal event says removed. */
+export async function isRemoved(db: Queryable, kind: RemovalKind, id: string): Promise<boolean> {
+  const { rows } = await db.query<{ removed: boolean }>(`select hsa_record_removed($1, $2) as removed`, [kind, id]);
+  return rows[0]!.removed;
+}
+
+/** The page a restored record lives on. Decision: its allocation. Null when no such record is in the household. */
+export async function recordPage(db: Queryable, householdId: string, id: string): Promise<{ kind: RemovalKind; path: string } | null> {
+  const { rows } = await db.query<{ kind: RemovalKind; path: string }>(
+    `select 'decision' as kind, '/hsa/allocations/' || d.allocation_id as path from hsa_eligibility_decisions d where d.household_id = $1 and d.id = $2
+     union all select 'claim', '/hsa/claims/' || c.id from hsa_claims c where c.household_id = $1 and c.id = $2
+     union all select 'receipt', '/hsa/receipts/' || r.id from hsa_receipts r where r.household_id = $1 and r.id = $2`, [householdId, id]);
+  return rows[0] ?? null;
+}
+
+export interface Deletable { deletable: boolean; reason: string | null }
+
+export const MSG_DECISION_SUPPORTS = 'Deleting this decision would leave more reimbursement than it supports; delete or release the claims first';
+export const MSG_RECEIPT_SUPPORTS = 'Deleting this reimbursement would put its amount back to pending above what the payment supports; delete or release the newer claims first';
+export const MSG_CLAIM_HAS_RECEIPTS = 'Delete its reimbursements first';
+export const MSG_ALREADY_REMOVED = 'Already deleted';
+
+const yes: Deletable = { deletable: true, reason: null };
+const no = (reason: string): Deletable => ({ deletable: false, reason });
+
+/**
+ * Which decisions of one allocation can be deleted, by the guard's rule: a removal may not make "needs review" larger than it is now. The excess
+ * after removing decision d is computed with the newest OTHER live decision as the ceiling (the net cash still caps it). Keys are decision ids.
+ */
+export async function decisionsDeletable(db: Queryable, householdId: string, allocationId: string): Promise<Map<string, Deletable>> {
+  const { rows: st } = await db.query<{ net: string; pending: string; received: string; review: string }>(
+    `select net_cents::text as net, pending_cents::text as pending, received_cents::text as received, needs_review_cents::text as review
+       from hsa_allocation_status where household_id = $1 and allocation_id = $2`, [householdId, allocationId]);
+  const { rows: ds } = await db.query<{ id: string; eligible: string }>(
+    `select id, eligible_cents::text as eligible from hsa_live_decisions where household_id = $1 and allocation_id = $2 order by seq desc`, [householdId, allocationId]);
+  const out = new Map<string, Deletable>();
+  const s = st[0];
+  if (!s) return out;
+  const net = BigInt(s.net), held = BigInt(s.pending) + BigInt(s.received), before = BigInt(s.review);
+  for (const d of ds) {
+    const other = ds.find((x) => x.id !== d.id);
+    const elig = other ? BigInt(other.eligible) : 0n;
+    const ceiling = elig < net ? elig : net;
+    const after = held > ceiling ? held - ceiling : 0n;
+    out.set(d.id, after > before ? no(MSG_DECISION_SUPPORTS) : yes);
+  }
+  return out;
+}
+
+/** A claim can be deleted while no live reimbursement has entries on it (leaf-first). */
+export async function claimDeletable(db: Queryable, householdId: string, claimId: string): Promise<Deletable> {
+  const { rows } = await db.query(
+    `select 1 from hsa_entries e where e.household_id = $1 and e.claim_id = $2 and e.receipt_id is not null and not hsa_record_removed('receipt', e.receipt_id) limit 1`, [householdId, claimId]);
+  return rows.length > 0 ? no(MSG_CLAIM_HAS_RECEIPTS) : yes;
+}
+
+/**
+ * A receipt can be deleted unless that would make "needs review" larger on one of its allocations: its claim lines go back to pending
+ * (receipt entries stop reducing pending) and its received cash and reversals stop counting.
+ */
+export async function receiptDeletable(db: Queryable, householdId: string, receiptId: string): Promise<Deletable> {
+  const { rows } = await db.query<{ allocation_id: string; pend_delta: string; recv_delta: string; ceiling: string; held: string; review: string }>(
+    `select r.allocation_id,
+            (coalesce(sum(r.amount_cents) filter (where r.kind = 'receipt'), 0))::text as pend_delta,
+            (coalesce(sum(r.amount_cents) filter (where r.kind = 'receipt_reversal'), 0) - coalesce(sum(r.amount_cents) filter (where r.kind in ('receipt', 'external_receipt')), 0))::text as recv_delta,
+            s.ceiling_cents::text as ceiling, (s.pending_cents + s.received_cents)::text as held, s.needs_review_cents::text as review
+       from hsa_entries r join hsa_allocation_status s on s.household_id = r.household_id and s.allocation_id = r.allocation_id
+      where r.household_id = $1 and r.receipt_id = $2
+      group by r.allocation_id, s.ceiling_cents, s.pending_cents, s.received_cents, s.needs_review_cents`, [householdId, receiptId]);
+  for (const r of rows) {
+    const held = BigInt(r.held) + BigInt(r.pend_delta) + BigInt(r.recv_delta), ceiling = BigInt(r.ceiling);
+    if ((held > ceiling ? held - ceiling : 0n) > BigInt(r.review)) return no(MSG_RECEIPT_SUPPORTS);
+  }
+  return yes;
+}

@@ -99,7 +99,7 @@ export async function approveProposal(pool: Pool, actor: Actor, input: unknown, 
     // The target type and id of a proposal never change, so this unlocked read only decides which locks to take.
     const probe = await assistant.getProposal(tx, actor.householdId, d.proposalId);
     if (!probe) throw new AppError('not_found');
-    if (!await docs.lockTarget(tx, actor.householdId, probe.targetType, probe.targetId)) throw new AppError('stale_version', 'The record is no longer available');
+    if (!await docs.lockTarget(tx, actor.householdId, probe.targetType, probe.targetId, undefined, { live: true })) throw new AppError('stale_version', 'The record is no longer available');
     const lockedDoc = await docs.lockDocument(tx, actor.householdId, probe.documentId);
     if (!await assistant.lockProposal(tx, actor.householdId, d.proposalId)) throw new AppError('not_found');
     const p = await assistant.getProposal(tx, actor.householdId, d.proposalId);

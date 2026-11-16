@@ -670,7 +670,7 @@ const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
 const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
-  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string }) => string; keep?: string[];
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string; path?: string | null }) => string; keep?: string[];
 }> = {
   'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, ok: (_b, id) => `/payments/${id}` },
   'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount'], ok: paymentPath },
@@ -686,7 +686,8 @@ const MONEY_ACTIONS: Record<string, {
   'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa/accounts/${str(b.id)}`, ok: entity('/hsa/accounts') },
   'payments/remove': { service: payments.removePayment, error: paymentOf, keep: ['reason'], ok: () => '/payments' },
   // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
-  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
+  // HSA records land on their own page (`path`, an allocation page for a decision); payments and plans on theirs.
+  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => r?.path ?? (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
@@ -711,6 +712,11 @@ const HSA_ACTIONS: Record<string, {
   'hsa/receipt': { service: hsa.recordReceipt, error: claimOf, keep: ['receivedOn', 'source', 'reference', 'note', 'lineId', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
   'hsa/external-receipt': { service: hsa.recordExternalReceipt, error: allocationOf, keep: ['receivedOn', 'source', 'reference', 'note', 'amount', 'evidenceType', 'evidenceNote'], ok: (_b, id) => `/hsa/receipts/${id}` },
   'hsa/receipt-reverse': { service: hsa.reverseReceipt, error: receiptOf, keep: ['effectiveDate', 'reason'], ok: receiptOf },
+  // Administrator removal (records:remove) with undo. Each lands on the record's list or parent page; a failure returns to the record's own page.
+  // The optional allocationId (decision) and claimId (receipt) of the form only steer the redirect.
+  'hsa/decision-remove': { service: hsa.removeHsaDecision, error: (b) => (str(b.allocationId) ? allocationOf(b) : '/hsa'), keep: ['reason'], ok: (b) => (str(b.allocationId) ? allocationOf(b) : '/hsa') },
+  'hsa/claim-remove': { service: hsa.removeHsaClaim, error: claimOf, keep: ['reason'], ok: () => '/hsa/claims' },
+  'hsa/receipt-remove': { service: hsa.removeHsaReceipt, error: receiptOf, keep: ['reason'], ok: (b) => (str(b.claimId) ? claimOf(b) : '/hsa/claims') },
 };
 
 const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTIONS, ...HSA_ACTIONS }).map(([name, a]) => [name, route({
@@ -721,7 +727,7 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
     const result = await a.service(ctx.pool, actor!, body, requestId);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
+    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string; path?: string | null })) };
     return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
