@@ -124,9 +124,9 @@ One row per payment allocation, all amounts decimal strings of integer cents, ne
 | Field | Meaning |
 | --- | --- |
 | `netCents` | Net cash of the allocation (M03 `netCents`). |
-| `decisionStatus` | Latest eligibility decision (`eligible`, `ineligible`, `pending`) or `null` when there is none. |
+| `decisionStatus` | Latest eligibility decision (`eligible`, `ineligible`, `pending`) or `null` when there is none; the ceiling follows the newest non-pending decision, not necessarily this one. |
 | `markedIneligible` | The payment was recorded with "This payment is ineligible for HSA." (`payment_hsa_ineligible`, migration 0021; view column `marked_ineligible`). |
-| `ceilingCents` | Zero when `markedIneligible`, paid directly from an HSA, or the latest decision is ineligible; `least(decided eligible cents, netCents)` for an eligible decision; `netCents` for a pending decision or none. The view, `hsa_payment_has_no_ceiling`, `hsa_entry_guard` and the backup ledger checks share this rule. |
+| `ceilingCents` | Zero when `markedIneligible`, paid directly from an HSA, or the newest non-pending decision is ineligible; `least(decided eligible cents, netCents)` when it is eligible; `netCents` when there is none. A pending decision never changes the ceiling. The view, `hsa_payment_has_no_ceiling`, `hsa_entry_guard` and the backup ledger checks share this rule. |
 | `pendingCents` | Reserves less receipts, rejects and cancels. |
 | `receivedCents` | Receipts and external receipts less receipt reversals. |
 | `availableCents` | `max(0, ceiling - pending - received)`. |

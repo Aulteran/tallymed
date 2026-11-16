@@ -14,6 +14,7 @@ import * as pm from '../../apps/web/server/services/payment-methods.ts';
 import * as pay from '../../apps/web/server/services/payments.ts';
 import { setup } from './money-helpers.mjs';
 import { post, skipDb } from './helpers.mjs';
+import { readFlash } from '../../apps/web/server/flash.ts';
 
 const code = (c) => ({ code: c });
 const ids = async (t, paymentId) => (await t.payment(paymentId)).allocations.map((a) => a.allocationId);
@@ -294,5 +295,140 @@ test('a marked payment keeps a zero ceiling through delete and undo of a decisio
     await assert.rejects(t.db.pool.query(`delete from payment_hsa_ineligible`), /append-only|immutable|cannot/i);
     assert.equal(await t.count('payment_hsa_ineligible'), 1);
     assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+// ---------- a pending decision is a note: it never changes the ceiling ----------
+
+/** Records the next decision on an allocation (the form version is the number of decisions seen so far). */
+const decideNext = async (t, allocationId, status, amount) => hsa.recordDecision(t.db.pool, t.actor, {
+  idempotencyKey: t.key(), allocationId, version: String((await figs(t, allocationId)).decisionVersion), status, ...(amount ? { eligibleAmount: amount } : {}),
+  rationale: 'Reviewed', evidenceType: 'receipt', evidenceNote: 'Receipt', decidedOn: '2026-04-05',
+}, 'r');
+/** The one rule written independently: decisions newest first, pending ones skipped. */
+const modelCeiling = (net, decisions) => {
+  const d = decisions.find(([status]) => status !== 'pending');
+  if (!d) return net;
+  return d[0] === 'ineligible' ? 0n : (BigInt(d[1]) < net ? BigInt(d[1]) : net);
+};
+
+test('a pending decision never changes the ceiling: ineligible then pending stays zero, eligible 20.00 then pending stays 20.00, only pending is the net cash', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const a = await t.paid('50.00');
+    await decideNext(t, a.allocationId, 'ineligible');
+    await decideNext(t, a.allocationId, 'pending');
+    const fa = await figs(t, a.allocationId);
+    assert.deepEqual([fa.decisionStatus, fa.decisionCount, fa.ceilingCents, fa.decidedCents, fa.availableCents], ['pending', 2, '0', '0', '0']);
+    await assert.rejects(claim(t, a.allocationId, '1.00'), code('conflict'));
+    await assert.rejects(external(t, a.allocationId, '1.00'), code('conflict'));
+    await assert.rejects(rawReserve(t, { paymentId: a.id, allocationId: a.allocationId, billId: a.billId }, 1), /exceed the eligible ceiling \(allocation [0-9a-f-]+, ceiling 0/);
+
+    const b = await t.paid('50.00');
+    await decideNext(t, b.allocationId, 'eligible', '20.00');
+    await decideNext(t, b.allocationId, 'pending');
+    const fb = await figs(t, b.allocationId);
+    assert.deepEqual([fb.decisionStatus, fb.ceilingCents, fb.decidedCents, fb.availableCents], ['pending', '2000', '2000', '2000']);
+    await assert.rejects(claim(t, b.allocationId, '20.01'), code('conflict'));
+    await claim(t, b.allocationId, '20.00');
+
+    const c = await t.paid('50.00');
+    await decideNext(t, c.allocationId, 'pending');
+    assert.deepEqual([(await figs(t, c.allocationId)).ceilingCents, (await figs(t, c.allocationId)).decidedCents], ['5000', '0']);
+
+    const d = await t.paid('50.00');
+    await decideNext(t, d.allocationId, 'pending');
+    await decideNext(t, d.allocationId, 'ineligible');
+    assert.equal((await figs(t, d.allocationId)).ceilingCents, '0');
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('deleting and undoing decisions with a pending note in the sequence: the next newest live non-pending decision decides', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const x = await t.paid('100.00');
+    await decideNext(t, x.allocationId, 'eligible', '30.00');
+    const inel = await decideNext(t, x.allocationId, 'ineligible');
+    const pend = await decideNext(t, x.allocationId, 'pending');
+    assert.equal((await figs(t, x.allocationId)).ceilingCents, '0');
+    // Deleting the pending note changes nothing; deleting the ineligible one falls back to the eligible 30.00 (not to the whole net cash).
+    await rmDecision(t, pend.id);
+    assert.equal((await figs(t, x.allocationId)).ceilingCents, '0');
+    await undoIt(t);
+    assert.equal((await figs(t, x.allocationId)).ceilingCents, '0');
+    await rmDecision(t, inel.id);
+    assert.deepEqual([(await figs(t, x.allocationId)).ceilingCents, (await figs(t, x.allocationId)).decisionStatus], ['3000', 'pending']);
+    await claim(t, x.allocationId, '30.00');
+    // Restoring the ineligible decision with 30.00 pending is refused; the ceiling stays 30.00.
+    await undoIt(t).then(() => assert.fail('would leave 30.00 pending with a zero ceiling'), (e) => assert.match(e.message, MSG_UNDO_REFUSED));
+    assert.equal((await figs(t, x.allocationId)).ceilingCents, '3000');
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('table-driven: the view, hsa_allocation_ceiling, the entry guard, the removal guard and decisionsDeletable agree on sequences with pending notes', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const sequences = [
+      [], [['pending', 0]], [['pending', 0], ['pending', 0]],
+      [['ineligible', 0], ['pending', 0]], [['pending', 0], ['ineligible', 0]],
+      [['eligible', 2000], ['pending', 0]], [['pending', 0], ['eligible', 2000]],
+      [['eligible', 2000], ['ineligible', 0], ['pending', 0]], [['ineligible', 0], ['eligible', 4000], ['pending', 0]],
+      [['eligible', 5000], ['pending', 0], ['eligible', 3000]], [['eligible', 3000], ['pending', 0], ['ineligible', 0], ['pending', 0]],
+    ];
+    for (const seq of sequences) {
+      const x = await t.paid('50.00');
+      const ids = [];
+      for (const [status, cents] of seq) ids.push((await decideNext(t, x.allocationId, status, cents ? (cents / 100).toFixed(2) : undefined)).id);
+      const newestFirst = (list) => [...list].reverse();
+      const expected = modelCeiling(5000n, newestFirst(seq));
+      const f = await figs(t, x.allocationId);
+      const fn = (await t.db.pool.query(`select hsa_allocation_ceiling($1, null, null)::text as c`, [x.allocationId])).rows[0].c;
+      assert.deepEqual([f.ceilingCents, fn], [expected.toString(), expected.toString()], JSON.stringify(seq));
+      const a = { paymentId: x.id, allocationId: x.allocationId, billId: x.billId };
+      // The entry guard: one cent over the ceiling is refused, the ceiling itself fits.
+      await assert.rejects(rawReserve(t, a, expected + 1n), /exceed the eligible ceiling/, JSON.stringify(seq));
+      if (expected > 0n) await rawReserve(t, a, expected);
+      // Each decision's deletability: the helper, the model and the database removal guard (tried in a rolled-back transaction) agree.
+      const detail = await hsa.getHsaAllocationDetail(t.db.pool, t.actor, x.allocationId);
+      const held = expected;
+      for (const [i, id] of ids.entries()) {
+        const rest = newestFirst(seq.filter((_, j) => j !== i));
+        const ok = modelCeiling(5000n, rest) >= held;
+        const helper = detail.decisions.find((d) => d.id === id).deletable.deletable;
+        let guard = true;
+        const c = await t.db.pool.connect();
+        try {
+          await c.query('begin');
+          await c.query(`insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, 'decision', $2, 'remove', 'Fabricated', $3)`, [t.actor.householdId, id, t.actor.userId]);
+          await c.query('commit');
+          guard = true;
+        } catch { guard = false; await c.query('rollback').catch(() => undefined); } finally { c.release(); }
+        assert.deepEqual([helper, guard], [ok, ok], `${JSON.stringify(seq)} deleting #${i}`);
+        if (guard) {
+          // Undo the raw removal so the next decision is judged against the full sequence again (a restore is strict, so it fits: held <= ceiling).
+          await t.db.pool.query(`insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, 'decision', $2, 'restore', 'Fabricated', $3)`, [t.actor.householdId, id, t.actor.userId]);
+        }
+      }
+    }
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('a rejected payment form keeps the ticked ineligible box in the flash, and it renders ticked again', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const res = await post(handlers, t, 'payments/create', { paidOn: '2026-04-01', amount: 'not-money', method: 'card', hsaIneligible: 'yes' });
+    assert.equal(res.status, 303);
+    assert.equal(new URL(res.headers.get('location'), 'http://x').pathname, '/payments');
+    const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get('set-cookie')]).find((c) => c.includes('tallymed_flash'));
+    assert.ok(cookie, 'a flash cookie is set');
+    const raw = cookie.split(';')[0].split('=')[1];
+    const kept = readFlash(raw, '/payments');
+    assert.equal(kept.hsaIneligible, 'yes');
+    assert.equal(kept.amount, 'not-money');
+    // The page reads the flash value exactly as the form posts it.
+    assert.ok(kept.hsaIneligible === 'yes' || kept.hsaIneligible === 'on');
   } finally { await t.db.drop(); }
 });

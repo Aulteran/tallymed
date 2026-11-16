@@ -57,7 +57,7 @@ const figsOf = (a) => [a.ceilingCents, a.pendingCents, a.receivedCents, a.availa
 /** Rebuilds an allocation's figures from the raw ledger rows only (no view), the independent reconciliation. */
 async function rebuild(pool, allocationId) {
   const { rows: net } = await pool.query(`select coalesce(sum(amount_cents), 0)::bigint n from payment_entries where allocation_id = $1`, [allocationId]);
-  const { rows: dec } = await pool.query(`select status, eligible_cents from hsa_eligibility_decisions where allocation_id = $1 order by seq desc limit 1`, [allocationId]);
+  const { rows: dec } = await pool.query(`select status, eligible_cents from hsa_eligibility_decisions where allocation_id = $1 and status <> 'pending' order by seq desc limit 1`, [allocationId]);
   const { rows: mk } = await pool.query(`select 1 from payment_hsa_ineligible i join payment_entries a on a.payment_id = i.payment_id where a.id = $1`, [allocationId]);
   const { rows: ent } = await pool.query(`select kind, amount_cents from hsa_entries where allocation_id = $1`, [allocationId]);
   let pending = 0n, received = 0n;
@@ -69,7 +69,7 @@ async function rebuild(pool, allocationId) {
     if (e.kind === 'receipt_reversal') received -= a;
   }
   const n = BigInt(net[0].n);
-  // The ceiling rule: a marker or an ineligible decision is zero; an eligible decision is the lesser of its amount and the net cash; otherwise the net cash.
+  // The ceiling rule: a marker or an ineligible newest non-pending decision is zero (a pending decision is a note and never counts); an eligible decision is the lesser of its amount and the net cash; otherwise the net cash.
   const eligible = BigInt(dec[0]?.eligible_cents ?? 0);
   const ceiling = mk.length || dec[0]?.status === 'ineligible' ? 0n : dec[0]?.status === 'eligible' ? (eligible < n ? eligible : n) : n;
   const avail = ceiling - pending - received;
@@ -110,7 +110,7 @@ test('the ledger example: a $120 bill with $75 paid, $60 eligible, $50 claimed a
   }
 });
 
-test('eligibility decisions need evidence and a user decision; pending and unknown fold into the full net cash; stale forms are refused', { skip: skipDb }, async () => {
+test('eligibility decisions need evidence and a user decision; a pending note and no decision leave the full net cash; stale forms are refused', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
     const a = await t.alloc({ bill: '100.00', paid: '80.00' });
@@ -124,7 +124,7 @@ test('eligibility decisions need evidence and a user decision; pending and unkno
     await assert.rejects(hsa.recordDecision(t.db.pool, t.actor, base({ eligibleAmount: '80.01' }), 'r'), code('conflict'), 'more than the net cash');
     assert.equal(await t.count('hsa_eligibility_decisions'), 0);
     const first = await hsa.recordDecision(t.db.pool, t.actor, base({ status: 'pending', eligibleAmount: undefined, evidenceType: undefined, evidenceNote: undefined, rationale: 'Waiting for the EOB' }), 'r');
-    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['8000', '0', '0', '8000', '0'], 'pending folds into the eligible net cash');
+    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['8000', '0', '0', '8000', '0'], 'a pending note leaves the full net cash');
     // A stale form (it saw no decision, one exists now) is refused; the right version works.
     await assert.rejects(hsa.recordDecision(t.db.pool, t.actor, base({}), 'r'), code('stale_version'));
     await hsa.recordDecision(t.db.pool, t.actor, base({ version: '1' }), 'r');

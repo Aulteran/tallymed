@@ -672,7 +672,7 @@ const EXPENSE_ACTIONS: Record<string, {
 const ALLOC_ROWS = { prefix: 'alloc', into: 'allocations', fields: ['billId', 'amount'], max: 25 } as const;
 export const ALLOC_FORM_ROWS = 10;
 const ALLOC_KEEP = Array.from({ length: ALLOC_FORM_ROWS }, (_, i) => [`alloc.${i}.billId`, `alloc.${i}.amount`]).flat();
-const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'hsaIneligible', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
 const allocRows = (b: Record<string, unknown>) => withFormRows(b, ALLOC_ROWS);
 /** A recorded payment with exactly one bill row and no amount applies the whole payment to it, as the single-bill form always did. */
 const createRows = (b: Record<string, unknown>) => {

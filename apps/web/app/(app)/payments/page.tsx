@@ -45,7 +45,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
           <label htmlFor="paidWithId">Paid with (optional)</label>
           <select id="paidWithId" name="paidWithId" defaultValue={p.paidWithId ?? ''}><Options items={methods.items.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour) + (m.hsaAccountName ? ` (paid directly from ${m.hsaAccountName})` : ''), archived: m.archivedAt !== null }))} blank="Not recorded" /></select>
           <p className="muted">Pick the card or account that paid. An HSA card linked to an HSA account records the payment as paid directly from that HSA, so there is nothing to claim. <Link href="/payment-methods?add=1">Add a payment method</Link> first if it is not listed.</p>
-          <label className="checkbox" htmlFor="hsaIneligible"><input id="hsaIneligible" type="checkbox" name="hsaIneligible" value="yes" defaultChecked={p.hsaIneligible === 'yes'} /> This payment is ineligible for HSA.</label>
+          <label className="checkbox" htmlFor="hsaIneligible"><input id="hsaIneligible" type="checkbox" name="hsaIneligible" value="yes" defaultChecked={p.hsaIneligible === 'yes' || p.hsaIneligible === 'on'} /> This payment is ineligible for HSA.</label>
           <p className="muted">Payments are eligible for HSA reimbursement by default. Tick this to rule the payment out; it cannot be changed afterward. It does not apply to a payment paid directly from an HSA account.</p>
           <label htmlFor="reference">Reference (optional)</label><input id="reference" name="reference" maxLength={80} defaultValue={p.reference} />
           <label htmlFor="note">Note (optional)</label><input id="note" name="note" maxLength={500} defaultValue={p.note} />

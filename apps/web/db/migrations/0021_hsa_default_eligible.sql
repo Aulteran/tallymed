@@ -5,9 +5,10 @@
 -- falls back to the default. The ceiling rule, used identically by the hsa_allocation_status view, the commit-time guard hsa_entry_guard, the
 -- removal guards (hsa_allocation_excess_with, hsa_allocation_live_check) and the backup ledger summary (which reads the view):
 --   ceiling = 0                                   when the payment has an ineligible marker or is paid directly from an HSA
---           = 0                                   when the newest LIVE decision is 'ineligible'
---           = least(decision eligible_cents, net) when the newest live decision is 'eligible'
---           = net                                 when the newest live decision is 'pending' (a behavior change: pending used to be zero) or there is none
+--           = 0                                   when the newest LIVE NON-PENDING decision is 'ineligible'
+--           = least(decision eligible_cents, net) when the newest live non-pending decision is 'eligible'
+--           = net                                 when there is no live non-pending decision (none at all, or only pending ones)
+-- A 'pending' decision is a note: it never changes the ceiling, so it cannot lift an ineligible or partial ruling back to full net cash.
 -- Existing decisions are neither changed nor deleted (the table is immutable). Direct HSA payments keep a zero ceiling, as before, so
 -- eligible still equals pending + received + available for claimable payments.
 --
@@ -80,7 +81,7 @@ begin
   end if;
   select coalesce(sum(amount_cents), 0) into net from payment_entries where allocation_id = alloc;
   select d.status, d.eligible_cents into dstatus, elig from hsa_eligibility_decisions d
-   where d.allocation_id = alloc and (not hsa_record_removed('decision', d.id) or (k = 'decision' and d.id = rid)) order by d.seq desc limit 1;
+   where d.allocation_id = alloc and d.status <> 'pending' and (not hsa_record_removed('decision', d.id) or (k = 'decision' and d.id = rid)) order by d.seq desc limit 1;
   if dstatus = 'ineligible' then
     return 0;
   elsif dstatus = 'eligible' then
@@ -204,15 +205,17 @@ select s.*,
        exists (select 1 from payment_hsa_ineligible i where i.payment_id = s.payment_id) as marked_ineligible
   from (
     select n.household_id, n.allocation_id, n.payment_id, n.bill_id, n.paid_on, n.net_cents::bigint as net_cents,
-           d.id as decision_id, d.status as decision_status, coalesce(d.eligible_cents, 0) as decided_cents,
+           d.id as decision_id, d.status as decision_status, coalesce(c.eligible_cents, 0) as decided_cents,
            (select count(*) from hsa_live_decisions x where x.allocation_id = n.allocation_id)::int as decision_count,
-           case when hsa_payment_has_no_ceiling(n.payment_id) or d.status = 'ineligible' then 0
-                when d.status = 'eligible' then least(d.eligible_cents, n.net_cents::bigint)
+           case when hsa_payment_has_no_ceiling(n.payment_id) or c.status = 'ineligible' then 0
+                when c.status = 'eligible' then least(c.eligible_cents, n.net_cents::bigint)
                 else n.net_cents::bigint end as ceiling_cents,
            h.pending_cents::bigint as pending_cents, h.received_cents::bigint as received_cents
       from allocation_net n
       left join lateral (select x.id, x.status, x.eligible_cents from hsa_live_decisions x
                           where x.allocation_id = n.allocation_id order by x.seq desc limit 1) d on true
+      left join lateral (select x.status, x.eligible_cents from hsa_live_decisions x
+                          where x.allocation_id = n.allocation_id and x.status <> 'pending' order by x.seq desc limit 1) c on true
       cross join lateral (select
           coalesce(sum(e.amount_cents) filter (where e.kind = 'reserve'), 0) - coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'reject', 'cancel')), 0) as pending_cents,
           coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(e.amount_cents) filter (where e.kind = 'receipt_reversal'), 0) as received_cents

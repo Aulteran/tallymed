@@ -140,7 +140,7 @@ export const lockPaymentsForMoney = paymentRepo.lockPayments;
 /**
  * HSA reconciliation figures per payment allocation, all decimal strings of integer cents. `ceilingCents` is zero for a payment marked
  * ineligible (`markedIneligible`), paid directly from an HSA, or whose latest decision is ineligible; the lesser of the decided eligible
- * amount and `netCents` when the latest decision is eligible; and `netCents` otherwise (no decision, or pending). `pendingCents` is open reserved cents,
+ * amount and `netCents` when the newest non-pending decision is eligible; and `netCents` otherwise (no non-pending decision; a pending decision is a note and never changes the ceiling). `pendingCents` is open reserved cents,
  * `receivedCents` is receipts less their reversals, `availableCents = max(0, ceiling - pending - received)` and
  * `needsReviewCents = max(0, pending + received - ceiling)`. HSA rows never alter bill or payment figures.
  */

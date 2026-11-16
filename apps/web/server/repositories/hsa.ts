@@ -17,7 +17,7 @@ export interface HsaAllocation {
   decisionId: string | null; decisionStatus: DecisionStatus | null; decisionCount: number;
   /** Version of the decision form: ALL decisions of the allocation (live or removed) plus every removal or restore event of them, so any change invalidates a stale form. */
   decisionVersion: number;
-  /** Eligible cents the latest decision named (zero when none, pending or ineligible). Without a marker or a decision the ceiling is the whole net cash; see docs/ledger.md. */
+  /** Eligible cents the newest non-pending decision named (zero when none or ineligible). Without a marker or a decision the ceiling is the whole net cash; see docs/ledger.md. */
   decidedCents: string;
   ceilingCents: string; pendingCents: string; receivedCents: string; availableCents: string; needsReviewCents: string;
   /** The payment was paid directly from an HSA at the point of service: nothing to claim, no eligibility decision. */
@@ -490,9 +490,9 @@ const no = (reason: string): Deletable => ({ deletable: false, reason });
 
 /**
  * Which decisions of one allocation can be deleted, by the guard's rule: a removal may not make "needs review" larger than it is now. The excess
- * after removing decision d is computed with the newest OTHER live decision deciding the ceiling by the one ceiling rule (docs/ledger.md): zero for
+ * after removing decision d is computed with the newest OTHER live non-pending decision deciding the ceiling by the one ceiling rule (docs/ledger.md): zero for
  * a payment marked ineligible or paid directly from an HSA or an ineligible decision, the lesser of the amount and the net cash for an eligible
- * one, and the whole net cash for a pending decision or none (the default). Keys are decision ids.
+ * one, and the whole net cash when no other live non-pending decision exists (the default). A pending decision is a note and never decides the ceiling. Keys are decision ids.
  */
 export async function decisionsDeletable(db: Queryable, householdId: string, allocationId: string): Promise<Map<string, Deletable>> {
   const { rows: st } = await db.query<{ net: string; pending: string; received: string; review: string; noCeiling: boolean }>(
@@ -506,7 +506,7 @@ export async function decisionsDeletable(db: Queryable, householdId: string, all
   if (!s) return out;
   const net = BigInt(s.net), held = BigInt(s.pending) + BigInt(s.received), before = BigInt(s.review);
   for (const d of ds) {
-    const other = ds.find((x) => x.id !== d.id);
+    const other = ds.find((x) => x.id !== d.id && x.status !== 'pending');
     const elig = other ? BigInt(other.eligible) : 0n;
     const ceiling = s.noCeiling || other?.status === 'ineligible' ? 0n : other?.status === 'eligible' ? (elig < net ? elig : net) : net;
     const after = held > ceiling ? held - ceiling : 0n;
