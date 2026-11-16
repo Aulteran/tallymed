@@ -401,3 +401,17 @@ dialog.confirm-modal { width: min(34rem, calc(100vw - 2rem)); }
 .confirm-modal .modal-body :is(input, select, textarea) { max-width: none; }
 .confirm-modal .modal-body ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 .confirm-modal label:has(+ :required)::after { content: " *"; content: " *" / ""; color: var(--danger-fg); font-weight: 700; }
+
+/* "List each installment": the table of dates and amounts. A grid with shrinkable columns, so it fits a phone without sideways scrolling. */
+.inst-list { margin: var(--space-4) 0 0; }
+.inst-list > summary { cursor: pointer; font-weight: 600; }
+.inst-rows { margin-top: var(--space-2); }
+.inst-head, .inst-row { display: grid; grid-template-columns: 2rem minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); }
+.inst-row:has(> button) { grid-template-columns: 2rem minmax(0, 1fr) minmax(0, 1fr) auto; }
+.inst-head { font-size: var(--text-sm); color: var(--fg-muted); font-weight: 600; margin-bottom: var(--space-1); }
+.inst-row input { max-width: none; min-width: 0; }
+.inst-n { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 30rem) {
+  .inst-row:has(> button) { grid-template-columns: 1.5rem minmax(0, 1fr) minmax(0, 1fr); }
+  .inst-row > button { grid-column: 2 / -1; justify-self: start; margin-top: 0; }
+}

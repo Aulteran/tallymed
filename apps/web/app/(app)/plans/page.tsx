@@ -2,10 +2,11 @@ import Link from 'next/link';
 import { formatCents } from '../../../server/money.ts';
 import { pickParties } from '../../../server/services/expenses.ts';
 import { pickPayableBills } from '../../../server/services/payments.ts';
+import { listFormState, withInstallmentList, withInstRowValues } from '../../../server/plan-installments.ts';
 import { billIdsOfPreview, hasPreviewValues, withBillTicks } from '../../../server/plan-preview-form.ts';
 import { listInstallmentQueue, listPlans, previewNewPlan } from '../../../server/services/plans.ts';
 import { AddDialog } from '../../components/AddDialog.tsx';
-import { PlanPreviewPanel, PreviewButton, tryPreview } from '../../components/PlanPreview.tsx';
+import { PlanPreviewPanel, PreviewButton, TRIMMED_LIST_PREVIEW, tryPreview } from '../../components/PlanPreview.tsx';
 import { PlanScheduleFields } from '../../components/PlanScheduleFields.tsx';
 import {
   Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, pick, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
@@ -16,7 +17,7 @@ export const metadata = { title: 'Payment Plans · TallyMed' };
 
 export default async function PlansPage({ searchParams }: { searchParams: SearchParams }) {
   const { ctx, actor, csrf } = await requireSession();
-  const p = withBillTicks(await flatWithFlash(searchParams, '/plans'));
+  const p = withInstRowValues(withBillTicks(await flatWithFlash(searchParams, '/plans')));
   // Bills ticked before a Preview stay ticked (they come back from the flash cookie, not the address).
   const ticked = new Set(billIdsOfPreview(p));
   const asOf = todayUtc();
@@ -28,7 +29,7 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
   const queue = await load(() => listInstallmentQueue(ctx.pool, actor, { state: p.state, asOf, limit: 25 }), { items: [], nextCursor: null });
   const byProvider = [...Map.groupBy(bills.items, (b) => b.providerName)].sort(([a], [b]) => a.localeCompare(b));
   const open = !!p.error || p.add === '1' || p.preview === 'create';
-  const preview = p.preview === 'create' && hasPreviewValues(p) ? await tryPreview(() => previewNewPlan(ctx.pool, actor, p)) : null;
+  const preview = p.preview === 'create' && hasPreviewValues(p) ? (p.flashTrimmed ? TRIMMED_LIST_PREVIEW : await tryPreview(() => previewNewPlan(ctx.pool, actor, withInstallmentList(p)))) : null;
   return <main id="main" className="wide">
     <div className="page-head">
       <h1>Payment Plans</h1>
@@ -55,7 +56,7 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
           <p className="muted">When the plan began, if that was before today. Leave empty for today. It is a label only; the real time of entry is kept in the history.</p>
           <label className="checkbox"><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error || p.preview ? p.matchExisting !== undefined : true} /> Match payments made since the start date</label>
           <p className="muted">Payments made on or after the start date and already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
-          <PlanScheduleFields idPrefix="new" defaults={{ inputMode: p.inputMode, totalAmount: p.totalAmount, installmentCount: p.installmentCount, installmentAmount: p.installmentAmount, remainder: p.remainder, firstDueDate: p.firstDueDate, cadence: p.cadence }} />
+          <PlanScheduleFields idPrefix="new" defaults={{ inputMode: p.inputMode, totalAmount: p.totalAmount, installmentCount: p.installmentCount, installmentAmount: p.installmentAmount, remainder: p.remainder, firstDueDate: p.firstDueDate, cadence: p.cadence, ...listFormState(p) }} />
           {preview && <PlanPreviewPanel result={preview} />}
           <div className="actions"><button type="submit">Create plan</button><PreviewButton kind="create" /></div>
           <p className="muted">Installments always add up exactly to the total. A plan is saved even if its total differs from the bills' open balance; the difference is shown on the plan.</p>

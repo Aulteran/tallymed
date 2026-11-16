@@ -171,16 +171,16 @@ const scheduleInput = {
   totalAmount: optional(positiveUsd), installmentCount: intField(1, 120), firstDueDate: optional(isoDate),
   installments: z.array(installmentLine).max(120).optional(),
   // "total": this many installments at this much price. "per_installment": this many installments at this much paid per installment.
+  // (The form's "list each installment" choice never reaches here: `withInstallmentList` turns it into `installments` first.)
   inputMode: z.preprocess(blank, z.enum(['total', 'per_installment']).default('total')),
   installmentAmount: optional(positiveUsd),
   // Where the leftover cents of a generated "total" split go. The default keeps the original behavior.
   remainder: z.preprocess(blank, z.enum(['earliest', 'last_extra', 'last_short']).default('earliest')),
 };
 
-/** The schedule fields alone (a form preview reads them from the address). Same field rules as creating and revising a plan; no list of installments. */
-const { installments: _installments, ...generatedScheduleInput } = scheduleInput;
+/** The schedule fields alone (a form preview reads them from its flash cookie). Same field rules as creating and revising a plan, a listed schedule included. */
 export const schedulePreviewSchema = z.object({
-  ...generatedScheduleInput, reviseMode: z.preprocess(blank, z.enum(['replace', 'keep_paid']).default('replace')),
+  ...scheduleInput, reviseMode: z.preprocess(blank, z.enum(['replace', 'keep_paid']).default('replace')),
 });
 
 /** Creating a plan adds a start date and whether existing payments are matched; the bills come from `bill_<id>` ticks. */

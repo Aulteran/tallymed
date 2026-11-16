@@ -566,6 +566,123 @@ try {
   assert.equal(await planCount(), plansBefore, 'Preview created no plan');
   ok('plan restructure dialog: keeps the paid installment, previews $10.00 kept + $15.00 + $5.00 without saving or putting a token or typed text in the address, saves it, reopens with an error; revise and create forms preview; dialog fits a phone');
 
+  // "List each installment": the editable table (Fill down, Remove row, live total) and the pasted schedule, both through Preview and save.
+  // Fabricated figures: $75.25, then 3 x $40.00 (monthly from 2026-09-01), which add up to $195.25.
+  await page.goto(`${origin}/plans`);
+  const listPlansBefore = await planCount();
+  await openAdd('Create plan');
+  await page.fill('#name', 'Listed plan');
+  await page.check(`#bill_${billId}`);
+  await page.uncheck('#matchExisting');
+  await page.check('#new-mode-list');
+  assert.equal(await addDialog.locator('.inst-row').count(), 12, 'twelve blank rows to start with');
+  await a11y('plans list and form with the installment list open');
+  await page.fill('input[name="inst.0.dueDate"]', '2026-09-01');
+  await page.fill('input[name="inst.0.amount"]', '40.00');
+  await page.fill('#new-total', '195.25');
+  await addDialog.locator('button:has-text("Fill down")').click();
+  assert.equal(await page.inputValue('input[name="inst.1.dueDate"]'), '2026-10-01');
+  assert.equal(await page.inputValue('input[name="inst.11.dueDate"]'), '2027-08-01', 'monthly dates step by month');
+  assert.equal(await page.inputValue('input[name="inst.11.amount"]'), '40.00');
+  assert.match(await addDialog.locator('[data-inst-summary]').innerText(), /12 installments, total \$480\.00\. Difference from total price: \$284\.75/);
+  // Weekly steps seven days from the previous row; fill a copy of the first rows and look, then put monthly back.
+  await page.selectOption('#new-cadence', 'weekly');
+  await page.fill('input[name="inst.1.dueDate"]', '');
+  await page.fill('input[name="inst.1.amount"]', '');
+  await page.fill('input[name="inst.2.dueDate"]', '');
+  await page.fill('input[name="inst.2.amount"]', '');
+  await addDialog.locator('button:has-text("Fill down")').click();
+  assert.equal(await page.inputValue('input[name="inst.1.dueDate"]'), '2026-09-08');
+  await page.selectOption('#new-cadence', 'monthly');
+  await page.fill('input[name="inst.1.dueDate"]', '2026-10-01');
+  await page.fill('input[name="inst.2.dueDate"]', '2026-11-01');
+  await page.fill('input[name="inst.2.amount"]', '40.00');
+  // Remove the eight rows after the fourth, then make the first one $75.25 and the others stay $40.00.
+  for (let k = 0; k < 8; k++) await addDialog.locator('button[aria-label="Remove row 5"]').click();
+  assert.equal(await addDialog.locator('.inst-row').count(), 4);
+  await page.fill('input[name="inst.0.amount"]', '75.25');
+  assert.equal(await page.inputValue('input[name="inst.3.amount"]'), '40.00');
+  assert.match(await addDialog.locator('[data-inst-summary]').innerText(), /4 installments, total \$195\.25\. Difference from total price: \$0\.00/);
+  await addDialog.locator('button:has-text("Add row")').click();
+  assert.equal(await addDialog.locator('.inst-row').count(), 5);
+  await addDialog.locator('button[aria-label="Remove row 5"]').click();
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=create/);
+  cleanPreviewUrl('create');
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await addDialog.locator('.preview tbody tr').count(), 4);
+  const listPreview = await addDialog.locator('.preview').innerText();
+  assert.match(listPreview, /4 installments totalling \$195\.25/);
+  assert.match(listPreview, /2026-09-01\s+\$75\.25/);
+  assert.match(listPreview, /2026-12-01\s+\$40\.00/);
+  assert.equal(await page.isChecked('#new-mode-list'), true, 'the list choice is still picked after Preview');
+  assert.equal(await page.inputValue('input[name="inst.0.amount"]'), '75.25');
+  assert.equal(await page.inputValue('input[name="inst.3.dueDate"]'), '2026-12-01');
+  await a11y('plans list with the installment list preview');
+  assert.equal(await planCount(), listPlansBefore, 'Preview created no plan');
+  await addDialog.locator('button:has-text("Create plan")').click();
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const listedText = await text();
+  assert.match(listedText, /2026-09-01/);
+  assert.match(listedText, /\$75\.25/);
+  assert.match(listedText, /2026-12-01/);
+  assert.match(listedText, /4 installments|\$195\.25/);
+  await page.goto(`${origin}/plans`);
+  assert.equal(await planCount(), listPlansBefore + 1);
+
+  // Pasted: one line is wrong; the Preview names it, the box keeps the text, and the fixed text saves.
+  await openAdd('Create plan');
+  await page.fill('#name', 'Pasted plan');
+  await page.check(`#bill_${billId}`);
+  await page.uncheck('#matchExisting');
+  await page.check('#new-mode-list');
+  const pasted = ['2026-09-01 75.25', '', '10/1/2026, $40.00', '2026-11-01 forty', '2026-12-01\t40.00', '2027-01-01 4.75'].join('\n');
+  await page.fill('#new-paste', pasted);
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=create/);
+  cleanPreviewUrl('create');
+  await addDialog.waitFor({ state: 'visible' });
+  assert.match(await addDialog.locator('.preview').innerText(), /Line 4: amount is not a number/);
+  assert.equal(await addDialog.locator('.preview tbody tr').count(), 0, 'no table is shown for a list with a bad line');
+  assert.equal(await page.inputValue('#new-paste'), pasted, 'the pasted text is still in the box');
+  await a11y('plans list with the pasted schedule problems');
+  // Saving the bad text is refused with the same line named; nothing is written.
+  await addDialog.locator('button:has-text("Create plan")').click();
+  await addDialog.locator('.error').first().waitFor({ state: 'visible' });
+  assert.match(await addDialog.locator('.error').first().innerText() + await addDialog.locator('.inst-list').innerText(), /Line 4: amount is not a number/);
+  assert.equal(await page.inputValue('#new-paste'), pasted);
+  assert.equal(await planCount(), listPlansBefore + 1);
+  await page.fill('#new-paste', pasted.replace('forty', '40.00'));
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=create/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await addDialog.locator('.preview tbody tr').count(), 5);
+  assert.match(await addDialog.locator('.preview').innerText(), /5 installments totalling \$200\.00/);
+  await addDialog.locator('button:has-text("Create plan")').click();
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const pastedText = await text();
+  assert.match(pastedText, /2026-10-01/);
+  assert.match(pastedText, /2027-01-01/);
+  assert.match(pastedText, /\$4\.75/);
+  await page.goto(`${origin}/plans`);
+  assert.equal(await planCount(), listPlansBefore + 2);
+
+  // A phone: the table of rows fits without sideways scrolling.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`${origin}/plans`);
+  await openAdd('Create plan');
+  await page.check('#new-mode-list');
+  await addDialog.locator('button:has-text("Add row")').click();
+  const instFit = await page.evaluate(() => {
+    const dialog = document.querySelector('dialog[open]');
+    const rows = [...document.querySelectorAll('.inst-row')];
+    return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: dialog.scrollWidth, dialogClient: dialog.clientWidth, rows: rows.length, rowRight: Math.max(...rows.map((r) => r.getBoundingClientRect().right)), dialogRight: dialog.getBoundingClientRect().right };
+  });
+  assert.ok(instFit.rows >= 13 && instFit.scrollWidth <= instFit.width && instFit.dialog <= instFit.dialogClient && instFit.rowRight <= instFit.dialogRight, `the installment table fits a phone: ${JSON.stringify(instFit)}`);
+  await a11y('plans list with the installment list at phone width');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  ok('plan from a listed schedule: table with Fill down (monthly and weekly), Remove row and a live total with the difference from the price; Preview shows the listed rows; pasted text with one bad line is named by line in the Preview and on save, then saves; table fits a phone');
+
   // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
   await a11y('HSA list');

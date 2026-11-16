@@ -8,7 +8,8 @@ import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
 import { flashCookieName, flashSetCookie } from './flash.ts';
 import { withCheckedRows, withFormRows } from './form-rows.ts';
-import { PREVIEW_KEEP, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
+import { BILL_KEYS, LIST_FIELDS, PREVIEW_KEEP, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
+import { withInstallmentList, withInstRowsFlash } from './plan-installments.ts';
 import { authorize } from './authz.ts';
 import { log, logError } from './log.ts';
 import { assertTransport, clientInfo, type ClientInfo } from './proxy.ts';
@@ -254,6 +255,8 @@ function route(opts: {
   errorPath: (body: Record<string, unknown>) => string;
   /** Fields to keep for re-filling the form at errorPath after a validation error (sent as a flash cookie, not in the URL). */
   keepFields?: string[];
+  /** Rewrites the body before its `keepFields` go into the flash cookie (a row list is spelled as one text there). */
+  flashBody?: (body: Record<string, unknown>) => Record<string, unknown>;
   /** Replaces the bounded form/JSON reader (uploads read multipart). */
   readBody?: (req: Request, ctx: AppContext) => Promise<Record<string, unknown>>;
   /** Authenticate before reading the body, so an unauthenticated caller cannot make the server buffer a large upload. */
@@ -317,7 +320,7 @@ function route(opts: {
       let flash: string | null = null;
       try {
         errorPath = opts.errorPath(body);
-        if (opts.keepFields) flash = flashSetCookie(ctx.config, errorPath, body, opts.keepFields);
+        if (opts.keepFields) flash = flashSetCookie(ctx.config, errorPath, opts.flashBody ? opts.flashBody(body) : body, opts.keepFields);
       } catch {
         errorPath = null;
       }
@@ -709,9 +712,10 @@ const MONEY_ACTIONS: Record<string, {
   // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
   'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
-  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
+  // `prepare: withInstallmentList` reads the form's "List each installment" table or pasted text (docs/contracts.md, "Plans").
+  'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: withInstallmentList, ok: (_b, id) => `/plans/${id}` },
   // `dialog` marks a post from the "Plan was restructured" dialog so an error reopens that dialog; it is not part of the service input.
-  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', 'dialog', ...SCHEDULE_FIELDS], prepare: withoutFormMarker, ok: planPath },
+  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', 'dialog', ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: (b) => withInstallmentList(withoutFormMarker(b)), ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
   'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
@@ -742,6 +746,8 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   session: true,
   errorPath: a.error,
   keepFields: a.keep,
+  // The create form also keeps its ticked bills (as `bill.<n>`), so a refused list does not lose them.
+  flashBody: a.keep?.includes('instRows') ? (b) => withInstRowsFlash(a.keep!.includes('bill.0') ? withBillSlots(b) : b) : undefined,
   keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
     const result = await a.service(ctx.pool, actor!, a.prepare ? a.prepare(body) : body, requestId);
@@ -761,13 +767,14 @@ expenseRoutes.set('plans/preview', route({
   session: true,
   errorPath: (b) => previewPage(previewKind(b), b),
   keepFields: PREVIEW_KEEP,
+  flashBody: (b) => withInstRowsFlash(withBillSlots(b)),
   keepsUndo: true,
   async run({ ctx, actor, body, req }) {
     authorize(actor!, 'expenses:write');
     const kind = previewKind(body);
     const page = previewPage(kind, body);
     // Always set the cookie, an expired one when there is nothing to keep, so an older flash for this page cannot show up in its place.
-    const flash = flashSetCookie(ctx.config, page, withBillSlots(body), PREVIEW_KEEP) ?? `${flashCookieName(ctx.config)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${ctx.config.secureCookies ? '; Secure' : ''}`;
+    const flash = flashSetCookie(ctx.config, page, withInstRowsFlash(withBillSlots(body)), PREVIEW_KEEP) ?? `${flashCookieName(ctx.config)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${ctx.config.secureCookies ? '; Secure' : ''}`;
     if (wantsHtml(req)) return { response: redirect(ctx.config, `${page}?preview=${kind}`, { 'Set-Cookie': flash }) };
     return { json: { ok: true, preview: kind } };
   },

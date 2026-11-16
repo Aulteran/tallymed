@@ -1,16 +1,24 @@
 import { AppError } from '../../server/errors.ts';
 import { formatCents } from '../../server/money.ts';
 import type { PlanPreview, PlanWarning } from '../../server/services/plans.ts';
+import { InstallmentListError } from '../../server/plan-installments.ts';
 import { errorMessage } from './messages.ts';
+
+export type PreviewResult = { preview: PlanPreview } | { error: string; lines?: string[] };
+
+/** What a preview shows when the typed list was too long to carry through the flash cookie: the saved list would be longer than any preview could show. */
+export const TRIMMED_LIST_PREVIEW: PreviewResult = { error: 'the list is too long to carry through a Preview, so only its first part could be kept. Shorten it to preview it, or save it and check the plan page.' };
 
 /**
  * Runs a preview read. An invalid schedule (or a refusal the save would make) comes back as the sentence to show in place of the
  * table; anything unexpected is rethrown. Only previews that the address asked for are computed.
  */
-export async function tryPreview(run: () => Promise<PlanPreview>): Promise<{ preview: PlanPreview } | { error: string }> {
+export async function tryPreview(run: () => Promise<PlanPreview>): Promise<PreviewResult> {
   try {
     return { preview: await run() };
   } catch (error) {
+    // A listed schedule that could not be read: every line's problem, numbered, in place of the table.
+    if (error instanceof InstallmentListError) return { error: 'the list of installments has problems.', lines: error.lines };
     if (error instanceof AppError && error.code !== 'not_found' && error.code !== 'internal') return { error: error.message !== error.code ? error.message : (errorMessage(error.code) ?? '') };
     throw error;
   }
@@ -33,8 +41,9 @@ function warningText(w: PlanWarning): string {
  * What the form would save, as a table, with the warnings the plan would get. Shown inside the form that asked for it, whose fields
  * stay filled so the normal save button can be pressed next. Nothing has been written when this is on screen.
  */
-export function PlanPreviewPanel({ result }: { result: { preview: PlanPreview } | { error: string } }) {
-  if ('error' in result) return <section className="card preview" aria-label="Preview of the schedule"><h3>Preview</h3><p className="error" role="alert">This would not be saved: {result.error}</p></section>;
+export function PlanPreviewPanel({ result }: { result: PreviewResult }) {
+  if ('error' in result) return <section className="card preview" aria-label="Preview of the schedule"><h3>Preview</h3>
+    <div className="error" role="alert"><p>This would not be saved: {result.error}</p>{result.lines && <ul>{result.lines.map((t) => <li key={t}>{t}</li>)}</ul>}</div></section>;
   const p = result.preview;
   return <section className="card preview" aria-label="Preview of the schedule">
     <h3>Preview: nothing is saved yet</h3>
