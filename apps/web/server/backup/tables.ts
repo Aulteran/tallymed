@@ -45,6 +45,8 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   // Who removed or restored a payment and who released or reinstated a direct HSA funding, in the order it happened. Ids and a reason only.
   { name: 'payment_removal_events', orderBy: 'seq', since: '0017' },
   { name: 'payment_hsa_funding_events', orderBy: 'seq', since: '0017' },
+  // Payments recorded as ineligible for HSA (0019): a payment id and who marked it, nothing else.
+  { name: 'payment_hsa_ineligible', orderBy: 'payment_id', since: '0019' },
   { name: 'payment_entries', orderBy: `(kind <> 'allocation'), seq` },
   { name: 'payment_plans', orderBy: 'id' },
   { name: 'payment_plan_bills', orderBy: 'plan_id, bill_id' },

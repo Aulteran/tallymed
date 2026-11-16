@@ -179,7 +179,7 @@ const scheduleInput = {
 
 export const paymentSchemas = {
   createPayment: z.strictObject({
-    idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, paidWithId: optional(uuid), reference: optional(text(80).min(1)), note: optionalText(500),
+    idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, paidWithId: optional(uuid), hsaIneligible: checkbox, reference: optional(text(80).min(1)), note: optionalText(500),
     ...allocationInput, ...csrf,
   }).refine(mixedAllocation).transform((d) => {
     const { billId: _b, allocateAmount: _a, allocations: _l, ...rest } = d;
@@ -354,7 +354,7 @@ export const hsaSchemas = {
   reverseReceipt: z.strictObject({ idempotencyKey, receiptId: uuid, allocationId: uuid.optional(), effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
 };
 
-const hsaState = z.enum(['undecided', 'eligible', 'available', 'pending', 'received', 'needs_review', 'ineligible']);
+const hsaState = z.enum(['eligible', 'available', 'pending', 'received', 'needs_review', 'ineligible']);
 export const hsaFilterSchemas = {
   scope: z.object({ memberId: optionalFilter(uuid), providerId: optionalFilter(uuid), from: optionalFilter(isoDate), to: optionalFilter(isoDate) }),
   allocations: z.object({

@@ -138,8 +138,9 @@ export const lockPaymentsForMoney = paymentRepo.lockPayments;
 // ---------- HSA reimbursements (M04): stable figures for reports, exports and the MCP (M06) ----------
 
 /**
- * HSA reconciliation figures per payment allocation, all decimal strings of integer cents. `ceilingCents` is the lesser of the
- * decided eligible amount and `netCents` (zero while undecided, pending or ineligible). `pendingCents` is open reserved cents,
+ * HSA reconciliation figures per payment allocation, all decimal strings of integer cents. `ceilingCents` is zero for a payment marked
+ * ineligible (`markedIneligible`), paid directly from an HSA, or whose latest decision is ineligible; the lesser of the decided eligible
+ * amount and `netCents` when the latest decision is eligible; and `netCents` otherwise (no decision, or pending). `pendingCents` is open reserved cents,
  * `receivedCents` is receipts less their reversals, `availableCents = max(0, ceiling - pending - received)` and
  * `needsReviewCents = max(0, pending + received - ceiling)`. HSA rows never alter bill or payment figures.
  */
@@ -149,6 +150,8 @@ export interface HsaAllocationContract {
   availableCents: string; needsReviewCents: string;
   /** Paid directly from an HSA at the point of service: available is always zero and no claim or decision exists. */
   directHsa: boolean;
+  /** Recorded as ineligible for HSA when the payment was created: the ceiling is zero. */
+  markedIneligible: boolean;
 }
 
 /** One page of HSA figures, newest payment first; follow `nextCursor` until null for every row. Filters match the HSA screens. */
@@ -159,7 +162,7 @@ export async function listHsaFigures(pool: Pool | Queryable, actor: Actor, filte
     items: page.items.map((a) => ({
       allocationId: a.allocationId, paymentId: a.paymentId, billId: a.billId, memberId: a.memberId, providerId: a.providerId, paidOn: a.paidOn, netCents: a.netCents,
       decisionStatus: a.decisionStatus, ceilingCents: a.ceilingCents, pendingCents: a.pendingCents, receivedCents: a.receivedCents,
-      availableCents: a.availableCents, needsReviewCents: a.needsReviewCents, directHsa: a.directHsa,
+      availableCents: a.availableCents, needsReviewCents: a.needsReviewCents, directHsa: a.directHsa, markedIneligible: a.markedIneligible,
     })),
     nextCursor: page.nextCursor,
   };
