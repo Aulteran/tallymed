@@ -325,24 +325,35 @@ try {
   assert.match(await text(), /No payments match/);
   ok('payment method saved, chosen as paid with, shown on the payment and bill, and totalled ($90.00 net)');
 
-  // HSA account, an HSA card linked to it, and a payment paid directly from the HSA (fabricated names and digits).
-  await page.goto(`${origin}/hsa-accounts?add=1`);
+  // HSA account created together with its spending card (one form, no separate linking step), then a payment paid directly from the HSA.
+  await page.goto(`${origin}/hsa-accounts`); // the old page now redirects to the HSA page
+  await page.waitForURL(/\/hsa$/);
+  await page.goto(`${origin}/hsa?add=1`);
   await addDialog.waitFor({ state: 'visible' });
-  await a11y('HSA accounts list and add form');
+  assert.equal(await page.locator('#cardNickname').isVisible(), false, 'card fields stay hidden until the box is ticked');
+  await a11y('HSA page and add account form');
   await page.fill('#name', 'Family HSA');
   await page.fill('#administrator', 'Example HSA Bank');
   await page.fill('#lastFour', '7788');
+  // Ticking, typing a partial value and unticking must not leave a hidden field that blocks the submit.
+  await page.check('#hasCard');
+  await page.fill('#cardLastFour', '12');
+  await page.uncheck('#hasCard');
+  assert.equal(await page.evaluate(() => document.querySelector('form[action="/api/expenses/hsa-accounts/create"]').checkValidity()), true, 'stale hidden card text does not block the form');
+  await page.check('#hasCard');
+  await page.fill('#cardLastFour', '');
+  await page.fill('#cardNickname', 'HSA Visa');
+  await page.fill('#cardLastFour', '0042');
+  await a11y('HSA add account form with the spending card fields');
   await page.click('form[action="/api/expenses/hsa-accounts/create"] button[type=submit]');
-  await page.waitForURL(/\/hsa-accounts\/[0-9a-f-]{36}$/);
+  await page.waitForURL(/\/hsa$/);
+  assert.match(await text(), /Family HSA ••7788/);
+  await page.goto(`${origin}/payment-methods`);
+  assert.match(await text(), /HSA Visa ••0042[\s\S]*HSA\/FSA card[\s\S]*Family HSA/); // already in Payment methods, already linked
+  await page.goto(`${origin}/hsa`); // the account detail is reached from the list
+  await page.click('a:has-text("Family HSA")');
+  await page.waitForURL(/\/hsa\/accounts\/[0-9a-f-]{36}$/);
   await a11y('HSA account detail');
-  await page.goto(`${origin}/payment-methods?add=1`);
-  await addDialog.waitFor({ state: 'visible' });
-  await page.fill('#nickname', 'HSA Visa');
-  await page.selectOption('#kind', 'hsa_fsa_card');
-  await page.fill('#lastFour', '0042');
-  await page.selectOption('#hsaAccountId', { label: 'Family HSA' });
-  await page.click('form[action="/api/expenses/payment-methods/create"] button[type=submit]');
-  await page.waitForURL(/\/payment-methods\/[0-9a-f-]{36}$/);
   await page.goto(`${origin}/payments?add=1`);
   await addDialog.waitFor({ state: 'visible' });
   await page.fill('#paidOn', '2026-03-06');
@@ -354,9 +365,13 @@ try {
   await a11y('payment detail, paid directly from an HSA');
   await page.goto(`${origin}/payments`);
   assert.match(await text(), /Paid from HSA/);
-  await page.goto(`${origin}/hsa-accounts`);
+  await page.goto(`${origin}/hsa`);
   assert.match(await text(), /Family HSA ••7788[\s\S]*\$15\.00/);
-  await a11y('HSA accounts with a direct payment');
+  await a11y('HSA page with an account and a direct payment');
+  await page.goto(`${origin}/hsa?accountsArchived=yes`); // the accounts toggle must not disturb the payments table
+  assert.doesNotMatch(await text(), /could not be used|invalid/i);
+  assert.match(await text(), /Hide archived accounts/);
+  assert.match(await text(), /Family HSA ••7788/);
   // A direct payment applied to a new bill: the HSA page, the allocation page and the list show it as settled, with nothing to claim or decide.
   await page.goto(`${origin}/bills/new`);
   await enterBill({ provider: 'Example Clinic', reference: 'HSA-DIRECT-1', amount: '40.00', responsibility: '40.00', status: 'confirmed', visit: true });
@@ -379,7 +394,7 @@ try {
   assert.equal(await page.locator('form[action="/api/expenses/hsa/decide"]').count(), 0);
   assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 0);
   await a11y('HSA allocation page, paid directly');
-  ok('HSA account created, HSA card linked, and a payment paid directly from the HSA is marked and totalled ($15.00)');
+  ok('HSA account created with its spending card in one step (listed and linked in Payment methods), and a payment paid directly from the HSA is marked and totalled ($15.00)');
 
   // A payment plan is an obligation. Matching an installment references the cash and changes no balance.
   await page.goto(`${origin}/plans`);
@@ -770,7 +785,7 @@ try {
     await page.screenshot({ path: path.join(shots, 'phone-menu.png') });
     await page.click('button.menu-toggle');
   }
-  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/payment-methods`, `${origin}/payment-methods?add=1`, `${origin}/hsa-accounts`, `${origin}/hsa-accounts?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
+  for (const target of [`${origin}/providers`, `${origin}/providers?add=1`, `${origin}/members`, `${origin}/visits?add=1`, `${origin}/payments?add=1`, `${origin}/payment-methods`, `${origin}/payment-methods?add=1`, `${origin}/hsa?add=1`, `${origin}/plans?add=1`, `${origin}/users`, documentUrl, `${origin}/documents`, paymentUrl, planUrl, `${origin}/payments`, `${origin}/plans`, `${origin}/hsa`, hsaUrl, receiptUrl, `${origin}/hsa/claims`, `${origin}/proposals`, `${origin}/assistant`, proposalUrl, `${origin}/settings`, `${origin}/settings/proxy`, `${origin}/settings/email`, `${origin}/settings/signin`, `${origin}/settings/signin?add=1`, `${origin}/settings/backup`]) {
     await page.goto(target);
     const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth }));
     assert.ok(o.scrollWidth <= o.width, `no horizontal page scroll on a phone at ${target}: ${JSON.stringify(o)}`);

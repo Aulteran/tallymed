@@ -681,9 +681,9 @@ const MONEY_ACTIONS: Record<string, {
   'payment-methods/create': { service: paymentMethods.createPaymentMethod, error: () => '/payment-methods', keep: ['nickname', 'kind', 'lastFour', 'hsaAccountId'], ok: entity('/payment-methods') },
   'payment-methods/update': { service: paymentMethods.updatePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
   'payment-methods/archive': { service: paymentMethods.archivePaymentMethod, error: (b) => `/payment-methods/${str(b.id)}`, ok: entity('/payment-methods') },
-  'hsa-accounts/create': { service: hsaAccounts.createHsaAccount, error: () => '/hsa-accounts', keep: ['name', 'administrator', 'lastFour'], ok: entity('/hsa-accounts') },
-  'hsa-accounts/update': { service: hsaAccounts.updateHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
-  'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
+  'hsa-accounts/create': { service: hsaAccounts.createHsaAccount, error: () => '/hsa', keep: ['name', 'administrator', 'lastFour', 'hasCard', 'cardNickname', 'cardLastFour'], ok: () => '/hsa' },
+  'hsa-accounts/update': { service: hsaAccounts.updateHsaAccount, error: (b) => `/hsa/accounts/${str(b.id)}`, ok: entity('/hsa/accounts') },
+  'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa/accounts/${str(b.id)}`, ok: entity('/hsa/accounts') },
   'payments/remove': { service: payments.removePayment, error: paymentOf, keep: ['reason'], ok: () => '/payments' },
   // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
   'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },

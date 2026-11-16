@@ -12,7 +12,7 @@ export default async function HsaClaimsPage({ searchParams }: { searchParams: Se
   const claims = await load(() => listHsaClaims(ctx.pool, actor, { ...filters, cursor: p.cursor }), { items: [], nextCursor: null });
   const receipts = await load(() => listHsaReceipts(ctx.pool, actor, { cursor: p.rcursor, limit: '10' }), { items: [], nextCursor: null });
   return <main id="main" className="wide">
-    <p className="crumb"><Link href="/hsa">← HSA reimbursements</Link></p>
+    <p className="crumb"><Link href="/hsa">← HSA</Link></p>
     <h1>HSA claims and reimbursements</h1>
     <p className="tabs"><Link href="/hsa/claims" aria-current={!p.status ? 'true' : undefined}>All claims</Link><Link href="/hsa/claims?status=open" aria-current={p.status === 'open' ? 'true' : undefined}>Open claims</Link><Link href="/hsa/claims?status=closed" aria-current={p.status === 'closed' ? 'true' : undefined}>Closed claims</Link></p>
     <Banner invalid={claims.invalid || receipts.invalid} />

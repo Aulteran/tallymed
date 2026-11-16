@@ -22,6 +22,8 @@ A submitted claim reserves amounts. A claim line can move through submitted, par
 
 A payment made with an HSA card linked to an HSA account is paid directly from that HSA at the point of service. It is settled: it has nothing available to claim, takes no eligibility decision and no reimbursement, and is shown beside the claim figures as paid directly from the HSA. A refund still lowers its net cash. A card without an account link is only a label and its payments stay claimable.
 
+HSA accounts live on the HSA page, not a page of their own. Adding an account offers "This account also has a spending card": ticking it saves the card as an HSA/FSA payment method (so it appears on Payment methods at once) and links it to the new account in the same step. A second card, or a card added earlier, is linked from its payment method page.
+
 Example: a $120 bill has a $75 applied payment with $60 confirmed eligible. A $50 claim followed by a $20 receipt leaves a $45 provider balance, $30 pending, $20 reimbursed, and $10 available. A later refund changes the bill balance and may reduce eligibility. Record the refund, recompute eligibility from the remaining covered cash, and surface any resulting excess for review.
 
 ## Transactions and verification

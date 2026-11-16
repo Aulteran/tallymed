@@ -8,6 +8,9 @@ import { recordAudit } from '../repositories/audit.ts';
 import * as repo from '../repositories/hsa-accounts.ts';
 import * as payRepo from '../repositories/payments.ts';
 import { paymentSchemas, parse, schemas } from '../validation.ts';
+import { withRetry } from './support.ts';
+import { insertMethodWithLink, PAYMENT_METHOD_NICKNAME_TAKEN } from './payment-methods.ts';
+export { requireActiveAccount } from './hsa-account-guard.ts';
 
 const NAME_TAKEN = 'You already have an active HSA account with that name';
 
@@ -37,20 +40,28 @@ export async function getHsaAccount(pool: Pool, actor: Actor, id: string) {
   return a;
 }
 
-export async function createHsaAccount(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string }> {
+/**
+ * Creates an HSA account and, when the household says it also has a spending card, saves that card as an HSA/FSA payment method linked to
+ * the account. One transaction: a card that cannot be saved (for example a nickname already in use) leaves no account behind either.
+ */
+export async function createHsaAccount(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; paymentMethodId: string | null }> {
   authorize(actor, 'expenses:write');
   const d = parse(paymentSchemas.createHsaAccount, input);
   try {
-    return await withTransaction(pool, async (tx) => {
+    // The card's nickname is claimed after the account name, which is not the documented lock order (payment method before account), so a rare
+    // three-way wait can end in a PostgreSQL deadlock abort. Each attempt is a fresh transaction, so retrying it is safe.
+    return await withRetry(() => withTransaction(pool, async (tx) => {
       const id = await repo.insertAccount(tx, { householdId: actor.householdId, userId: actor.userId, name: d.name, administrator: d.administrator, lastFour: d.lastFour });
       await recordAudit(tx, {
         householdId: actor.householdId, actorUserId: actor.userId, action: 'hsa_account.created', entityType: 'hsa_account', entityId: id, requestId,
-        detail: { hsaAccountId: id, hasLastFour: d.lastFour !== null, hasAdministrator: d.administrator !== '' },
+        detail: { hsaAccountId: id, hasLastFour: d.lastFour !== null, hasAdministrator: d.administrator !== '', withSpendingCard: d.card !== null },
       });
-      return { id };
-    });
+      const paymentMethodId = d.card ? await insertMethodWithLink(tx, actor, { ...d.card, hsaAccountId: id }, requestId) : null;
+      return { id, paymentMethodId };
+    }));
   } catch (e) {
     if (isUniqueViolation(e, 'hsa_accounts_active_name')) throw new AppError('conflict', NAME_TAKEN);
+    if (isUniqueViolation(e, 'payment_methods_active_nickname')) throw new AppError('conflict', PAYMENT_METHOD_NICKNAME_TAKEN);
     throw e;
   }
 }
@@ -95,11 +106,4 @@ export async function archiveHsaAccount(pool: Pool, actor: Actor, input: unknown
     if (isUniqueViolation(e, 'hsa_accounts_active_name')) throw new AppError('conflict', 'Another active HSA account uses that name. Rename one of them first.');
     throw e;
   }
-}
-
-/** Takes a share lock on an active account, so an archive cannot slip in before commit. Last in the lock order. */
-export async function requireActiveAccount(tx: Queryable, actor: Actor, accountId: string): Promise<void> {
-  const a = await repo.getAccount(tx, actor.householdId, accountId, 'share');
-  if (!a) throw new AppError('not_found');
-  if (a.archivedAt) throw new AppError('conflict', 'That HSA account is archived. Restore it or choose another card.');
 }

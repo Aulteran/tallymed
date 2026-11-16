@@ -19,7 +19,7 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
   const canClaim = !frozen && BigInt(a.availableCents) > 0n;
   const current = decisions[0];
   return <main id="main" className="wide">
-    <p className="crumb"><Link href="/hsa">← HSA reimbursements</Link></p>
+    <p className="crumb"><Link href="/hsa">← HSA</Link></p>
     <h1>HSA: {a.memberName} · {a.billLabel}</h1>
     <p><DecisionPill a={a} /> Paid {a.paidOn} · <Link href={`/payments/${a.paymentId}`}>payment</Link> · <Link href={`/bills/${a.billId}`}>bill</Link> · <Link href="/hsa">All HSA payments</Link></p>
     <Banner code={q.error} />

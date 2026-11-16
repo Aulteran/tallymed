@@ -10,6 +10,9 @@ export default {
   // The Users page used to live at /operators; keep old bookmarks working.
   async redirects() {
     return [
+      // HSA accounts used to have their own page; they now live on the HSA page, and the detail page moved under it.
+      { source: '/hsa-accounts', destination: '/hsa', permanent: false },
+      { source: '/hsa-accounts/:id', destination: '/hsa/accounts/:id', permanent: false },
       { source: '/operators', destination: '/users', permanent: false },
       { source: '/operators/:path*', destination: '/users/:path*', permanent: false },
     ];
