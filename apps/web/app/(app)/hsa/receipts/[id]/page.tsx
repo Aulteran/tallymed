@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { AttachmentsPanel } from '../../../../components/documents.tsx';
+import { can } from '../../../../../server/authz.ts';
 import { getHsaReceiptDetail } from '../../../../../server/services/hsa.ts';
+import { DELETE_EFFECT, DeleteHsaRecord } from '../../../../components/hsa.tsx';
 import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, q80, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -11,10 +13,16 @@ export default async function HsaReceiptPage({ params, searchParams }: { params:
   const { id } = await params;
   const q = await flatWithFlash(searchParams, `/hsa/receipts/${id}`);
   const { data } = await load(() => getHsaReceiptDetail(ctx.pool, actor, id), null);
-  const { receipt: r, entries, history } = data!;
+  const { receipt: r, entries, history, deletable } = data!;
+  const fromClaim = r.origin === 'claim' ? entries.find((e) => e.claimId)?.claimId ?? null : null;
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/hsa/claims">← Claims and reimbursements</Link></p>
-    <h1>Reimbursement of <Money cents={r.amountCents} /> on {r.receivedOn}</h1>
+    <div className="page-head">
+      <h1>Reimbursement of <Money cents={r.amountCents} /> on {r.receivedOn}</h1>
+      {can(actor, 'records:remove') && <DeleteHsaRecord id="delete-receipt" label="Delete reimbursement" title="Delete this reimbursement?" action="/api/expenses/hsa/receipt-remove" csrf={csrf}
+        fields={fromClaim ? { receiptId: r.id, claimId: fromClaim } : { receiptId: r.id }} deletable={deletable} effect={DELETE_EFFECT.receipt}
+        record={<>reimbursement of <Money cents={r.amountCents} /> received {r.receivedOn}</>} />}
+    </div>
     <p>{label(r.source)}{r.reference ? ` · ${r.reference}` : ''} · {r.origin === 'claim' ? 'Paid against claim lines' : 'Not claimed here'} · recorded by {r.createdByName ?? 'unknown'} {dateOf(r.createdAt)} {r.reversed && <span className="pill warn">Reversed</span>} · <Link href="/hsa/claims">All claims</Link></p>
     {r.evidenceType && <p>Evidence: {label(r.evidenceType)}{r.evidenceNote ? `: ${r.evidenceNote}` : ''}</p>}
     {r.note && <p>{r.note}</p>}

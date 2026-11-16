@@ -293,7 +293,7 @@ test('existing HSA figures are unchanged for ordinary payments: the new view equ
     const cols = 'allocation_id, net_cents, decision_status, ceiling_cents, pending_cents, received_cents, available_cents, needs_review_cents';
     const oldRows = (await t.db.pool.query(OLD)).rows.filter((r) => r.allocation_id !== dAl);
     const newRows = (await t.db.pool.query(`select ${cols} from hsa_allocation_status where not direct_hsa order by allocation_id`)).rows;
-    // By design (0019) an allocation with no decision is eligible for its whole net cash instead of zero; every allocation that has a decision reads exactly as before.
+    // By design (0021) an allocation with no decision is eligible for its whole net cash instead of zero; every allocation that has a decision reads exactly as before.
     const decided = (r) => r.decision_status !== null;
     assert.deepEqual(newRows.filter(decided), oldRows.filter(decided), 'every decided ordinary allocation reads exactly as before');
     const undecidedRows = newRows.filter((r) => !decided(r));

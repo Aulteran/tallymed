@@ -34,7 +34,7 @@ async function records(t) {
   const [a] = (await t.payment(pm.id)).allocations;
   const cur = await hsaRepo.getAllocation(t.db.pool, t.actor.householdId, a.allocationId);
   const decision = await hsa.recordDecision(t.db.pool, t.actor, {
-    idempotencyKey: t.key(), allocationId: a.allocationId, version: String(cur.decisionCount), status: 'eligible', eligibleAmount: '60.00',
+    idempotencyKey: t.key(), allocationId: a.allocationId, version: String(cur.decisionVersion), status: 'eligible', eligibleAmount: '60.00',
     rationale: 'Qualified expense', evidenceType: 'receipt', evidenceNote: 'Pharmacy receipt on file', decidedOn: '2026-04-05',
   }, 'r');
   const claim = await hsa.submitClaim(t.db.pool, t.actor, { idempotencyKey: t.key(), submittedOn: '2026-04-10', administrator: 'Example HSA Bank', lines: [{ allocationId: a.allocationId, amount: '50.00' }] }, 'r');

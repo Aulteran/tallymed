@@ -1,4 +1,4 @@
-// Default-eligible HSA reimbursements and the payment-level ineligible marker (migration 0019). Fabricated data only.
+// Default-eligible HSA reimbursements and the payment-level ineligible marker (migration 0021). Fabricated data only.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -195,5 +195,104 @@ test('the payment form accepts the checkbox (on or yes) and a JSON boolean; an u
     for (const extra of [{ hsaIneligible: 'on' }, { hsaIneligible: 'yes' }, {}]) assert.ok([200, 302, 303].includes((await send(extra)).status));
     assert.equal(await t.count('payments'), 3);
     assert.equal(await t.count('payment_hsa_ineligible'), 2);
+  } finally { await t.db.drop(); }
+});
+
+// ---------- interaction with the admin delete (with undo) of HSA decisions (migration 0020) ----------
+
+const rmDecision = (t, decisionId) => hsa.removeHsaDecision(t.db.pool, t.actor, { idempotencyKey: t.key(), decisionId, reason: 'Fabricated mistake' }, 'r');
+const undoIt = (t) => undo(t.db.pool, t.actor, { idempotencyKey: t.key() }, 'r');
+const figures = async (t, id) => { const f = await figs(t, id); return [f.decisionStatus, f.decisionCount, f.ceilingCents, f.pendingCents, f.availableCents, f.needsReviewCents]; };
+const MSG_UNDO_REFUSED = /^Undoing this deletion would put pending plus received reimbursement above what the payment.s eligible amount supports/;
+
+test('deleting a decision on a default-eligible payment falls back to the whole net cash, and its undo brings the decision back', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const x = await t.paid('100.00');
+    const d = await decide(t, x.allocationId, 'eligible', '60.00');
+    await claim(t, x.allocationId, '50.00');
+    assert.deepEqual(await figures(t, x.allocationId), ['eligible', 2 - 1, '6000', '5000', '1000', '0']);
+    // The decision is the only thing capping the ceiling at 60.00, so deleting it is never refused; the deletable helper agrees.
+    assert.deepEqual((await hsa.getHsaAllocationDetail(t.db.pool, t.actor, x.allocationId)).decisions[0].deletable, { deletable: true, reason: null });
+    await rmDecision(t, d.id);
+    assert.deepEqual(await figures(t, x.allocationId), [null, 0, '10000', '5000', '5000', '0'], 'back to the default: the whole net cash is eligible');
+    assert.equal((await hsaRepo.listDecisions(t.db.pool, t.actor.householdId, x.allocationId)).length, 0);
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+    // The undo restores the decision and its ceiling exactly (the pending 50.00 fits under 60.00).
+    await undoIt(t);
+    assert.deepEqual(await figures(t, x.allocationId), ['eligible', 1, '6000', '5000', '1000', '0']);
+
+    // An ineligible decision is the other way round: deleting it makes the payment eligible again, and the undo is refused while cash depends on that.
+    const y = await t.paid('80.00');
+    const di = await decide(t, y.allocationId, 'ineligible');
+    assert.deepEqual(await figures(t, y.allocationId), ['ineligible', 1, '0', '0', '0', '0']);
+    await assert.rejects(claim(t, y.allocationId, '10.00'), code('conflict'));
+    await rmDecision(t, di.id);
+    assert.deepEqual(await figures(t, y.allocationId), [null, 0, '8000', '0', '8000', '0']);
+    await claim(t, y.allocationId, '30.00');
+    await undoIt(t).then(() => assert.fail('the ineligible decision would leave a claim with no ceiling'), (e) => { assert.equal(e.code, 'conflict'); assert.match(e.message, MSG_UNDO_REFUSED); });
+    assert.deepEqual(await figures(t, y.allocationId), [null, 0, '8000', '3000', '5000', '0'], 'the refused undo changed nothing');
+    // A restore of a lower eligible decision is refused the same way when pending cash is above it.
+    const z = await t.paid('90.00');
+    const dz = await decide(t, z.allocationId, 'eligible', '20.00');
+    await rmDecision(t, dz.id);
+    await claim(t, z.allocationId, '40.00');
+    await undoIt(t).then(() => assert.fail('pending 40.00 is above the 20.00 the decision allows'), (e) => assert.match(e.message, MSG_UNDO_REFUSED));
+    assert.deepEqual(await figures(t, z.allocationId), [null, 0, '9000', '4000', '5000', '0']);
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+    assert.equal(await t.count('hsa_eligibility_decisions'), 3, 'nothing was deleted');
+  } finally { await t.db.drop(); }
+});
+
+test('the view, the entry guard and both removal guards read the same ceiling for a removed decision (raw database writes)', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const x = await t.paid('100.00');
+    const d = await decide(t, x.allocationId, 'eligible', '40.00');
+    const ceilings = async () => (await t.db.pool.query(
+      `select s.ceiling_cents::text as view, hsa_allocation_ceiling(s.allocation_id, null, null)::text as live, hsa_allocation_ceiling(s.allocation_id, 'decision', $2)::text as withd
+         from hsa_allocation_status s where s.allocation_id = $1`, [x.allocationId, d.id])).rows[0];
+    assert.deepEqual(await ceilings(), { view: '4000', live: '4000', withd: '4000' });
+    // A raw removal event: the live ceiling is the default, while the "as if still live" ceiling keeps the decision's amount.
+    await t.db.pool.query(`insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, 'decision', $2, 'remove', 'Fabricated', $3)`, [t.actor.householdId, d.id, t.actor.userId]);
+    assert.deepEqual(await ceilings(), { view: '10000', live: '10000', withd: '4000' });
+    // The commit-time guard of a new reservation uses the same live ceiling: 100.00 fits now, 100.01 does not.
+    await rawReserve(t, { paymentId: x.id, allocationId: x.allocationId, billId: x.billId }, 10000);
+    await assert.rejects(rawReserve(t, { paymentId: x.id, allocationId: x.allocationId, billId: x.billId }, 1), /exceed the eligible ceiling \(allocation [0-9a-f-]+, ceiling 10000/);
+    // The restore guard (strict) judges against the decision's own ceiling and refuses; the allocation excess helper sees the 60.00 gap as the decision's.
+    await assert.rejects(t.db.pool.query(`insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, 'decision', $2, 'restore', 'Fabricated', $3)`, [t.actor.householdId, d.id, t.actor.userId]),
+      /exceed the eligible ceiling \(allocation [0-9a-f-]+, ceiling 4000, pending 10000/);
+    assert.equal((await t.db.pool.query(`select hsa_allocation_excess_with($1, 'decision', $2)::text as v`, [x.allocationId, d.id])).rows[0].v, '6000');
+    assert.equal((await t.db.pool.query(`select hsa_allocation_excess_with($1, null, null)::text as v`, [x.allocationId])).rows[0].v, '0');
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
+  } finally { await t.db.drop(); }
+});
+
+test('a marked payment keeps a zero ceiling through delete and undo of a decision, and a marker is not removable', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const x = await t.paid('70.00', { hsaIneligible: 'yes' });
+    const row = (await hsaRepo.getAllocation(t.db.pool, t.actor.householdId, x.allocationId));
+    assert.deepEqual([row.markedIneligible, row.ceilingCents], [true, '0']);
+    // The service refuses a decision on a marked payment. A legacy decision row (written straight to the database) still cannot lift the ceiling.
+    await assert.rejects(decide(t, x.allocationId, 'eligible', '70.00'), code('conflict'));
+    const id = randomUUID();
+    await inTx(t, (c) => hsaRepo.insertDecision(c, { id, householdId: t.actor.householdId, userId: t.actor.userId, paymentId: x.id, allocationId: x.allocationId, billId: x.billId,
+      status: 'eligible', eligibleCents: 7000n, rationale: 'Legacy', evidenceType: 'receipt', evidenceNote: 'Receipt', contextNote: '', decidedOn: '2026-04-05' }));
+    assert.deepEqual(await figures(t, x.allocationId), ['eligible', 1, '0', '0', '0', '0'], 'the marker wins over an eligible decision');
+    await assert.rejects(claim(t, x.allocationId, '1.00'), code('conflict'));
+    await assert.rejects(rawReserve(t, { paymentId: x.id, allocationId: x.allocationId, billId: x.billId }, 1), /exceed the eligible ceiling \(allocation [0-9a-f-]+, ceiling 0/);
+    // Delete and undo: the ceiling is zero before, after the delete (the default does not apply to a marked payment) and after the undo.
+    assert.deepEqual((await hsa.getHsaAllocationDetail(t.db.pool, t.actor, x.allocationId)).decisions[0].deletable, { deletable: true, reason: null });
+    await rmDecision(t, id);
+    assert.deepEqual(await figures(t, x.allocationId), [null, 0, '0', '0', '0', '0']);
+    await assert.rejects(claim(t, x.allocationId, '1.00'), code('conflict'));
+    await undoIt(t);
+    assert.deepEqual(await figures(t, x.allocationId), ['eligible', 1, '0', '0', '0', '0']);
+    // There is no removal flow for the marker: the removal event kinds are decision, claim and receipt only, and the row is immutable.
+    await assert.rejects(t.db.pool.query(`insert into hsa_removal_events (household_id, kind, record_id, action, reason, created_by) values ($1, 'marker', $2, 'remove', 'x', $3)`, [t.actor.householdId, x.id, t.actor.userId]), /hsa_removal_events_kind_check|unknown HSA record/);
+    await assert.rejects(t.db.pool.query(`delete from payment_hsa_ineligible`), /append-only|immutable|cannot/i);
+    assert.equal(await t.count('payment_hsa_ineligible'), 1);
+    assert.deepEqual(await ledgerViolations(t.db.pool), []);
   } finally { await t.db.drop(); }
 });

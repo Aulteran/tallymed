@@ -11,6 +11,7 @@ const SCOPES: Array<{ name: string; field: string; scope: string; text: string; 
   { name: 'List bills and visits needing documents', field: 'recordsRead', scope: 'records:read', text: 'Provider, family member, dates, reference and (for bills) the amount of records without a document.' },
   { name: 'Read document files', field: 'documentsContent', scope: 'documents:content', sensitive: true, text: 'The file itself, up to the size limit. The assistant client may pass it to its own AI provider.' },
   { name: 'Propose matches', field: 'proposalsCreate', scope: 'proposals:create', text: 'Suggest that a document belongs to a bill or visit. A person approves or rejects every suggestion in TallyMed.' },
+  { name: 'Propose payment plans', field: 'plansPropose', scope: 'plans:propose', sensitive: true, text: 'Suggest a payment plan for confirmed bills, with its schedule. You see a full preview and a person approves or rejects every suggestion in TallyMed; the assistant cannot create a plan, match a payment or move money. Off by default: tick it only for a client you want to make plan suggestions.' },
 ];
 
 export default async function AssistantPage({ searchParams }: { searchParams: SearchParams }) {
@@ -21,7 +22,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Se
   return <main id="main" className="wide">
     <h1>Assistant</h1>
     <Banner code={q.error} />
-    <p className="muted">Optional. TallyMed works fully without any AI. An assistant is an outside program that connects to a separate, private MCP service on your own network, reads only what its permissions allow and can only <em>propose</em> that a document belongs to a bill or visit. It can never approve a proposal, change a bill, record a payment or reach accounts. You review each proposal under <a href="/proposals">Proposals</a>. The service is off unless the person running this installation starts it; see the setup guide in the repository (docs/mcp.md).</p>
+    <p className="muted">Optional. TallyMed works fully without any AI. An assistant is an outside program that connects to a separate, private MCP service on your own network, reads only what its permissions allow and can only <em>propose</em> that a document belongs to a bill or visit, or (with its own permission) a payment plan. It can never approve a proposal, change a bill, record a payment or reach accounts. You review each proposal under <a href="/proposals">Proposals</a>. The service is off unless the person running this installation starts it; see the setup guide in the repository (docs/mcp.md).</p>
     <p className="muted" role="note">Data boundary: anything an assistant client reads can be sent on to that client's AI provider. Grant "Read document files" only to a client whose provider you trust with your documents.</p>
     <div className="card">
       <h2>Credentials</h2>

@@ -24,6 +24,8 @@ export interface AttachmentRow {
   id: string; documentId: string; documentTitle: string; documentVersionId: string; versionNo: number; currentVersionNo: number; targetType: TargetType; targetId: string;
   billId: string | null; allocationId: string | null; note: string; createdAt: Date; createdByName: string | null;
   detachedAt: Date | null; detachedByName: string | null; detachReason: string | null; mediaType: string; sha256: string; documentRemoved: boolean;
+  /** The HSA decision or receipt this link points at was deleted by an administrator. The link stays; the UI shows its target as deleted. */
+  targetRemoved: boolean;
 }
 
 const DOC_SELECT = `select d.id, d.title, d.kind, d.note, d.version, d.removed_at as "removedAt", d.removal_reason as "removalReason", d.created_at as "createdAt",
@@ -180,7 +182,8 @@ const ATTACHMENT_SELECT = `select a.id, a.document_id as "documentId", d.title a
     a.target_type as "targetType", a.target_id as "targetId", coalesce(a.bill_id, a.adjustment_bill_id) as "billId",
     (select x.allocation_id from hsa_eligibility_decisions x where x.id = a.hsa_decision_id) as "allocationId", a.note, a.created_at as "createdAt",
     cu.display_name as "createdByName", a.detached_at as "detachedAt", du.display_name as "detachedByName", a.detach_reason as "detachReason",
-    v.media_type as "mediaType", encode(v.sha256, 'hex') as sha256, (d.removed_at is not null) as "documentRemoved"
+    v.media_type as "mediaType", encode(v.sha256, 'hex') as sha256, (d.removed_at is not null) as "documentRemoved",
+    ((a.hsa_decision_id is not null and hsa_record_removed('decision', a.hsa_decision_id)) or (a.hsa_receipt_id is not null and hsa_record_removed('receipt', a.hsa_receipt_id))) as "targetRemoved"
   from document_attachments a
   join documents d on d.household_id = a.household_id and d.id = a.document_id
   join document_versions v on v.id = a.document_version_id
@@ -226,14 +229,20 @@ export async function markDetached(db: Queryable, householdId: string, id: strin
   return r.rowCount === 1;
 }
 
-/** Locks the record a link points at, in the global lock order (bills first). Immutable targets take a share lock. */
-export async function lockTarget(db: Queryable, householdId: string, type: TargetType, id: string, billId?: string): Promise<boolean> {
+/**
+ * Locks the record a link points at, in the global lock order (bills first). Immutable targets take a share lock. With `live`, an HSA decision or
+ * receipt that an administrator deleted counts as absent: a NEW link must not be made to it. Detach and reads leave `live` off, so the links
+ * of a deleted record can still be ended and shown.
+ */
+export async function lockTarget(db: Queryable, householdId: string, type: TargetType, id: string, billId?: string, opts: { live?: boolean } = {}): Promise<boolean> {
   if (type === 'bill' || type === 'bill_adjustment') {
     const { rows } = await db.query(`select id from bills where household_id = $1 and id = $2 for no key update`, [householdId, type === 'bill' ? id : billId]);
     return rows.length === 1;
   }
   const table = type === 'visit' ? 'visits' : type === 'hsa_receipt' ? 'hsa_receipts' : 'hsa_eligibility_decisions';
-  const { rows } = await db.query(`select id from ${table} where household_id = $1 and id = $2 for key share`, [householdId, id]);
+  const hsaKind = type === 'hsa_receipt' ? 'receipt' : type === 'hsa_eligibility_decision' ? 'decision' : null;
+  const live = opts.live && hsaKind ? ` and not hsa_record_removed('${hsaKind}', id)` : '';
+  const { rows } = await db.query(`select id from ${table} where household_id = $1 and id = $2${live} for key share`, [householdId, id]);
   return rows.length === 1;
 }
 

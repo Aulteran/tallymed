@@ -2,7 +2,7 @@
 // Every query is scoped by household_id; services own authorization, lock order, transactions and audit.
 import type { Queryable } from '../db.ts';
 import { decodeCursor, pageOf, type Page } from '../pagination.ts';
-import type { ProposalFilter } from '../validation.ts';
+import type { PlanProposalFilter, ProposalFilter } from '../validation.ts';
 import type { McpScope } from './mcp.ts';
 
 export interface ClientRow {
@@ -22,7 +22,8 @@ export async function listClients(db: Queryable, householdId: string): Promise<C
   const { rows } = await db.query<ClientRow>(
     `select c.id, c.name, c.scopes, c.expires_at as "expiresAt", c.last_used_at as "lastUsedAt", c.revoked_at as "revokedAt", ru.display_name as "revokedByName",
             c.created_at as "createdAt", cu.display_name as "createdByName", (c.revoked_at is null and c.expires_at > now()) as active,
-            (select count(*)::int from document_match_proposals p where p.client_id = c.id and p.status = 'pending') as "pendingProposals"
+            ((select count(*) from document_match_proposals p where p.client_id = c.id and p.status = 'pending')
+              + (select count(*) from plan_proposals q where q.client_id = c.id and q.status = 'pending'))::int as "pendingProposals"
        from mcp_clients c join users cu on cu.id = c.created_by left join users ru on ru.id = c.revoked_by
       where c.household_id = $1 order by c.created_at desc, c.id desc limit 100`, [householdId]);
   return rows;
@@ -92,8 +93,11 @@ export async function listProposals(db: Queryable, householdId: string, f: Propo
   return pageOf(rows, f.limit, (r) => [r.sortKey, r.id]);
 }
 
+/** Everything waiting for a person: document matches and payment plans. */
 export async function pendingProposalCount(db: Queryable, householdId: string): Promise<number> {
-  const { rows } = await db.query<{ n: number }>(`select count(*)::int as n from document_match_proposals where household_id = $1 and status = 'pending'`, [householdId]);
+  const { rows } = await db.query<{ n: number }>(
+    `select ((select count(*) from document_match_proposals where household_id = $1 and status = 'pending')
+           + (select count(*) from plan_proposals where household_id = $1 and status = 'pending'))::int as n`, [householdId]);
   return rows[0]!.n;
 }
 
@@ -113,6 +117,60 @@ export async function markApproved(db: Queryable, householdId: string, id: strin
 export async function markRejected(db: Queryable, householdId: string, id: string, userId: string, reason: string): Promise<boolean> {
   const r = await db.query(
     `update document_match_proposals set status = 'rejected', decided_by = $3, decided_at = now(), decision_note = $4, version = version + 1
+      where household_id = $1 and id = $2 and status = 'pending'`, [householdId, id, userId, reason]);
+  return r.rowCount === 1;
+}
+
+// ---------- payment plan proposals ----------
+
+export type PlanProposalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded';
+
+export interface PlanProposalRow {
+  id: string; status: PlanProposalStatus; note: string; createdAt: Date; sortKey: string;
+  /** The stored JSON, unvalidated: the service reads it with the strict schema before it shows or applies anything. */
+  payload: unknown; billVersions: Record<string, number>;
+  clientId: string; clientName: string; clientRevoked: boolean;
+  decidedAt: Date | null; decidedByName: string | null; decisionNote: string | null; planId: string | null; version: number;
+}
+
+const PLAN_PROPOSAL_SELECT = `select p.id, p.status, p.note, p.created_at as "createdAt", p.created_at::text as "sortKey", p.payload, p.bill_versions as "billVersions",
+    p.client_id as "clientId", c.name as "clientName", (c.revoked_at is not null) as "clientRevoked",
+    p.decided_at as "decidedAt", du.display_name as "decidedByName", p.decision_note as "decisionNote", p.plan_id as "planId", p.version
+  from plan_proposals p
+  join mcp_clients c on c.household_id = p.household_id and c.id = p.client_id
+  left join users du on du.id = p.decided_by`;
+
+export async function getPlanProposal(db: Queryable, householdId: string, id: string): Promise<PlanProposalRow | null> {
+  const { rows } = await db.query<PlanProposalRow>(`${PLAN_PROPOSAL_SELECT} where p.household_id = $1 and p.id = $2`, [householdId, id]);
+  return rows[0] ?? null;
+}
+
+export async function listPlanProposals(db: Queryable, householdId: string, f: PlanProposalFilter): Promise<Page<PlanProposalRow>> {
+  const params: unknown[] = [householdId];
+  const where = ['p.household_id = $1'];
+  if (f.status) where.push(`p.status = $${params.push(f.status)}`);
+  const cur = decodeCursor(f.cursor, 2);
+  if (cur) where.push(`(p.created_at, p.id) < ($${params.push(cur[0])}::timestamptz, $${params.push(cur[1])}::uuid)`);
+  const { rows } = await db.query<PlanProposalRow>(`${PLAN_PROPOSAL_SELECT} where ${where.join(' and ')} order by p.created_at desc, p.id desc limit $${params.push(f.limit + 1)}`, params);
+  return pageOf(rows, f.limit, (r) => [r.sortKey, r.id]);
+}
+
+/** Locks the proposal row so two decisions serialize. Taken after the payment and bill locks of an approval, and alone by a rejection. */
+export async function lockPlanProposal(db: Queryable, householdId: string, id: string): Promise<boolean> {
+  const { rows } = await db.query(`select id from plan_proposals where household_id = $1 and id = $2 for update`, [householdId, id]);
+  return rows.length === 1;
+}
+
+export async function markPlanApproved(db: Queryable, householdId: string, id: string, userId: string, planId: string): Promise<boolean> {
+  const r = await db.query(
+    `update plan_proposals set status = 'approved', decided_by = $3, decided_at = now(), plan_id = $4, version = version + 1
+      where household_id = $1 and id = $2 and status = 'pending'`, [householdId, id, userId, planId]);
+  return r.rowCount === 1;
+}
+
+export async function markPlanRejected(db: Queryable, householdId: string, id: string, userId: string, reason: string | null): Promise<boolean> {
+  const r = await db.query(
+    `update plan_proposals set status = 'rejected', decided_by = $3, decided_at = now(), decision_note = $4, version = version + 1
       where household_id = $1 and id = $2 and status = 'pending'`, [householdId, id, userId, reason]);
   return r.rowCount === 1;
 }

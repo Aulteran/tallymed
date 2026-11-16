@@ -123,7 +123,7 @@ try {
     await page.fill('#paidOn', paidOn);
     await page.fill('#amount', amount);
     await page.fill('#reference', reference);
-    await page.fill('#allocateAmount', allocate);
+    await page.fill('#alloc-amount-0', allocate);
     await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
     await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
   };

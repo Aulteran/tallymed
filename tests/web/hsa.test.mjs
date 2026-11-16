@@ -38,7 +38,7 @@ async function fixture() {
     async decide(allocationId, status, amount, o = {}) {
       const cur = await hsaRepo.getAllocation(pool, actor.householdId, allocationId);
       return hsa.recordDecision(pool, actor, {
-        idempotencyKey: t.key(), allocationId, version: String(cur.decisionCount), status, ...(amount ? { eligibleAmount: amount } : {}),
+        idempotencyKey: t.key(), allocationId, version: String(cur.decisionVersion), status, ...(amount ? { eligibleAmount: amount } : {}),
         rationale: 'Qualified medical expense per plan rules', evidenceType: 'receipt', evidenceNote: 'Pharmacy receipt on file', decidedOn: '2026-04-05', ...o,
       }, 'r');
     },
@@ -686,7 +686,7 @@ test('upgrade over payment data from the prior schema: existing allocations are 
     await db.pool.query(
       `insert into payment_entries (id, household_id, payment_id, event_id, kind, bill_id, allocation_id, amount_cents, effective_date, reason, created_by)
        values (gen_random_uuid(), $1, $2, gen_random_uuid(), 'refund', $3, $4, -1500, '2026-05-01', 'Provider refund', $5)`, [householdId, pm.id, b.id, refundable.allocationId, adminUserId]);
-    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016', '0017', '0018', '0019']);
+    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016', '0017', '0018', '0019', '0020', '0021']);
     const a = await hsaRepo.getAllocation(db.pool, actor.householdId, refundable.allocationId);
     assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '6000', '0', '0', '6000', '0']);
     await hsa.recordDecision(db.pool, actor, { idempotencyKey: randomUUID(), allocationId: a.allocationId, version: '0', status: 'eligible', eligibleAmount: '60.00', rationale: 'Qualified', evidenceType: 'eob', evidenceNote: 'EOB', decidedOn: '2026-05-02' }, 'r');

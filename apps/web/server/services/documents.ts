@@ -128,7 +128,7 @@ export async function uploadDocument({ pool, store, limits }: DocumentDeps, acto
       let target: Awaited<ReturnType<typeof resolveAttachmentTarget>> | null = null;
       if (d.targetType && d.targetId) {
         target = await resolveAttachmentTarget(tx, actor, d.targetType, d.targetId);
-        if (!await repo.lockTarget(tx, actor.householdId, target.type, target.id, target.billId)) throw new AppError('not_found');
+        if (!await repo.lockTarget(tx, actor.householdId, target.type, target.id, target.billId, { live: true })) throw new AppError('not_found');
       }
       if (!d.confirmDuplicate && await repo.findByChecksum(tx, actor.householdId, file.sha256)) {
         throw new AppError('duplicate_document', 'A document with identical contents already exists');
@@ -258,7 +258,7 @@ export async function attachDocument(pool: Pool, actor: Actor, input: unknown, r
     if (replayId) return { id: replayId, replayed: true };
     const target = await resolveAttachmentTarget(tx, actor, d.targetType, d.targetId);
     // Parent record first (a bill in the money lock order), then the document.
-    if (!await repo.lockTarget(tx, actor.householdId, target.type, target.id, target.billId)) throw new AppError('not_found');
+    if (!await repo.lockTarget(tx, actor.householdId, target.type, target.id, target.billId, { live: true })) throw new AppError('not_found');
     const locked = await repo.lockDocument(tx, actor.householdId, d.documentId);
     if (!locked || locked.removedAt) throw new AppError('not_found');
     const version = await repo.getVersion(tx, actor.householdId, d.documentId);

@@ -1,12 +1,13 @@
 -- Default-eligible HSA reimbursements and the payment-level "ineligible for HSA" marker. Synthetic data only in tests.
 --
 -- Every payment allocation is now eligible for its full net cash unless it is marked ineligible, so no eligibility decision is needed to
--- claim or record a reimbursement. The ceiling rule, used identically by the hsa_allocation_status view, the commit-time guard
--- hsa_entry_guard and the backup ledger summary (which reads the view):
+-- claim or record a reimbursement. Built on 0020 (record removal): decisions are read through hsa_live_decisions, so a removed (undone) decision
+-- falls back to the default. The ceiling rule, used identically by the hsa_allocation_status view, the commit-time guard hsa_entry_guard, the
+-- removal guards (hsa_allocation_excess_with, hsa_allocation_live_check) and the backup ledger summary (which reads the view):
 --   ceiling = 0                                   when the payment has an ineligible marker or is paid directly from an HSA
---           = 0                                   when the newest decision is 'ineligible'
---           = least(decision eligible_cents, net) when the newest decision is 'eligible'
---           = net                                 when the newest decision is 'pending' (a behavior change: pending used to be zero) or none
+--           = 0                                   when the newest LIVE decision is 'ineligible'
+--           = least(decision eligible_cents, net) when the newest live decision is 'eligible'
+--           = net                                 when the newest live decision is 'pending' (a behavior change: pending used to be zero) or there is none
 -- Existing decisions are neither changed nor deleted (the table is immutable). Direct HSA payments keep a zero ceiling, as before, so
 -- eligible still equals pending + received + available for claimable payments.
 --
@@ -64,13 +65,88 @@ create constraint trigger payment_hsa_funding_refuse_ineligible after insert on 
 create constraint trigger payment_hsa_funding_events_refuse_ineligible after insert on payment_hsa_funding_events
   deferrable initially deferred for each row execute function payment_hsa_funding_refuse_ineligible();
 
--- The commit-time guard with the new ceiling (0006's body; only the ceiling lines changed).
-create or replace function hsa_entry_guard() returns trigger language plpgsql as $$
+-- The ceiling of one allocation under the rule above. Decisions are read live; when (k, rid) names a decision, that decision counts as live
+-- too (used by the removal check, which compares the figures with and without the record). A marker is not a decision and is never removable.
+create function hsa_allocation_ceiling(alloc uuid, k text, rid uuid) returns bigint language plpgsql stable as $$
 declare
-  alloc uuid := new.allocation_id;
+  pid uuid;
   net bigint;
   elig bigint;
   dstatus text;
+begin
+  select payment_id into pid from payment_entries where id = alloc;
+  if hsa_payment_has_no_ceiling(pid) then
+    return 0;
+  end if;
+  select coalesce(sum(amount_cents), 0) into net from payment_entries where allocation_id = alloc;
+  select d.status, d.eligible_cents into dstatus, elig from hsa_eligibility_decisions d
+   where d.allocation_id = alloc and (not hsa_record_removed('decision', d.id) or (k = 'decision' and d.id = rid)) order by d.seq desc limit 1;
+  if dstatus = 'ineligible' then
+    return 0;
+  elsif dstatus = 'eligible' then
+    return least(elig, net);
+  end if;
+  return net;
+end $$;
+
+-- The excess of one allocation as if the record (k, rid) were still live (0020's body; only the ceiling comes from the rule).
+create or replace function hsa_allocation_excess_with(alloc uuid, k text, rid uuid) returns bigint language plpgsql stable as $$
+declare
+  pend bigint;
+  recv bigint;
+begin
+  select coalesce(sum(e.amount_cents) filter (where e.kind = 'reserve'), 0) - coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'reject', 'cancel')), 0),
+         coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(e.amount_cents) filter (where e.kind = 'receipt_reversal'), 0)
+    into pend, recv from hsa_entries e
+   where e.allocation_id = alloc
+     and (e.claim_id is null or not hsa_record_removed('claim', e.claim_id) or (k = 'claim' and e.claim_id = rid))
+     and (e.receipt_id is null or not hsa_record_removed('receipt', e.receipt_id) or (k = 'receipt' and e.receipt_id = rid));
+  return greatest(0, pend + recv - hsa_allocation_ceiling(alloc, k, rid));
+end $$;
+
+-- 0020's recheck of one allocation with the live views; only the ceiling comes from the rule. hsa_removal_event_guard calls it for every
+-- allocation a decision, claim or receipt removal or restore touches, so a removed or restored decision is judged against the default.
+create or replace function hsa_allocation_live_check(alloc uuid, strict boolean, k text, rid uuid) returns void language plpgsql as $$
+declare
+  before_excess bigint;
+  ceil bigint;
+  pend bigint;
+  recv bigint;
+  bad uuid;
+begin
+  ceil := hsa_allocation_ceiling(alloc, null, null);
+  select coalesce(sum(amount_cents) filter (where kind = 'reserve'), 0) - coalesce(sum(amount_cents) filter (where kind in ('receipt', 'reject', 'cancel')), 0),
+         coalesce(sum(amount_cents) filter (where kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(amount_cents) filter (where kind = 'receipt_reversal'), 0)
+    into pend, recv from hsa_live_entries where allocation_id = alloc;
+  if pend < 0 or recv < 0 then
+    raise exception 'pending or received reimbursement would go below zero (allocation %, pending %, received %)', alloc, pend, recv using errcode = 'check_violation';
+  end if;
+  select l.line_id into bad from (
+    select e.line_id, sum(case e.kind when 'reserve' then e.amount_cents when 'receipt' then -e.amount_cents when 'reject' then -e.amount_cents
+                                       when 'cancel' then -e.amount_cents else 0 end) as open_cents
+      from hsa_live_entries e where e.allocation_id = alloc and e.line_id is not null group by e.line_id) l
+    where l.open_cents < 0 limit 1;
+  if bad is not null then
+    raise exception 'a claim line cannot be paid or released beyond its reservation (line %)', bad using errcode = 'check_violation';
+  end if;
+  if strict then
+    if pend + recv > ceil then
+      raise exception 'pending plus received reimbursement would exceed the eligible ceiling (allocation %, ceiling %, pending %, received %)', alloc, ceil, pend, recv
+        using errcode = 'check_violation';
+    end if;
+  else
+    before_excess := hsa_allocation_excess_with(alloc, k, rid);
+    if greatest(0, pend + recv - ceil) > before_excess then
+      raise exception 'removing this record would increase the excess above the eligible ceiling (allocation %, ceiling %, pending %, received %)', alloc, ceil, pend, recv
+        using errcode = 'check_violation';
+    end if;
+  end if;
+end $$;
+
+-- The commit-time guard (0020's body, live views and the removed-record rule kept; only the ceiling comes from the rule).
+create or replace function hsa_entry_guard() returns trigger language plpgsql as $$
+declare
+  alloc uuid := new.allocation_id;
   ceil bigint;
   pend bigint;
   recv bigint;
@@ -81,43 +157,33 @@ declare
   r_reversals integer;
 begin
   perform 1 from payments where id = new.payment_id for no key update;
-  select coalesce(sum(amount_cents), 0) into net from payment_entries where allocation_id = alloc;
-  -- The ceiling rule (0019): nothing on a payment marked ineligible or paid directly from an HSA; otherwise the newest decision decides
-  -- (eligible: its amount up to the net cash, ineligible: nothing, pending: the net cash); with no decision the whole net cash is eligible.
-  select status, eligible_cents into dstatus, elig from hsa_eligibility_decisions where allocation_id = alloc order by seq desc limit 1;
-  if hsa_payment_has_no_ceiling(new.payment_id) or dstatus = 'ineligible' then
-    ceil := 0;
-  elsif dstatus = 'eligible' then
-    ceil := least(elig, net);
-  else
-    ceil := net;
+  if (new.claim_id is not null and hsa_record_removed('claim', new.claim_id)) or (new.receipt_id is not null and hsa_record_removed('receipt', new.receipt_id)) then
+    raise exception 'a removed claim or reimbursement takes no new entries (entry %)', new.id using errcode = 'check_violation';
   end if;
+  ceil := hsa_allocation_ceiling(alloc, null, null);
   select coalesce(sum(amount_cents) filter (where kind = 'reserve'), 0) - coalesce(sum(amount_cents) filter (where kind in ('receipt', 'reject', 'cancel')), 0),
          coalesce(sum(amount_cents) filter (where kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(amount_cents) filter (where kind = 'receipt_reversal'), 0)
-    into pend, recv from hsa_entries where allocation_id = alloc;
+    into pend, recv from hsa_live_entries where allocation_id = alloc;
   if pend < 0 or recv < 0 then
     raise exception 'pending or received reimbursement would go below zero (allocation %, pending %, received %)', alloc, pend, recv using errcode = 'check_violation';
   end if;
-  -- Each claim line keeps its own reservation between zero and what was reserved.
   select l.line_id into bad from (
     select e.line_id, sum(case e.kind when 'reserve' then e.amount_cents when 'receipt' then -e.amount_cents when 'reject' then -e.amount_cents
                                        when 'cancel' then -e.amount_cents else 0 end) as open_cents
-      from hsa_entries e where e.allocation_id = alloc and e.line_id is not null group by e.line_id) l
+      from hsa_live_entries e where e.allocation_id = alloc and e.line_id is not null group by e.line_id) l
     where l.open_cents < 0 limit 1;
   if bad is not null then
     raise exception 'a claim line cannot be paid or released beyond its reservation (line %)', bad using errcode = 'check_violation';
   end if;
   -- New reservations and external receipts must fit under the ceiling together with everything already pending and received.
-  -- When an excess already exists the same test refuses them, which freezes new claims until the excess is resolved.
   if new.kind in ('reserve', 'external_receipt') and pend + recv > ceil then
     raise exception 'pending plus received reimbursement would exceed the eligible ceiling (allocation %, ceiling %, pending %, received %)', alloc, ceil, pend, recv
       using errcode = 'check_violation';
   end if;
-  -- A receipt is fully allocated: its entries add up to its amount, and a reversal covers every entry of the receipt.
   if new.receipt_id is not null then
     select amount_cents into r_amount from hsa_receipts where id = new.receipt_id;
-    select coalesce(sum(amount_cents), 0), count(*) into r_total, r_entries from hsa_entries where receipt_id = new.receipt_id and kind in ('receipt', 'external_receipt');
-    select count(*) into r_reversals from hsa_entries where receipt_id = new.receipt_id and kind = 'receipt_reversal';
+    select coalesce(sum(amount_cents), 0), count(*) into r_total, r_entries from hsa_live_entries where receipt_id = new.receipt_id and kind in ('receipt', 'external_receipt');
+    select count(*) into r_reversals from hsa_live_entries where receipt_id = new.receipt_id and kind = 'receipt_reversal';
     if r_total <> r_amount then
       raise exception 'a receipt must be allocated in full (receipt %, amount %, allocated %)', new.receipt_id, r_amount, r_total using errcode = 'check_violation';
     end if;
@@ -128,7 +194,7 @@ begin
   return null;
 end $$;
 
--- The view with the new ceiling. Same columns in the same order as 0017; the marker flag is added last.
+-- 0020's view with the same columns in the same order; the marker flag is added last. Sources stay the live views.
 create or replace view hsa_allocation_status as
 select s.*,
        case when payment_is_direct_hsa(s.payment_id) then 0
@@ -139,16 +205,16 @@ select s.*,
   from (
     select n.household_id, n.allocation_id, n.payment_id, n.bill_id, n.paid_on, n.net_cents::bigint as net_cents,
            d.id as decision_id, d.status as decision_status, coalesce(d.eligible_cents, 0) as decided_cents,
-           (select count(*) from hsa_eligibility_decisions x where x.allocation_id = n.allocation_id)::int as decision_count,
+           (select count(*) from hsa_live_decisions x where x.allocation_id = n.allocation_id)::int as decision_count,
            case when hsa_payment_has_no_ceiling(n.payment_id) or d.status = 'ineligible' then 0
                 when d.status = 'eligible' then least(d.eligible_cents, n.net_cents::bigint)
                 else n.net_cents::bigint end as ceiling_cents,
            h.pending_cents::bigint as pending_cents, h.received_cents::bigint as received_cents
       from allocation_net n
-      left join lateral (select x.id, x.status, x.eligible_cents from hsa_eligibility_decisions x
+      left join lateral (select x.id, x.status, x.eligible_cents from hsa_live_decisions x
                           where x.allocation_id = n.allocation_id order by x.seq desc limit 1) d on true
       cross join lateral (select
           coalesce(sum(e.amount_cents) filter (where e.kind = 'reserve'), 0) - coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'reject', 'cancel')), 0) as pending_cents,
           coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(e.amount_cents) filter (where e.kind = 'receipt_reversal'), 0) as received_cents
-        from hsa_entries e where e.allocation_id = n.allocation_id) h
+        from hsa_live_entries e where e.allocation_id = n.allocation_id) h
   ) s;
