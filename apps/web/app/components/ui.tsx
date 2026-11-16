@@ -36,7 +36,8 @@ export async function flat(searchParams: SearchParams): Promise<Record<string, s
  */
 export async function flatWithFlash(searchParams: SearchParams, path: string): Promise<Record<string, string>> {
   const q = await flat(searchParams);
-  if (!q.error) return q;
+  // An error code or a preview marker says the values the person typed were put in the flash cookie for this page.
+  if (!q.error && !q.preview) return q;
   const flash = readFlash((await cookies()).get(flashCookieName(appContext().config))?.value, path);
   return { ...flash, ...q };
 }

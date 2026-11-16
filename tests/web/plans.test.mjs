@@ -1094,3 +1094,228 @@ test('previewing a new plan shows the schedule and the warnings the plan would g
     await t.db.drop();
   }
 });
+
+// ---------- suggested matches ----------
+
+/** Three $100.00 installments and three payments applied to the bill: $60.00, $70.00 and $40.00, oldest first. */
+async function suggestionSetup(t) {
+  const s = await planSetup(t, { bill: '300.00', installments: 3, total: '300.00', first: '2026-06-01' });
+  for (const [paidOn, amount] of [['2026-05-20', '60.00'], ['2026-05-25', '70.00'], ['2026-06-02', '40.00']]) await t.pay1({ paidOn, amount, billId: s.b.id });
+  const suggest = () => plans.suggestPlanMatches(t.db.pool, t.actor, s.plan.id);
+  const apply = (rows, o = {}) => plans.applySuggestedMatches(t.db.pool, t.actor, {
+    idempotencyKey: t.key(), planId: s.plan.id, version: 1,
+    rows: rows.map((r) => ({ installmentId: r.installmentId, allocationId: r.allocationId, amount: (Number(r.amountCents) / 100).toFixed(2) })), ...o,
+  }, 'r');
+  const pairs = async () => (await t.db.pool.query(`select installment_id, allocation_id, amount_cents::text from installment_matches order by installment_id, allocation_id`)).rows
+    .map((r) => `${r.installment_id}:${r.allocation_id}:${r.amount_cents}`);
+  return { ...s, suggest, apply, pairs };
+}
+
+test('the reason for a suggestion is the fill order, or the same amount paid near the due date', () => {
+  const base = { dueDate: '2026-06-10', paidOn: '2026-06-03', amountCents: 5000n, installmentUnpaidCents: 5000n };
+  assert.equal(plans.suggestionWhy(base), 'Same amount, paid near the due date');
+  assert.equal(plans.suggestionWhy({ ...base, paidOn: '2026-06-17' }), 'Same amount, paid near the due date', 'seven days either way');
+  assert.equal(plans.suggestionWhy({ ...base, paidOn: '2026-06-18' }), 'Oldest unmatched payment, earliest unpaid installment');
+  assert.equal(plans.suggestionWhy({ ...base, paidOn: '2026-06-02' }), 'Oldest unmatched payment, earliest unpaid installment');
+  assert.equal(plans.suggestionWhy({ ...base, amountCents: 4000n }), 'Oldest unmatched payment, earliest unpaid installment');
+});
+
+test('suggested matches are the pure fill, apply exactly what was shown, and are references only', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const shown = await s.suggest();
+    assert.deepEqual(shown.map((x) => [x.installmentSeq, x.dueDate, x.paidOn, x.paymentAmountCents, x.amountCents]), [
+      [1, '2026-06-01', '2026-05-20', '6000', '6000'], [1, '2026-06-01', '2026-05-25', '7000', '4000'], [2, '2026-07-01', '2026-05-25', '7000', '3000'], [2, '2026-07-01', '2026-06-02', '4000', '4000'],
+    ]);
+    assert.deepEqual(shown.map((x) => x.why), Array(4).fill('Oldest unmatched payment, earliest unpaid installment'));
+    // The same pure function over the same inputs gives the same pairs (no arithmetic of its own in the read).
+    const d0 = await s.detail();
+    const sources = shown.reduce((m, x) => m.set(x.allocationId, { allocationId: x.allocationId, paymentId: x.paymentId, billId: x.billId, free: 0n }), new Map());
+    assert.equal(sources.size, 3);
+    assert.equal(await t.count('installment_matches'), 0, 'the read wrote nothing');
+    const before = await s.ledgerSnapshot();
+    const key = t.key();
+    const first = await s.apply(shown, { idempotencyKey: key });
+    assert.deepEqual([first.id, first.replayed], [s.plan.id, false]);
+    const replay = await s.apply(shown, { idempotencyKey: key });
+    assert.deepEqual([replay.id, replay.replayed], [s.plan.id, true]);
+    await assert.rejects(s.apply(shown.slice(1), { idempotencyKey: key }), code('conflict'), 'the same key with other rows');
+    assert.equal(await t.count('installment_matches'), 4);
+    assert.equal(await s.ledgerSnapshot(), before, 'references only');
+    const d1 = await s.detail();
+    assert.deepEqual(d1.installments.map((i) => [i.matchedCents, i.state]), [['10000', 'paid'], ['7000', 'partial'], ['0', 'unpaid']]);
+    const written = (await s.pairs()).sort();
+    assert.deepEqual(written, shown.map((x) => `${x.installmentId}:${x.allocationId}:${x.amountCents}`).sort());
+    assert.deepEqual(await s.suggest(), [], 'nothing left to suggest');
+    const audits = await t.audit('plan.suggestions_applied');
+    assert.equal(audits.length, 1, 'one event, none for the replay');
+    const a = audits[0].detail;
+    assert.deepEqual([a.matchCount, a.skippedCount, a.allocationCount, a.installmentCount, a.matchedCents], [4, 0, 3, 2, '17000']);
+    assert.deepEqual(a.installmentIds.split(',').sort(), [d1.installments[0].id, d1.installments[1].id].sort());
+    assert.equal(a.allocationIds.split(',').length, 3);
+    assert.ok(Object.values(a).every((v) => typeof v === 'number' || /^[0-9a-f,-]*$/.test(v)), 'counts, cents and ids only, no free text');
+    assert.equal(d0.plan.version, d1.plan.version, 'match writes do not bump the plan version');
+    assert.deepEqual(d1.matches.map((m) => m.reason), Array(4).fill('Matched a suggested payment'));
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('applying a subset matches only those rows, and the rest is suggested again', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const shown = await s.suggest();
+    await s.apply([shown[0], shown[2], shown[3]]);
+    assert.equal(await t.count('installment_matches'), 3);
+    const d = await s.detail();
+    assert.deepEqual(d.installments.map((i) => i.matchedCents), ['6000', '7000', '0']);
+    const again = await s.suggest();
+    assert.deepEqual(again.map((x) => [x.installmentId, x.allocationId, x.amountCents]), [[shown[1].installmentId, shown[1].allocationId, shown[1].amountCents]]);
+    const a = (await t.audit('plan.suggestions_applied'))[0].detail;
+    assert.deepEqual([a.suggestedCount, a.matchCount, a.skippedCount], [4, 3, 1]);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('suggestions that changed since they were shown are refused whole, and nothing is written', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const shown = await s.suggest();
+    // A manual match takes the cash and the installment room between render and submit.
+    await s.match(shown[0].installmentId, shown[0].allocationId, '30.00');
+    const before = [await t.count('installment_matches'), await t.count('audit_events')];
+    await assert.rejects(s.apply(shown), (e) => e.code === 'conflict' && /changed/.test(e.message));
+    assert.deepEqual([await t.count('installment_matches'), await t.count('audit_events')], before);
+    // The fresh suggestions apply. Altered amounts, unknown pairs, a stale version, a bad body and a cancelled plan are refused.
+    const fresh = await s.suggest();
+    await assert.rejects(s.apply([{ ...fresh[0], amountCents: String(BigInt(fresh[0].amountCents) - 1n) }]), code('conflict'));
+    await assert.rejects(s.apply([{ ...fresh[0], allocationId: randomUUID() }]), code('conflict'));
+    await assert.rejects(s.apply(fresh, { version: 9 }), code('stale_version'));
+    await assert.rejects(s.apply([]), code('invalid_input'));
+    await assert.rejects(s.apply([fresh[0], fresh[0]]), code('invalid_input'));
+    await assert.rejects(s.apply(fresh, { extra: 'x' }), code('invalid_input'));
+    assert.equal(await t.count('installment_matches'), before[0]);
+    await s.apply(fresh);
+    assert.equal(await t.count('installment_matches'), before[0] + fresh.length);
+    await plans.cancelPlan(t.db.pool, t.actor, { planId: s.plan.id, version: 1, reason: 'Paid elsewhere' }, 'r');
+    await assert.rejects(s.apply(fresh, { version: 2 }), code('conflict'));
+    assert.deepEqual(await plans.suggestPlanMatches(t.db.pool, t.actor, s.plan.id), [], 'a cancelled plan suggests nothing');
+    const h2 = (await t.db.pool.query(`insert into households (name) values ('Other Family') returning id`)).rows[0].id;
+    const u2 = (await t.db.pool.query(`insert into users (household_id, email, display_name, role, password_hash) values ($1, 'other@example.test', 'Other Admin', 'admin', 'x') returning id`, [h2])).rows[0].id;
+    const outsider = { userId: u2, householdId: h2, role: 'admin', displayName: 'Other Admin', sessionId: randomUUID() };
+    await assert.rejects(plans.suggestPlanMatches(t.db.pool, outsider, s.plan.id), code('not_found'));
+    await assert.rejects(plans.applySuggestedMatches(t.db.pool, outsider, { idempotencyKey: t.key(), planId: s.plan.id, version: 2, rows: [{ installmentId: fresh[0].installmentId, allocationId: fresh[0].allocationId, amount: '1.00' }] }, 'r'), code('not_found'));
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('concurrent applies of the same suggestions match once, never count cash twice and take no lock-cycle retries', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const shown = await s.suggest();
+    retryStats.lockConflicts = 0;
+    const race = await Promise.allSettled(Array.from({ length: 6 }, () => s.apply(shown)));
+    assert.equal(race.filter((x) => x.status === 'fulfilled').length, 1);
+    for (const x of race.filter((y) => y.status === 'rejected')) assert.equal(x.reason.code, 'conflict');
+    assert.equal(retryStats.lockConflicts, 0, 'no lock-cycle retries');
+    assert.equal(await t.count('installment_matches'), 4);
+    // The same key replayed concurrently is one write.
+    const s2 = await suggestionSetup(t);
+    const shown2 = await s2.suggest();
+    const key = t.key();
+    const replays = await Promise.allSettled(Array.from({ length: 4 }, () => s2.apply(shown2, { idempotencyKey: key })));
+    assert.ok(replays.every((x) => x.status === 'fulfilled' && x.value.id === s2.plan.id));
+    assert.equal(replays.filter((x) => !x.value.replayed).length, 1);
+    // A manual match racing an apply: whichever lands second is refused, and the cash is never over-matched.
+    const s3 = await suggestionSetup(t);
+    const shown3 = await s3.suggest();
+    const mixed = await Promise.allSettled([s3.apply(shown3), s3.match(shown3[0].installmentId, shown3[0].allocationId, '10.00')]);
+    for (const x of mixed) if (x.status === 'rejected') assert.equal(x.reason.code, 'conflict');
+    assert.equal(retryStats.lockConflicts, 0);
+    const over = await t.db.pool.query(`select n.allocation_id from allocation_net n where n.net_cents < (select coalesce(sum(m.amount_cents), 0) from installment_matches m where m.allocation_id = n.allocation_id)`);
+    assert.equal(over.rowCount, 0);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+test('the apply route reads the ticked rows of the card (sug.N.*), skips unticked ones and returns to the plan', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const shown = await s.suggest();
+    const token = t.cookie.split('=')[1];
+    const body = { idempotencyKey: t.key(), planId: s.plan.id, version: 1, csrf: csrfFor(token) };
+    shown.forEach((x, n) => {
+      body[`sug.${n}.installmentId`] = x.installmentId; body[`sug.${n}.allocationId`] = x.allocationId; body[`sug.${n}.amount`] = (Number(x.amountCents) / 100).toFixed(2);
+      if (n !== 1) body[`sug.${n}.apply`] = '1'; // the unticked box is not sent
+    });
+    const res = await handlers.handleExpenseAction(post('/api/expenses/plans/apply-suggestions', body, { cookie: t.cookie, html: true }), t.ctx, 'plans/apply-suggestions');
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), `https://tallymed.test/plans/${s.plan.id}`);
+    assert.equal(await t.count('installment_matches'), 3);
+    // Nothing ticked is refused with the form's error code, and nothing changes.
+    const none = { ...body, idempotencyKey: t.key() };
+    for (const k of Object.keys(none)) if (k.endsWith('.apply')) delete none[k];
+    const refused = await handlers.handleExpenseAction(post('/api/expenses/plans/apply-suggestions', none, { cookie: t.cookie, html: true }), t.ctx, 'plans/apply-suggestions');
+    assert.match(new URL(refused.headers.get('location')).search, /error=invalid_input/);
+    assert.equal(await t.count('installment_matches'), 3);
+    // The old rows (already applied) are now stale: a conflict.
+    const stale = await handlers.handleExpenseAction(post('/api/expenses/plans/apply-suggestions', { ...body, idempotencyKey: t.key() }, { cookie: t.cookie, html: true }), t.ctx, 'plans/apply-suggestions');
+    assert.match(new URL(stale.headers.get('location')).search, /error=conflict/);
+    assert.equal(await t.count('installment_matches'), 3);
+  } finally {
+    await t.db.drop();
+  }
+});
+
+// ---------- the POST preview ----------
+
+test('the preview route writes nothing and redirects with only a marker; the typed values wait in the flash cookie', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const s = await suggestionSetup(t);
+    const token = t.cookie.split('=')[1];
+    const tables = ['payments', 'payment_entries', 'payment_plans', 'plan_revisions', 'plan_installments', 'installment_matches', 'audit_events', 'idempotency_records', 'bills'];
+    const counts = async () => JSON.stringify([await Promise.all(tables.map((x) => t.count(x))), await s.ledgerSnapshot()]);
+    const before = await counts();
+    const run = (b, o = {}) => handlers.handleExpenseAction(post('/api/expenses/plans/preview', { csrf: csrfFor(token), ...b }, { cookie: t.cookie, html: true, ...o }), t.ctx, 'plans/preview');
+    const fields = { totalAmount: '90.00', installmentCount: '3', firstDueDate: '2026-09-01', cadence: 'monthly', inputMode: 'total', remainder: 'earliest', reviseMode: 'replace' };
+    const res = await run({ preview: 'revise', planId: s.plan.id, idempotencyKey: t.key(), version: 1, reason: 'Provider asked for smaller payments', ...fields });
+    assert.equal(res.status, 303);
+    const loc = new URL(res.headers.get('location'));
+    assert.equal(loc.pathname, `/plans/${s.plan.id}`);
+    assert.equal(loc.search, '?preview=revise', 'only the marker is in the address');
+    assert.ok(!res.headers.get('location').includes('Provider') && !res.headers.get('location').includes(token));
+    const cookie = res.headers.get('set-cookie');
+    assert.match(cookie, /HttpOnly/);
+    const flash = JSON.parse(Buffer.from(cookie.split(';')[0].split('=')[1], 'base64url').toString('utf8'));
+    assert.equal(flash.p, `/plans/${s.plan.id}`, 'bound to the page');
+    assert.equal(flash.v.reason, 'Provider asked for smaller payments');
+    assert.equal(flash.v.totalAmount, '90.00');
+    for (const k of ['csrf', 'idempotencyKey', 'version', 'planId', 'preview']) assert.ok(!(k in flash.v), `${k} stays out of the cookie`);
+    assert.equal(await counts(), before, 'a preview writes nothing, not even an audit event');
+    // The page reads those values and runs the same read-only preview as before.
+    const preview = await plans.previewPlanRevision(t.db.pool, t.actor, s.plan.id, flash.v);
+    assert.deepEqual(preview.rows.map((r) => r.amountCents), ['3000', '3000', '3000']);
+    // A new plan: the ticked bills travel as bill.<n>; the address is `/plans?preview=create`.
+    const created = await run({ preview: 'create', name: 'Another plan', [`bill_${s.b.id}`]: 'on', startedOn: '2026-01-01', ...fields });
+    assert.equal(new URL(created.headers.get('location')).pathname + new URL(created.headers.get('location')).search, '/plans?preview=create');
+    const cflash = JSON.parse(Buffer.from(created.headers.get('set-cookie').split(';')[0].split('=')[1], 'base64url').toString('utf8'));
+    assert.deepEqual([cflash.p, cflash.v['bill.0'], cflash.v.name], ['/plans', s.b.id, 'Another plan']);
+    // The CSRF token is required, a bad marker or page is refused, and none of it writes.
+    const noToken = await handlers.handleExpenseAction(post('/api/expenses/plans/preview', { preview: 'revise', planId: s.plan.id, ...fields }, { cookie: t.cookie, html: true }), t.ctx, 'plans/preview');
+    assert.match(new URL(noToken.headers.get('location')).search, /error=csrf_failed/);
+    assert.equal((await run({ preview: 'other', planId: s.plan.id, ...fields })).status, 400);
+    assert.equal((await run({ preview: 'revise', planId: '../x', ...fields })).status, 400);
+    assert.equal(await counts(), before);
+  } finally {
+    await t.db.drop();
+  }
+});

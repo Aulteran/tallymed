@@ -1,7 +1,7 @@
 // The indexed row encoding for HTML form posts (alloc.0.billId, alloc.0.amount, ...). Pure; fabricated values only.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { rowsFromForm, withFormRows } from '../../apps/web/server/form-rows.ts';
+import { rowsFromForm, withCheckedRows, withFormRows } from '../../apps/web/server/form-rows.ts';
 
 const F = ['billId', 'amount'];
 const bad = { code: 'invalid_input' };
@@ -49,4 +49,23 @@ test('withFormRows replaces the rows with one array, keeps other fields, and ref
   const plain = { amount: '5', billId: 'a' };
   assert.equal(withFormRows(plain, spec), plain);
   assert.throws(() => withFormRows({ allocations: [], 'alloc.0.billId': 'a' }, spec), bad);
+});
+
+test('checkbox rows keep only the ticked rows and drop the flag', () => {
+  const spec = { prefix: 'sug', into: 'rows', fields: ['installmentId', 'amount'], flag: 'apply', max: 120 };
+  const body = {
+    version: '1', 'sug.0.installmentId': 'a', 'sug.0.amount': '12.00', 'sug.0.apply': '1',
+    'sug.1.installmentId': 'b', 'sug.1.amount': '7.00', // unticked: the browser sends no `apply`
+    'sug.2.installmentId': 'c', 'sug.2.amount': '3.00', 'sug.2.apply': '1',
+  };
+  assert.deepEqual(withCheckedRows(body, spec), { version: '1', rows: [{ installmentId: 'a', amount: '12.00' }, { installmentId: 'c', amount: '3.00' }] });
+  // Nothing ticked: no rows at all, so the schema refuses the post.
+  assert.deepEqual(withCheckedRows({ version: '1', 'sug.0.installmentId': 'a', 'sug.0.amount': '1.00' }, spec), { version: '1' });
+  assert.deepEqual(withCheckedRows({ version: '1' }, spec), { version: '1' });
+  // A tick with the rest blank stays for the schema to refuse; a strange flag value, a gap, an unknown field or the JSON array too are refused here.
+  assert.deepEqual(withCheckedRows({ 'sug.0.apply': '1' }, spec), { rows: [{ installmentId: '', amount: '' }] });
+  assert.throws(() => withCheckedRows({ 'sug.0.installmentId': 'a', 'sug.0.amount': '1', 'sug.0.apply': 'on' }, spec), bad);
+  assert.throws(() => withCheckedRows({ 'sug.0.installmentId': 'a', 'sug.2.installmentId': 'c' }, spec), bad);
+  assert.throws(() => withCheckedRows({ 'sug.0.other': 'a' }, spec), bad);
+  assert.throws(() => withCheckedRows({ rows: [], 'sug.0.apply': '1' }, spec), bad);
 });

@@ -409,12 +409,34 @@ async function lockBillPayments(tx: Queryable, actor: Actor, billIds: string[]):
   return new Set(ids.length > 0 ? await payments.lockPayments(tx, actor.householdId, ids) : []);
 }
 
-/** Reads the unmatched allocations of payments made on or after `since` (UTC date); a payment that appeared after the locks were taken restarts the transaction. */
-async function unmatchedCash(tx: Queryable, actor: Actor, billIds: string[], locked: Set<string>, since: string): Promise<FillSource[]> {
+/** A source of unmatched cash with what the suggestion list shows about it. */
+export type CashSource = FillSource & { paidOn: string; netCents: string };
+
+/**
+ * Reads the unmatched allocations of payments made on or after `since` (UTC date). With `locked` (the write path) a payment that appeared
+ * after the locks were taken restarts the transaction; without it (the read-only suggestions) there is nothing to restart.
+ */
+async function unmatchedCash(tx: Queryable, actor: Actor, billIds: string[], locked: Set<string> | null, since: string): Promise<CashSource[]> {
   const rows = await payments.listUnmatchedAllocations(tx, actor.householdId, billIds);
-  if (rows.some((r) => !locked.has(r.paymentId))) throw new RetryTransaction();
-  return rows.filter((r) => r.paidOn >= since).map((r) => ({ allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, free: BigInt(r.netCents) - BigInt(r.matchedCents) }));
+  if (locked && rows.some((r) => !locked.has(r.paymentId))) throw new RetryTransaction();
+  return rows.filter((r) => r.paidOn >= since).map((r) => ({
+    allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, free: BigInt(r.netCents) - BigInt(r.matchedCents), paidOn: r.paidOn, netCents: r.netCents,
+  }));
 }
+
+/** Everything the fill of an existing plan reads: the same inputs for the read-only suggestions and for the writes that apply them. */
+interface FillInputs { revisionId: string; revisionNo: number; startedOn: string; open: repo.Installment[]; sources: CashSource[] }
+
+async function fillInputs(tx: Queryable, actor: Actor, planId: string, billIds: string[], locked: Set<string> | null): Promise<FillInputs> {
+  const asOf = todayUtc();
+  const plan = (await repo.getPlan(tx, actor.householdId, planId, asOf))!;
+  const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
+  const open = (await repo.listInstallments(tx, actor.householdId, cur.id, asOf)).filter((i) => BigInt(i.unpaidCents) > 0n);
+  return { revisionId: cur.id, revisionNo: cur.revisionNo, startedOn: plan.startedOn, open, sources: await unmatchedCash(tx, actor, billIds, locked, plan.startedOn) };
+}
+
+/** Pure given the inputs: the one place the existing-cash fill is computed for a plan, used by the suggestions, the bulk match and the apply. */
+const fillOf = (i: FillInputs): FillMatch[] => fillInstallments(i.sources, i.open.map((x) => ({ id: x.id, left: BigInt(x.unpaidCents) })));
 
 async function insertFill(tx: Queryable, actor: Actor, planId: string, revisionId: string, fill: FillMatch[], reason: string): Promise<void> {
   for (const f of fill) {
@@ -656,22 +678,116 @@ export async function matchExistingPayments(pool: Pool, actor: Actor, input: unk
     const [plan] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
     if (!plan) throw new AppError('not_found');
     if (plan.removed) throw new AppError('conflict', REMOVED_MESSAGE);
-    const plan0 = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
     if (plan.version !== d.version) throw new AppError('stale_version');
     if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
-    const cur = (await repo.currentRevision(tx, actor.householdId, d.planId))!;
-    const open = (await repo.listInstallments(tx, actor.householdId, cur.id, todayUtc())).filter((i) => BigInt(i.unpaidCents) > 0n);
-    const fill = fillInstallments(await unmatchedCash(tx, actor, billIds, locked, plan0.startedOn), open.map((i) => ({ id: i.id, left: BigInt(i.unpaidCents) })));
+    const inputs = await fillInputs(tx, actor, d.planId, billIds, locked);
+    const fill = fillOf(inputs);
     if (fill.length === 0) throw new AppError('conflict', 'There is no unmatched payment cash, or nothing left owed on the schedule');
-    await insertFill(tx, actor, d.planId, cur.id, fill, 'Matched an existing payment in bulk');
+    await insertFill(tx, actor, d.planId, inputs.revisionId, fill, 'Matched an existing payment in bulk');
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.existing_payments_matched', entityType: 'payment_plan', entityId: d.planId, requestId,
       detail: {
-        planId: d.planId, startedOn: plan0.startedOn, revisionNo: cur.revisionNo, matchCount: fill.length, allocationCount: new Set(fill.map((f) => f.source.allocationId)).size,
+        planId: d.planId, startedOn: inputs.startedOn, revisionNo: inputs.revisionNo, matchCount: fill.length, allocationCount: new Set(fill.map((f) => f.source.allocationId)).size,
         installmentCount: new Set(fill.map((f) => f.installmentId)).size, matchedCents: cents(sum(fill.map((f) => f.amount))),
       },
     });
     return { id: d.planId, replayed: false };
+  }));
+}
+
+// ---------- suggested matches (read, then apply the rows the person kept) ----------
+
+/** One suggested match, as the plan page shows it. The ids and the amount are what the apply checks against a fresh computation. */
+export interface SuggestedMatch {
+  installmentId: string; installmentSeq: number; dueDate: string; installmentUnpaidCents: string;
+  allocationId: string; paymentId: string; paidOn: string; paymentAmountCents: string; billId: string;
+  amountCents: string; why: string;
+}
+
+const DAY_MS = 86_400_000;
+const NEAR_DAYS = 7;
+const dayNumber = (iso: string) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / DAY_MS);
+
+/**
+ * Pure. Why a pair was suggested: always the fill order (oldest unmatched payment onto the earliest installment that still owes), and
+ * when the match is exactly what the installment still owes and the payment was made within seven days of the due date, that too.
+ */
+export function suggestionWhy(v: { dueDate: string; paidOn: string; amountCents: bigint; installmentUnpaidCents: bigint }): string {
+  const near = Math.abs(dayNumber(v.paidOn) - dayNumber(v.dueDate)) <= NEAR_DAYS;
+  if (near && v.amountCents === v.installmentUnpaidCents) return 'Same amount, paid near the due date';
+  return 'Oldest unmatched payment, earliest unpaid installment';
+}
+
+/**
+ * What "Match selected" on the plan page offers: the same fill the bulk match would apply, worked out read-only from the same inputs
+ * (`fillInputs` and `fillOf`). Nothing is locked or written, so by the time a row is submitted it may be out of date; the apply
+ * recomputes under the locks and refuses a row that no longer matches.
+ */
+export async function suggestPlanMatches(pool: Pool, actor: Actor, planId: string): Promise<SuggestedMatch[]> {
+  authorize(actor, 'expenses:read');
+  const id = parse(schemas.id, planId);
+  const plan = await repo.getPlan(pool, actor.householdId, id, todayUtc());
+  if (!plan) throw new AppError('not_found');
+  if (plan.status !== 'active') return [];
+  const billIds = await repo.planBillIds(pool, actor.householdId, id);
+  if (billIds.length === 0) return [];
+  const inputs = await fillInputs(pool, actor, id, billIds, null);
+  const fill = fillOf(inputs);
+  const byId = new Map(inputs.open.map((i) => [i.id, i]));
+  const paymentIds = [...new Set(fill.map((f) => f.source.paymentId))];
+  const amounts = new Map(await Promise.all(paymentIds.map(async (pid) => [pid, (await payments.getPayment(pool, actor.householdId, pid))?.amountCents ?? '0'] as const)));
+  return fill.map((f) => {
+    const inst = byId.get(f.installmentId)!;
+    const source = f.source as CashSource;
+    return {
+      installmentId: inst.id, installmentSeq: inst.seq, dueDate: inst.dueDate, installmentUnpaidCents: inst.unpaidCents, allocationId: source.allocationId,
+      paymentId: source.paymentId, paidOn: source.paidOn, paymentAmountCents: amounts.get(source.paymentId)!, billId: source.billId, amountCents: cents(f.amount),
+      why: suggestionWhy({ dueDate: inst.dueDate, paidOn: source.paidOn, amountCents: f.amount, installmentUnpaidCents: BigInt(inst.unpaidCents) }),
+    };
+  });
+}
+
+/**
+ * Applies the suggested matches the person left ticked. Locks the payments on the plan's bills, then the plan (the global order), and
+ * recomputes the suggestions with the same fill; every submitted row must equal one of them (installment, allocation and amount) or the
+ * whole request is refused with `conflict` and nothing is written. Subsets are fine: each row only ever takes part of what the fill
+ * gave it. References only: no cash, allocation or bill balance changes. Match rows do not bump the plan version, as every match write.
+ */
+export async function applySuggestedMatches(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'expenses:write');
+  const { csrf: _csrf, idempotencyKey, planId, version, rows } = parse(paymentSchemas.applySuggestedMatches, input);
+  const sorted = rows.map((r) => ({ installmentId: r.installmentId, allocationId: r.allocationId, amount: r.amount }))
+    .sort((a, b) => (a.installmentId === b.installmentId ? (a.allocationId < b.allocationId ? -1 : 1) : (a.installmentId < b.installmentId ? -1 : 1)));
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, 'plan.apply_suggestions', idempotencyKey, { planId, version, rows: sorted }, planId);
+    if (replayId) return { id: replayId, replayed: true };
+    const billIds = await repo.planBillIds(tx, actor.householdId, planId);
+    if (billIds.length === 0) throw new AppError('not_found');
+    const locked = await lockBillPayments(tx, actor, billIds);
+    const [plan] = await repo.lockPlans(tx, actor.householdId, [planId]);
+    if (!plan) throw new AppError('not_found');
+    if (plan.removed) throw new AppError('conflict', REMOVED_MESSAGE);
+    if (plan.version !== version) throw new AppError('stale_version');
+    if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
+    const inputs = await fillInputs(tx, actor, planId, billIds, locked);
+    const current = new Map(fillOf(inputs).map((f) => [`${f.installmentId}:${f.source.allocationId}`, f]));
+    const chosen: FillMatch[] = [];
+    for (const r of sorted) {
+      const f = current.get(`${r.installmentId}:${r.allocationId}`);
+      if (!f || f.amount !== r.amount) throw new AppError('conflict', 'The suggestions changed; review them again');
+      chosen.push(f);
+    }
+    await insertFill(tx, actor, planId, inputs.revisionId, chosen, 'Matched a suggested payment');
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.suggestions_applied', entityType: 'payment_plan', entityId: planId, requestId,
+      detail: {
+        planId, revisionNo: inputs.revisionNo, suggestedCount: current.size, matchCount: chosen.length, skippedCount: current.size - chosen.length,
+        allocationCount: new Set(chosen.map((f) => f.source.allocationId)).size, installmentCount: new Set(chosen.map((f) => f.installmentId)).size,
+        matchedCents: cents(sum(chosen.map((f) => f.amount))), installmentIds: [...new Set(chosen.map((f) => f.installmentId))].join(','),
+        allocationIds: [...new Set(chosen.map((f) => f.source.allocationId))].sort().join(','),
+      },
+    });
+    return { id: planId, replayed: false };
   }));
 }
 
