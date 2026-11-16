@@ -1598,6 +1598,36 @@ try {
     assert.match(await text(), /Open balance\s*\n?\s*\$0\.00/, `${label} is paid in full`);
   }
   ok('one $70.00 payment split across two bills ($45.00 and $25.00) through the dialog: a repeated bill is refused with the typed rows kept, both balances reach $0.00, dialog passes axe and fits a phone');
+  // "This payment is ineligible for HSA." (fabricated figures: a $20.00 bill and a $20.00 payment). The box exists, survives a rejected submit,
+  // and a payment recorded with it shows the note and has a zero ceiling on the HSA side.
+  await enterBill({ provider: 'Example Clinic', reference: 'INELIG-A', amount: '20.00', status: 'confirmed' });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  await page.goto(`${origin}/payments?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  const inelBox = page.getByLabel('This payment is ineligible for HSA.');
+  assert.equal(await inelBox.count(), 1, 'the ineligible checkbox is on the payment form');
+  assert.equal(await inelBox.isChecked(), false, 'unticked by default');
+  await page.fill('#paidOn', '2026-03-12');
+  await page.fill('#amount', '20.00');
+  await page.selectOption('#alloc-bill-0', await billOption('#alloc-bill-0', 'INELIG-A'));
+  await page.fill('#alloc-amount-0', '25.00');
+  await inelBox.check();
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\?error=/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.getByLabel('This payment is ineligible for HSA.').isChecked(), true, 'the ticked box survives a rejected submit');
+  assert.equal(await page.inputValue('#amount'), '20.00');
+  await page.fill('#alloc-amount-0', '20.00');
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /recorded as ineligible for HSA/);
+  await page.goto(`${origin}/hsa`);
+  await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'INELIG-A' }).first().click();
+  await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$0\.00/);
+  assert.match(await text(), /Available\s*\n?\s*\$0\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 0, 'nothing can be claimed on a payment recorded as ineligible');
+  ok('"This payment is ineligible for HSA." is on the payment form, stays ticked after a rejected submit, and a payment recorded with it shows the note and has a $0.00 ceiling and nothing claimable');
   // Suggested matches: payments already applied to a plan's bill are offered as ticked rows; unticking one leaves it out.
   // Fabricated figures: a $30.00 bill, a plan of 3 x $10.00, and payments of $12.00 and $18.00 applied to the bill. The oldest cash fills the
   // earliest installments: #1 $10.00 from the first payment, #2 $2.00 from it and $8.00 from the second, #3 $10.00 from the second.

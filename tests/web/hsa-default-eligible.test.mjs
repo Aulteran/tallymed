@@ -419,16 +419,21 @@ test('table-driven: the view, hsa_allocation_ceiling, the entry guard, the remov
 test('a rejected payment form keeps the ticked ineligible box in the flash, and it renders ticked again', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
-    const res = await post(handlers, t, 'payments/create', { paidOn: '2026-04-01', amount: 'not-money', method: 'card', hsaIneligible: 'yes' });
-    assert.equal(res.status, 303);
-    assert.equal(new URL(res.headers.get('location'), 'http://x').pathname, '/payments');
-    const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get('set-cookie')]).find((c) => c.includes('tallymed_flash'));
-    assert.ok(cookie, 'a flash cookie is set');
-    const raw = cookie.split(';')[0].split('=')[1];
-    const kept = readFlash(raw, '/payments');
-    assert.equal(kept.hsaIneligible, 'yes');
-    assert.equal(kept.amount, 'not-money');
-    // The page reads the flash value exactly as the form posts it.
-    assert.ok(kept.hsaIneligible === 'yes' || kept.hsaIneligible === 'on');
+    const token = t.cookie.split('=')[1];
+    const form = (body) => handlers.handleExpenseAction(post('/api/expenses/payments/create', { ...body, csrf: csrfFor(token) }, { cookie: t.cookie, html: true }), t.ctx, 'payments/create');
+    const b = await t.bill({ memberId: t.m, providerId: t.p, originalAmount: '40.00' });
+    // A bad amount and an over-allocation are both rejected; the ticked box comes back in the flash either way, and an unticked box does not.
+    for (const bad of [{ amount: 'not-money' }, { amount: '30.00', 'alloc.0.billId': b.id, 'alloc.0.amount': '35.00' }]) {
+      const res = await form({ idempotencyKey: t.key(), paidOn: '2026-04-01', method: 'card', hsaIneligible: 'yes', ...bad });
+      assert.equal(res.status, 303);
+      assert.equal(new URL(res.headers.get('location')).pathname, '/payments');
+      const raw = res.headers.get('set-cookie').split(';')[0].split('=')[1];
+      const kept = readFlash(raw, '/payments');
+      assert.equal(kept.hsaIneligible, 'yes', JSON.stringify(bad));
+      assert.equal(kept.amount, bad.amount);
+    }
+    const unticked = await form({ idempotencyKey: t.key(), paidOn: '2026-04-01', method: 'card', amount: 'not-money' });
+    assert.equal(readFlash(unticked.headers.get('set-cookie').split(';')[0].split('=')[1], '/payments').hsaIneligible, undefined);
+    assert.equal(await t.count('payment_hsa_ineligible'), 0, 'a rejected submit records no marker');
   } finally { await t.db.drop(); }
 });
