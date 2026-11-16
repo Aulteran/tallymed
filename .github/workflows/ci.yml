@@ -41,12 +41,14 @@ jobs:
         run: npm run typecheck
       - run: node --test --test-shard=${{ matrix.shard }}/3
   app-browser:
-    name: app-browser (${{ matrix.scheme }} theme)
+    name: app-browser (${{ matrix.scheme }} theme, ${{ matrix.scenario }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         scheme: [light, dark]
+        # Scenario groups of scripts/check-app-browser.mjs; together they cover every assertion once per theme.
+        scenario: [core, plans, records, admin]
     services:
       postgres:
         image: postgres:17-alpine
@@ -88,10 +90,11 @@ jobs:
       - name: Install Playwright system dependencies (browser cached)
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
-      - name: Verify expense screens and contrast in the ${{ matrix.scheme }} theme (disposable PostgreSQL)
+      - name: Verify the ${{ matrix.scenario }} expense screens and contrast in the ${{ matrix.scheme }} theme (disposable PostgreSQL)
         run: npm run test:app-browser
         env:
           TALLYMED_COLOR_SCHEME: ${{ matrix.scheme }}
+          TALLYMED_SCENARIO: ${{ matrix.scenario }}
   marketing:
     runs-on: ubuntu-latest
     steps:
