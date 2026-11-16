@@ -19,6 +19,8 @@ export async function requireSession() {
   if (!session) redirect('/login');
   // An account holding a temporary password reaches nothing but the change-password page.
   if (session.actor.mustChangePassword) redirect('/password/change');
+  // A locked session reads nothing: every page that loads data starts here, so the PIN screen comes first.
+  if (session.actor.locked) redirect('/locked');
   return { ctx, ...session };
 }
 

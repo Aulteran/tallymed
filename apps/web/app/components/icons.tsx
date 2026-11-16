@@ -17,6 +17,7 @@ const PATHS: Record<string, ReactNode> = {
   settings: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></>,
   gear: <><circle cx="12" cy="12" r="6.5" /><circle cx="12" cy="12" r="2.5" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M16.6 7.4l1.76-1.76M7.4 7.4L5.64 5.64M7.4 16.6l-1.76 1.76M16.6 16.6l1.76 1.76" /></>,
   logout: <><path d="M10 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H10" /><path d="M10 12h10M16.5 8.5L20 12l-3.5 3.5" /></>,
+  lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 018 0v3M12 15v2" /></>,
   key: <><circle cx="8" cy="15.5" r="4" /><path d="M11 12.5l8.5-8.5M16 7.5l3 3M13.5 10l2 2" /></>,
   empty: <><path d="M4 13.5l2.5-8h11l2.5 8v5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z" /><path d="M4 13.5h4.5l1 2.5h5l1-2.5H20" /></>,
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,

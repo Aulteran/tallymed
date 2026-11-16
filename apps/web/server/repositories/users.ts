@@ -36,13 +36,20 @@ export async function listUsers(db: Queryable, householdId: string): Promise<Omi
 
 export async function insertUser(
   db: Queryable,
-  u: { householdId: string; email: string; displayName: string; role: Role; passwordHash: string },
+  u: { householdId: string; email: string; displayName: string; role: Role; passwordHash: string; pinHash?: string | null },
 ): Promise<string> {
-  const r = await db.query<{ id: string }>(
-    `insert into users (household_id, email, display_name, role, password_hash)
-     values ($1, $2, $3, $4, $5) returning id`,
-    [u.householdId, u.email, u.displayName, u.role, u.passwordHash],
-  );
+  // Without a PIN the statement is the original one, so it also runs against a database that has not been upgraded past 0018 yet.
+  const r = u.pinHash
+    ? await db.query<{ id: string }>(
+      `insert into users (household_id, email, display_name, role, password_hash, pin_hash, pin_changed_at)
+       values ($1, $2, $3, $4, $5, $6, now()) returning id`,
+      [u.householdId, u.email, u.displayName, u.role, u.passwordHash, u.pinHash],
+    )
+    : await db.query<{ id: string }>(
+      `insert into users (household_id, email, display_name, role, password_hash)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [u.householdId, u.email, u.displayName, u.role, u.passwordHash],
+    );
   return r.rows[0]!.id;
 }
 
@@ -93,4 +100,17 @@ export async function countUsableAdminsExcluding(db: Queryable, householdId: str
     [householdId, excludeId],
   );
   return Number(r.rows[0]!.n);
+}
+
+export interface PinRow { pinHash: string | null; pinChangedAt: Date | null }
+
+export async function findPin(db: Queryable, id: string, lock = false): Promise<PinRow | null> {
+  const r = await db.query<PinRow>(
+    `select pin_hash as "pinHash", pin_changed_at as "pinChangedAt" from users where id = $1${lock ? ' for update' : ''}`, [id]);
+  return r.rows[0] ?? null;
+}
+
+/** Stores the hash of a PIN. Does not touch `version`: the PIN is personal and must not make an administrator's open Users form stale. */
+export async function setPinHash(db: Queryable, id: string, pinHash: string): Promise<void> {
+  await db.query(`update users set pin_hash = $2, pin_changed_at = now(), updated_at = now() where id = $1`, [id, pinHash]);
 }

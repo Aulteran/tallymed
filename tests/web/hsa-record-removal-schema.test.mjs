@@ -160,7 +160,7 @@ test('upgrade: a database populated at 0018 (decisions, a claim, a partial and a
     assert.equal(before.status.filter((r) => r.direct_hsa).length, 1);
     assert.deepEqual(before.counts, { hsa_eligibility_decisions: 3, hsa_claims: 2, hsa_receipts: 3, hsa_entries: 5 });
 
-    assert.deepEqual(await migrate(db.pool), ['0019', '0020']);
+    assert.deepEqual(await migrate(db.pool), ['0019', '0020', '0021']);
     const after = { status: await allStatus(db.pool), ledger: await ledgerSummary(db.pool) };
     assert.equal(after.ledger.removedHsaRecords, '0');
     delete after.ledger.removedHsaRecords;
@@ -607,7 +607,7 @@ test('backup: a backup made before 0020 restores, and the upgrade then leaves ev
     await restoreArchive(target.pool, null, file, { via: 'cli' });
     assert.deepEqual(await allStatus(target.pool), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
-    assert.deepEqual(await migrate(target.pool), ['0019', '0020']);
+    assert.deepEqual(await migrate(target.pool), ['0019', '0020', '0021']);
     const after = await ledgerSummary(target.pool);
     assert.equal(after.removedHsaRecords, '0');
     delete after.removedHsaRecords;

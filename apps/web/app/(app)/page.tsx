@@ -30,6 +30,8 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
   return <main id="main" className="wide">
     <h1>Overview</h1>
     {params.notice === 'password_changed' && <p role="status">Your password was changed. Every other session was signed out.</p>}
+    {params.notice === 'pin_set' && <p role="status">Your PIN was set. The screen now locks after a few minutes without activity.</p>}
+    {params.notice === 'pin_changed' && <p role="status">Your PIN was changed.</p>}
     {params.error && <Banner code={params.error} />}
     <Banner invalid={invalid} />
     <form method="get" className="card row" aria-label="Filters">

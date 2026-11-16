@@ -37,6 +37,8 @@ const signedUsd = z.string().transform((v, ctx) => {
 const version = z.coerce.number().int().min(1).max(2_000_000_000);
 const idempotencyKey = z.string().min(8).max(100).regex(/^[A-Za-z0-9_-]+$/);
 const csrf = { csrf: z.string().optional() };
+// A PIN field is shape-checked by the service (six digits, entered twice); an empty field is absent.
+const pinInput = z.preprocess((v) => (v === '' ? undefined : v), z.string().max(12).optional());
 const checkbox = z.preprocess((v) => v === 'yes' || v === 'on' || v === true, z.boolean());
 const amountSource = z.enum(['statement', 'portal', 'eob', 'phone', 'manual']);
 const adjustmentCategory = z.enum(['insurer_adjustment', 'insurer_payment', 'provider_discount', 'financial_assistance', 'correction']);
@@ -73,12 +75,19 @@ export const schemas = {
     source: amountSource, sourceNote: optionalText(500), ...csrf,
   }),
   reverseAdjustment: z.strictObject({ idempotencyKey, billId: uuid, adjustmentId: uuid, reason: text(500).min(1), ...csrf }),
-  login: z.strictObject({ email, password: z.string().min(1).max(MAX_PASSWORD_LENGTH) }),
+  login: z.strictObject({ email, password: z.string().min(1).max(MAX_PASSWORD_LENGTH), remember: checkbox }),
   forgotPassword: z.strictObject({ email }),
+  lock: z.strictObject({ next: optionalText(300), ...csrf }),
+  unlock: z.strictObject({ pin: z.string().max(12), next: optionalText(300), ...csrf }),
+  changePin: z.strictObject({
+    currentPin: pinInput, currentPassword: z.preprocess((v) => (v === '' ? undefined : v), password.optional()),
+    newPin: z.string().max(12), confirmPin: z.string().max(12), ...csrf,
+  }),
+  heartbeat: z.strictObject({ ...csrf }),
   logout: z.strictObject({ csrf: z.string().optional() }),
   invite: z.strictObject({ email, role, csrf: z.string().optional() }),
   revokeInvitation: z.strictObject({ invitationId: uuid, csrf: z.string().optional() }),
-  accept: z.strictObject({ token, displayName, password }),
+  accept: z.strictObject({ token, displayName, password, pin: pinInput, confirmPin: pinInput }),
   updateOperator: z.strictObject({
     userId: uuid,
     version: z.coerce.number().int().min(1),
@@ -91,8 +100,8 @@ export const schemas = {
     currentPassword: z.preprocess((v) => (v === '' ? undefined : v), password.optional()), newPassword: password, confirmPassword: password,
     page: z.enum(['required', 'account']).optional(), ...csrf,
   }),
-  setup: z.strictObject({ setupToken: z.string().trim().min(1).max(200), householdName: z.string().trim().min(1).max(120), email, displayName, password }),
-  bootstrap: z.strictObject({ householdName: z.string().trim().min(1).max(120), email, displayName, password }),
+  setup: z.strictObject({ setupToken: z.string().trim().min(1).max(200), householdName: z.string().trim().min(1).max(120), email, displayName, password, pin: pinInput, confirmPin: pinInput }),
+  bootstrap: z.strictObject({ householdName: z.string().trim().min(1).max(120), email, displayName, password, pin: pinInput, confirmPin: pinInput }),
 };
 
 export function parse<T extends z.ZodType>(schema: T, input: unknown): z.infer<T> {
@@ -484,3 +493,11 @@ export const assistantFilterSchemas = {
 };
 export type ProposalFilter = z.infer<typeof assistantFilterSchemas.proposals>;
 export type PlanProposalFilter = z.infer<typeof assistantFilterSchemas.planProposals>;
+
+/** A same-site path to return to after unlocking. Anything else (another origin, a protocol-relative URL, a sign-in or API address) becomes the overview. */
+export function safeReturnPath(next: unknown): string {
+  if (typeof next !== 'string' || next.length === 0 || next.length > 300) return '/';
+  if (!/^\/(?![/\\])[\x21-\x7e]*$/.test(next)) return '/';
+  if (/^\/(locked|login|api|invite|setup)(\/|\?|#|$)/.test(next)) return '/';
+  return next;
+}
