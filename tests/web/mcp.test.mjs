@@ -735,8 +735,9 @@ test('code isolation: the web app never imports the listener or SDK, and the lis
   }
   assert.ok(!readdirSync(path.join(ROOT, 'apps/web/app/api')).some((n) => /mcp/i.test(n)), 'no web route for MCP');
   const importsOf = (file) => [...readFileSync(file, 'utf8').matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-  const mcpSide = [path.join(ROOT, 'apps/web/mcp/listener.ts'), path.join(ROOT, 'apps/web/server/services/mcp.ts'), path.join(ROOT, 'apps/web/server/repositories/mcp.ts'), path.join(ROOT, 'apps/web/cli/mcp.ts')];
-  const allowed = /^(node:|pg$|zod$|@modelcontextprotocol|\.\.?\/(errors|db|log|tokens|pagination|storage|mcp-config|mcp|listener)\.ts$|\.\.\/server\/(errors|db|log|tokens|storage|mcp-config)\.ts$|\.\.\/server\/services\/mcp\.ts$|\.\.\/server\/repositories\/(mcp|audit)\.ts$|\.\.\/mcp\/listener\.ts$|\.\.\/repositories\/(audit|mcp)\.ts$|\.\/audit\.ts$)/;
+  const mcpSide = [path.join(ROOT, 'apps/web/mcp/listener.ts'), path.join(ROOT, 'apps/web/server/services/mcp.ts'), path.join(ROOT, 'apps/web/server/repositories/mcp.ts'), path.join(ROOT, 'apps/web/cli/mcp.ts'),
+    path.join(ROOT, 'apps/web/server/plan-proposal.ts'), path.join(ROOT, 'apps/web/server/untrusted-text.ts')];
+  const allowed = /^(node:|pg$|zod$|@modelcontextprotocol|\.\.?\/(errors|db|log|tokens|pagination|storage|mcp-config|mcp|listener|money|plan-proposal|untrusted-text)\.ts$|\.\.\/server\/(errors|db|log|tokens|storage|mcp-config)\.ts$|\.\.\/server\/services\/mcp\.ts$|\.\.\/server\/repositories\/(mcp|audit)\.ts$|\.\.\/mcp\/listener\.ts$|\.\.\/repositories\/(audit|mcp)\.ts$|\.\/audit\.ts$)/;
   for (const file of mcpSide) {
     for (const spec of importsOf(file)) assert.match(spec, allowed, `${path.relative(ROOT, file)} imports ${spec}`);
   }

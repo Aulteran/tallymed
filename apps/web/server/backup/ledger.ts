@@ -187,7 +187,7 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
   {
     rule: 'no two live HSA claims of a household share a reference',
     table: 'hsa_removal_events',
-    // From 0019 the unique index is replaced by this rule over live claims, so a removed claim's reference can be entered again.
+    // From 0020 the unique index is replaced by this rule over live claims, so a removed claim's reference can be entered again.
     sql: `select c.id from hsa_claims c
            where c.reference is not null and not hsa_record_removed('claim', c.id)
              and exists (select 1 from hsa_claims o where o.household_id = c.household_id and lower(o.reference) = lower(c.reference) and o.id <> c.id
@@ -212,7 +212,7 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
 /** Names of the rules a database breaks. Empty for a consistent ledger. Never returns record content, only the rule and a count. */
 export async function ledgerViolations(db: Queryable): Promise<string[]> {
   const broken: string[] = [];
-  // From 0019 the HSA money rules judge live records only (a removed decision, claim or receipt counts as nothing); an older database has no such views.
+  // From 0020 the HSA money rules judge live records only (a removed decision, claim or receipt counts as nothing); an older database has no such views.
   const live = (await db.query<{ present: boolean }>(`select to_regclass('public.hsa_live_entries') is not null as present`)).rows[0]!.present;
   const forDatabase = (sql: string) => sql
     .replaceAll('@E@', live ? 'hsa_live_entries' : 'hsa_entries')
@@ -266,7 +266,7 @@ export async function ledgerSummary(db: Queryable): Promise<Record<string, strin
   if ((await db.query<{ present: boolean }>(`select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'payment_plans' and column_name = 'removed_at') as present`)).rows[0]!.present) {
     s.removedPlans = (await db.query<{ n: string }>(`select count(*)::text as n from payment_plans where removed_at is not null`)).rows[0]!.n;
   }
-  // Only a database at migration 0019 or later knows about removed HSA decisions, claims and receipts.
+  // Only a database at migration 0020 or later knows about removed HSA decisions, claims and receipts.
   if ((await db.query<{ present: boolean }>(`select to_regclass('public.hsa_removal_events') is not null as present`)).rows[0]!.present) {
     s.removedHsaRecords = (await db.query<{ n: string }>(
       `select count(*)::text as n from (select distinct on (kind, record_id) action from hsa_removal_events order by kind, record_id, seq desc) x where x.action = 'remove'`)).rows[0]!.n;

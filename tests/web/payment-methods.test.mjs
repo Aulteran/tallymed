@@ -226,7 +226,7 @@ test('upgrade: migration 0015 leaves earlier payments exactly as they were, with
     const u = (await db.pool.query(`insert into users (household_id, email, display_name, role, password_hash) values ($1, 'a@example.test', 'Alex Example', 'admin', 'x') returning id`, [h])).rows[0].id;
     await db.pool.query(`insert into payments (household_id, paid_on, amount_cents, method, created_by) values ($1, '2026-03-01', 12345, 'card', $2)`, [h, u]);
     const before = (await db.pool.query('select * from payments')).rows;
-    assert.deepEqual(await migrate(db.pool), ['0015', '0016', '0017', '0018', '0019']);
+    assert.deepEqual(await migrate(db.pool), ['0015', '0016', '0017', '0018', '0019', '0020']);
     assert.deepEqual((await db.pool.query('select * from payments')).rows, before);
     const { listPayments, cashTotals } = await import('../../apps/web/server/repositories/payments.ts');
     const page = await listPayments(db.pool, h, { limit: 25 });

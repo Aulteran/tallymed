@@ -4,8 +4,8 @@
 import type { Queryable } from '../db.ts';
 import { decodeCursor, pageOf, type Page } from '../pagination.ts';
 
-export type McpScope = 'documents:read' | 'records:read' | 'documents:content' | 'proposals:create';
-export const MCP_SCOPES: readonly McpScope[] = ['documents:read', 'records:read', 'documents:content', 'proposals:create'];
+export type McpScope = 'documents:read' | 'records:read' | 'documents:content' | 'proposals:create' | 'plans:propose';
+export const MCP_SCOPES: readonly McpScope[] = ['documents:read', 'records:read', 'documents:content', 'proposals:create', 'plans:propose'];
 
 export interface McpClientRow { id: string; householdId: string; name: string; scopes: McpScope[]; expiresAt: Date; revokedAt: Date | null; lastUsedAt: Date | null; active: boolean }
 
@@ -132,11 +132,45 @@ export async function proposalGap(db: Queryable, p: ProposalInput): Promise<Prop
   return r.proposed ? 'already_proposed' : 'missing';
 }
 
+/** Open proposals of every kind: a client's and the household's, so the caps cannot be doubled by mixing kinds. */
 export async function pendingCounts(db: Queryable, clientId: string, householdId: string): Promise<{ client: number; household: number }> {
   const { rows } = await db.query<{ client: number; household: number }>(
     `select count(*) filter (where client_id = $1)::int as client, count(*)::int as household
-       from document_match_proposals where household_id = $2 and status = 'pending'`, [clientId, householdId]);
+       from (select client_id from document_match_proposals where household_id = $2 and status = 'pending'
+             union all select client_id from plan_proposals where household_id = $2 and status = 'pending') x`, [clientId, householdId]);
   return rows[0]!;
+}
+
+export interface PlanProposalInsert { id: string; householdId: string; clientId: string; payload: unknown; note: string; billIds: string[] }
+
+/**
+ * Inserts one pending plan proposal from a single statement that reads the bills it names in the same snapshot it pins their versions from:
+ * every bill must be in the household and have a confirmed amount, or no row is written. The role cannot read what a plan is made of beyond the
+ * granted bill columns, so whether a bill still has a balance is for the person's review to check. Returns false when no row was written.
+ */
+export async function insertPlanProposal(db: Queryable, p: PlanProposalInsert): Promise<boolean> {
+  const { rows } = await db.query(
+    `insert into plan_proposals (id, household_id, client_id, payload, bill_versions, note)
+     select $1, $2, $3, $4::jsonb, jsonb_object_agg(b.id::text, b.version), $5
+       from bills b where b.household_id = $2 and b.id = any($6::uuid[]) and b.amount_status = 'confirmed'
+     having count(*) = $7 returning id`,
+    [p.id, p.householdId, p.clientId, JSON.stringify(p.payload), p.note, p.billIds, p.billIds.length]);
+  return rows.length === 1;
+}
+
+export interface McpPlanProposal { id: string; status: string; createdAt: Date; decidedAt: Date | null; sortKey: string }
+
+/** A client sees only its own plan proposals' status, never who decided or why. */
+export async function listClientPlanProposals(db: Queryable, clientId: string, status: string | undefined, limit: number, cursorRaw: string | undefined): Promise<Page<McpPlanProposal>> {
+  const params: unknown[] = [clientId];
+  const where = ['client_id = $1'];
+  if (status) where.push(`status = $${params.push(status)}`);
+  const cur = decodeCursor(cursorRaw, 2);
+  if (cur) where.push(`(created_at, id) < ($${params.push(cur[0])}::timestamptz, $${params.push(cur[1])}::uuid)`);
+  const { rows } = await db.query<McpPlanProposal>(
+    `select id, status, created_at as "createdAt", decided_at as "decidedAt", created_at::text as "sortKey"
+       from plan_proposals where ${where.join(' and ')} order by created_at desc, id desc limit $${params.push(limit + 1)}`, params);
+  return pageOf(rows, limit, (r) => [r.sortKey, r.id]);
 }
 
 export interface McpProposal {

@@ -414,7 +414,7 @@ export async function restoreArchive(
       const summary = await ledgerSummary(client);
       const keys = new Set([...Object.keys(summary), ...Object.keys(manifest.ledger)]);
       for (const key of keys) {
-        // A backup of a database older than 0017 has no removed-payment or removed-plan total (older than 0019, no removed-HSA-record total); restored into a newer schema that total can only be zero.
+        // A backup of a database older than 0017 has no removed-payment or removed-plan total (older than 0020, no removed-HSA-record total); restored into a newer schema that total can only be zero.
         if ((key === 'removedPayments' || key === 'removedPlans' || key === 'removedHsaRecords') && manifest.ledger[key] === undefined && summary[key] === '0') continue;
         if (summary[key] !== manifest.ledger[key]) throw new BackupError('verification_failed', 'The restored ledger totals differ from the totals recorded in the backup. Nothing was restored.');
       }

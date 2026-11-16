@@ -395,7 +395,7 @@ function sumFigures(before: repo.HsaAllocation[], after: repo.HsaAllocation[]): 
   };
 }
 
-/** Maps what the removal guard (migration 0019) raises to a sentence the person can act on. Anything else passes through. */
+/** Maps what the removal guard (migration 0020) raises to a sentence the person can act on. Anything else passes through. */
 function mapRemovalError(e: unknown, kind: RemovalKind, action: repo.RemovalAction): unknown {
   if (e instanceof AppError) return e;
   const err = e as { code?: string; constraint?: string; message?: string };

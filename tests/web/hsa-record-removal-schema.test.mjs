@@ -1,4 +1,4 @@
-// Database layer of administrator removal (with undo) of HSA decisions, claims and receipts (migration 0019): the removal events, the live views,
+// Database layer of administrator removal (with undo) of HSA decisions, claims and receipts (migration 0020): the removal events, the live views,
 // the commit-time guards, claim references among live claims, the backup and the upgrade. Exercised with raw SQL and the existing services;
 // the removal services themselves are tested elsewhere. Real PostgreSQL, fabricated data only.
 import assert from 'node:assert/strict';
@@ -160,7 +160,7 @@ test('upgrade: a database populated at 0018 (decisions, a claim, a partial and a
     assert.equal(before.status.filter((r) => r.direct_hsa).length, 1);
     assert.deepEqual(before.counts, { hsa_eligibility_decisions: 3, hsa_claims: 2, hsa_receipts: 3, hsa_entries: 5 });
 
-    assert.deepEqual(await migrate(db.pool), ['0019']);
+    assert.deepEqual(await migrate(db.pool), ['0019', '0020']);
     const after = { status: await allStatus(db.pool), ledger: await ledgerSummary(db.pool) };
     assert.equal(after.ledger.removedHsaRecords, '0');
     delete after.ledger.removedHsaRecords;
@@ -535,11 +535,11 @@ test('backup: removed HSA records round-trip (create, verify, restore) with the 
   const target = await freshDatabase();
   try {
     const spec = BACKUP_TABLES.find((x) => x.name === 'hsa_removal_events');
-    assert.deepEqual([spec.since, spec.orderBy], ['0019', 'seq']);
+    assert.deepEqual([spec.since, spec.orderBy], ['0020', 'seq']);
     const names = BACKUP_TABLES.map((x) => x.name);
     for (const dep of ['hsa_eligibility_decisions', 'hsa_claims', 'hsa_receipts', 'hsa_entries']) assert.ok(names.indexOf('hsa_removal_events') > names.indexOf(dep), `after ${dep}`);
     assert.ok(!tablesAt(['0018']).some((x) => x.name === 'hsa_removal_events'));
-    assert.ok(tablesAt(['0018', '0019']).some((x) => x.name === 'hsa_removal_events'));
+    assert.ok(tablesAt(['0018', '0019', '0020']).some((x) => x.name === 'hsa_removal_events'));
 
     const a = await t.alloc();
     const d = await t.decide(a.allocationId, 'eligible', '80.00');
@@ -580,7 +580,7 @@ test('backup: removed HSA records round-trip (create, verify, restore) with the 
   } finally { await target.drop(); ts.cleanup(); await t.db.drop(); }
 });
 
-test('backup: a backup made before 0019 restores, and the upgrade then leaves every figure as it was', { skip: skipDb }, async () => {
+test('backup: a backup made before 0020 restores, and the upgrade then leaves every figure as it was', { skip: skipDb }, async () => {
   const old = await freshDatabase({ migrateAll: false });
   const target = await freshDatabase({ migrateAll: false });
   const ts = tempStore();
@@ -592,7 +592,7 @@ test('backup: a backup made before 0019 restores, and the upgrade then leaves ev
     await old.pool.query(`update users set password_hash = 'x', must_change_password = false where id = $1`, [x.u]);
     assert.ok(!tablesAt(['0018']).some((s) => s.name === 'hsa_removal_events'));
     const before = { status: await allStatus(old.pool), ledger: await ledgerSummary(old.pool) };
-    assert.equal(before.ledger.removedHsaRecords, undefined, 'a database older than 0019 reports no such total');
+    assert.equal(before.ledger.removedHsaRecords, undefined, 'a database older than 0020 reports no such total');
 
     const backup = createBackup(old.pool, ts.store, { passphrase: null });
     const file = path.join(ts.dir, backup.filename);
@@ -607,7 +607,7 @@ test('backup: a backup made before 0019 restores, and the upgrade then leaves ev
     await restoreArchive(target.pool, null, file, { via: 'cli' });
     assert.deepEqual(await allStatus(target.pool), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
-    assert.deepEqual(await migrate(target.pool), ['0019']);
+    assert.deepEqual(await migrate(target.pool), ['0019', '0020']);
     const after = await ledgerSummary(target.pool);
     assert.equal(after.removedHsaRecords, '0');
     delete after.removedHsaRecords;

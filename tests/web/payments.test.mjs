@@ -495,3 +495,70 @@ test('the connection pool survives an idle client error instead of crashing the 
     setLogSink((line) => process.stderr.write(line + '\n'));
   }
 });
+
+test('a payment of $70.00 split across two bills by an HTML form, with indexed rows', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const { m, p } = await ids(t);
+    const a = await t.bill({ memberId: m, providerId: p, originalAmount: '45.00' });
+    const b = await t.bill({ memberId: m, providerId: p, originalAmount: '25.00' });
+    const c = await t.bill({ memberId: m, providerId: p, originalAmount: '12.00' });
+    const token = t.cookie.split('=')[1];
+    const form = (action, fields) => handlers.handleExpenseAction(post(`/api/expenses/${action}`, { csrf: csrfFor(token), ...fields }, { cookie: t.cookie, html: true }), t.ctx, action);
+    const base = () => ({ idempotencyKey: t.key(), paidOn: '2026-04-02', amount: '70.00', method: 'card' });
+    const rows = (...r) => Object.fromEntries(r.flatMap(([bill, amount], i) => [[`alloc.${i}.billId`, bill], [`alloc.${i}.amount`, amount]]));
+    // Two rows and two spare blank rows.
+    const ok = await form('payments/create', { ...base(), ...rows([a.id, '45.00'], [b.id, '25.00'], ['', ''], ['', '']) });
+    assert.equal(ok.status, 303);
+    const paymentId = new URL(ok.headers.get('location')).pathname.split('/').pop();
+    assert.equal((await t.detail(a.id)).openBalanceCents, '0');
+    assert.equal((await t.detail(b.id)).openBalanceCents, '0');
+    const d = await t.payment(paymentId);
+    assert.equal(d.payment.appliedCents, '7000');
+    assert.equal(d.payment.unappliedCents, '0');
+    assert.equal(d.allocations.length, 2);
+    const allocated = await t.audit('payment.allocated');
+    assert.deepEqual(allocated.map((r) => [r.detail.billId, r.detail.amountCents, r.detail.balanceBeforeCents, r.detail.balanceAfterCents]).sort(),
+      [[a.id, '4500', '4500', '0'], [b.id, '2500', '2500', '0']].sort());
+    assert.equal(new Set(allocated.map((r) => r.detail.eventId)).size, 1, 'one event covers both bills');
+    const created = (await t.audit('payment.recorded')).at(-1);
+    assert.equal(created.detail.paymentId, paymentId);
+    // A single row with no amount applies the whole payment, like the one-bill form.
+    const whole = await form('payments/create', { ...base(), amount: '12.00', ...rows([c.id, ''], ['', '']) });
+    assert.equal(whole.status, 303);
+    assert.equal((await t.detail(c.id)).openBalanceCents, '0');
+    // Refused, and nothing is recorded: the same bill twice, more than the payment, a half-filled row, a gap, and mixing with the one-bill fields.
+    const d2 = await t.bill({ memberId: m, providerId: p, originalAmount: '50.00' });
+    const before = await t.count('payments');
+    const cases = [
+      rows([d2.id, '10.00'], [d2.id, '5.00']),
+      rows([d2.id, '40.00'], [a.id, '40.00']),
+      rows([d2.id, '10.00'], [b.id, '']),
+      { ...rows([d2.id, '10.00']), 'alloc.2.billId': d2.id, 'alloc.2.amount': '1.00' },
+      { ...rows([d2.id, '10.00']), billId: d2.id, allocateAmount: '5.00' },
+      { ...rows([d2.id, '10.00']), 'alloc.1.note': 'x' },
+    ];
+    for (const extra of cases) {
+      const res = await form('payments/create', { ...base(), amount: '30.00', ...extra });
+      assert.equal(res.status, 303);
+      assert.match(res.headers.get('location'), /\/payments\?error=(invalid_input|conflict)/);
+    }
+    assert.equal(await t.count('payments'), before);
+    assert.equal((await t.detail(d2.id)).openBalanceCents, '5000');
+    // The typed rows come back through the one-shot cookie after an error.
+    const bad = await form('payments/create', { ...base(), amount: '30.00', ...rows([d2.id, '10.00'], [d2.id, '5.00']) });
+    const flash = bad.headers.get('set-cookie');
+    assert.ok(flash && flash.includes('tallymed_flash='));
+    // The allocate form splits unapplied cash over several bills too.
+    const open = await t.pay1({ amount: '30.00' });
+    const e = await t.bill({ memberId: m, providerId: p, originalAmount: '20.00' });
+    const f = await t.bill({ memberId: m, providerId: p, originalAmount: '10.00' });
+    const applied = await form('payments/allocate', { idempotencyKey: t.key(), paymentId: open.id, ...rows([e.id, '20.00'], [f.id, '10.00'], ['', '']) });
+    assert.equal(applied.status, 303);
+    assert.equal((await t.payment(open.id)).payment.unappliedCents, '0');
+    assert.equal((await t.detail(e.id)).openBalanceCents, '0');
+    assert.equal((await t.detail(f.id)).openBalanceCents, '0');
+  } finally {
+    await t.db.drop();
+  }
+});
