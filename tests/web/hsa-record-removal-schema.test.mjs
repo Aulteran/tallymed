@@ -143,7 +143,7 @@ async function populate0018(db) {
 
 const allStatus = (pool) => pool.query(`select * from hsa_allocation_status order by allocation_id`).then((r) => r.rows);
 
-test('upgrade: a database populated at 0018 (decisions, a claim, a partial and an external receipt, a direct HSA payment, a refund that needs review) reports the same figures at 0019', { skip: skipDb }, async () => {
+test('upgrade: a database populated at 0018 (decisions, a claim, a partial and an external receipt, a direct HSA payment, a refund that needs review) reports the same figures after the upgrade to 0020', { skip: skipDb }, async () => {
   const db = await freshDatabase({ migrateAll: false });
   try {
     await migrate(db.pool, { upTo: '0018' });
