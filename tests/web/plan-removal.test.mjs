@@ -446,7 +446,7 @@ test('upgrade: migration 0017 over a database populated at 0016 keeps its plan, 
       matches: (await db.pool.query(`select * from installment_matches`)).rows,
       installments: (await db.pool.query(`select * from plan_installments order by seq`)).rows,
     };
-    assert.deepEqual(await migrate(db.pool), ['0017', '0018']);
+    assert.deepEqual(await migrate(db.pool), ['0017', '0018', '0019']);
     assert.deepEqual((await db.pool.query(`select id, name, status, version, created_at from payment_plans`)).rows, before.plans);
     assert.deepEqual((await db.pool.query(`select * from installment_matches`)).rows, before.matches);
     assert.deepEqual((await db.pool.query(`select * from plan_installments order by seq`)).rows, before.installments);

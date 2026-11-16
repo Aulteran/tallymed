@@ -47,8 +47,11 @@ create constraint trigger payment_hsa_ineligible_refuse_direct after insert on p
 -- Funding side: a direct funding (or its reinstatement) is refused on a payment that carries the marker.
 create function payment_hsa_funding_refuse_ineligible() returns trigger language plpgsql as $$
 begin
-  if tg_table_name = 'payment_hsa_funding_events' and new.action <> 'reinstate' then
-    return null;
+  if tg_table_name = 'payment_hsa_funding_events' then
+    -- A release only ends the direct funding; only a reinstatement can make the payment direct again.
+    if to_jsonb(new) ->> 'action' <> 'reinstate' then
+      return null;
+    end if;
   end if;
   perform 1 from payments where id = new.payment_id for no key update;
   if exists (select 1 from payment_hsa_ineligible i where i.payment_id = new.payment_id) and payment_is_direct_hsa(new.payment_id) then

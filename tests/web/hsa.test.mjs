@@ -57,7 +57,8 @@ const figsOf = (a) => [a.ceilingCents, a.pendingCents, a.receivedCents, a.availa
 /** Rebuilds an allocation's figures from the raw ledger rows only (no view), the independent reconciliation. */
 async function rebuild(pool, allocationId) {
   const { rows: net } = await pool.query(`select coalesce(sum(amount_cents), 0)::bigint n from payment_entries where allocation_id = $1`, [allocationId]);
-  const { rows: dec } = await pool.query(`select eligible_cents from hsa_eligibility_decisions where allocation_id = $1 order by seq desc limit 1`, [allocationId]);
+  const { rows: dec } = await pool.query(`select status, eligible_cents from hsa_eligibility_decisions where allocation_id = $1 order by seq desc limit 1`, [allocationId]);
+  const { rows: mk } = await pool.query(`select 1 from payment_hsa_ineligible i join payment_entries a on a.payment_id = i.payment_id where a.id = $1`, [allocationId]);
   const { rows: ent } = await pool.query(`select kind, amount_cents from hsa_entries where allocation_id = $1`, [allocationId]);
   let pending = 0n, received = 0n;
   for (const e of ent) {
@@ -67,9 +68,10 @@ async function rebuild(pool, allocationId) {
     if (['receipt', 'external_receipt'].includes(e.kind)) received += a;
     if (e.kind === 'receipt_reversal') received -= a;
   }
-  const eligible = BigInt(dec[0]?.eligible_cents ?? 0);
   const n = BigInt(net[0].n);
-  const ceiling = eligible < n ? eligible : n;
+  // The ceiling rule: a marker or an ineligible decision is zero; an eligible decision is the lesser of its amount and the net cash; otherwise the net cash.
+  const eligible = BigInt(dec[0]?.eligible_cents ?? 0);
+  const ceiling = mk.length || dec[0]?.status === 'ineligible' ? 0n : dec[0]?.status === 'eligible' ? (eligible < n ? eligible : n) : n;
   const avail = ceiling - pending - received;
   const over = pending + received - ceiling;
   return [ceiling, pending, received, avail > 0n ? avail : 0n, over > 0n ? over : 0n].map(String);
@@ -86,9 +88,9 @@ test('the ledger example: a $120 bill with $75 paid, $60 eligible, $50 claimed a
     });
     const before = await snapshot();
     assert.equal(before.bill.openBalanceCents, '4500', 'provider balance is $45');
-    // Undecided means unknown: it contributes zero, and a claim is refused.
-    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['0', '0', '0', '0', '0']);
-    await assert.rejects(t.claim([{ allocationId: a.allocationId, amount: '1.00' }]), code('conflict'));
+    // No decision means eligible for the whole net cash: nothing has to be decided before claiming.
+    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['7500', '0', '0', '7500', '0']);
+    await assert.rejects(t.claim([{ allocationId: a.allocationId, amount: '75.01' }]), code('conflict'));
     await t.decide(a.allocationId, 'eligible', '60.00');
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['6000', '0', '0', '6000', '0']);
     const claim = await t.claim([{ allocationId: a.allocationId, amount: '50.00' }]);
@@ -108,7 +110,7 @@ test('the ledger example: a $120 bill with $75 paid, $60 eligible, $50 claimed a
   }
 });
 
-test('eligibility decisions need evidence and a user decision; pending and unknown contribute zero; stale forms are refused', { skip: skipDb }, async () => {
+test('eligibility decisions need evidence and a user decision; pending and unknown fold into the full net cash; stale forms are refused', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
     const a = await t.alloc({ bill: '100.00', paid: '80.00' });
@@ -122,7 +124,7 @@ test('eligibility decisions need evidence and a user decision; pending and unkno
     await assert.rejects(hsa.recordDecision(t.db.pool, t.actor, base({ eligibleAmount: '80.01' }), 'r'), code('conflict'), 'more than the net cash');
     assert.equal(await t.count('hsa_eligibility_decisions'), 0);
     const first = await hsa.recordDecision(t.db.pool, t.actor, base({ status: 'pending', eligibleAmount: undefined, evidenceType: undefined, evidenceNote: undefined, rationale: 'Waiting for the EOB' }), 'r');
-    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['0', '0', '0', '0', '0'], 'pending contributes zero');
+    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['8000', '0', '0', '8000', '0'], 'pending folds into the eligible net cash');
     // A stale form (it saw no decision, one exists now) is refused; the right version works.
     await assert.rejects(hsa.recordDecision(t.db.pool, t.actor, base({}), 'r'), code('stale_version'));
     await hsa.recordDecision(t.db.pool, t.actor, base({ version: '1' }), 'r');
@@ -267,7 +269,8 @@ test('external reimbursements need an explicit source and evidence and obey the 
   const t = await fixture();
   try {
     const a = await t.alloc({ bill: '90.00', paid: '90.00' });
-    await assert.rejects(t.external([{ allocationId: a.allocationId, amount: '10.00' }]), code('conflict'), 'undecided: nothing is available');
+    await t.decide(a.allocationId, 'ineligible');
+    await assert.rejects(t.external([{ allocationId: a.allocationId, amount: '10.00' }]), code('conflict'), 'a decided-ineligible payment has nothing available');
     await t.decide(a.allocationId, 'eligible', '50.00');
     await assert.rejects(t.external([{ allocationId: a.allocationId, amount: '10.00' }], { evidenceType: undefined }), code('invalid_input'));
     await assert.rejects(t.external([{ allocationId: a.allocationId, amount: '10.00' }], { evidenceNote: undefined }), code('invalid_input'));
@@ -554,7 +557,8 @@ test('reports: totals equal the sum of allocations and of the event history, fil
       const key = { ceilingCents: 'eligibleCents' }[k] ?? k;
       assert.equal(all[key], rows.reduce((s, r) => s + BigInt(r[k]), 0n).toString(), k);
     }
-    assert.equal(all.undecidedCount, 1);
+    assert.equal(all.undecidedCount, undefined, 'there is no undecided count any more');
+    assert.equal(rows.find((r) => r.allocationId === undecided.allocationId).ceilingCents, '3000', 'an allocation with no decision is eligible for its net cash');
     // Event history rebuilds the same pending and received totals.
     const events = (await t.db.pool.query(`select kind, amount_cents from hsa_entries`)).rows;
     const pend = events.reduce((s, e) => s + BigInt(e.amount_cents) * ({ reserve: 1n, receipt: -1n, reject: -1n, cancel: -1n }[e.kind] ?? 0n), 0n);
@@ -567,7 +571,7 @@ test('reports: totals equal the sum of allocations and of the event history, fil
     assert.deepEqual(dated, sam);
     const filtered = await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'available', limit: '100' });
     assert.ok(filtered.items.every((r) => BigInt(r.availableCents) > 0n));
-    assert.deepEqual((await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'undecided' })).items.map((r) => r.allocationId), [undecided.allocationId]);
+    await assert.rejects(hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'undecided' }), code('invalid_input'));
     // Cursor paging follows the newest-first order without losing or repeating a row.
     const p1 = await hsa.listHsaAllocations(t.db.pool, t.actor, { limit: '2' });
     const p2 = await hsa.listHsaAllocations(t.db.pool, t.actor, { limit: '2', cursor: p1.nextCursor });
@@ -663,7 +667,7 @@ test('access boundaries, form posts and the export route', { skip: skipDb }, asy
   }
 });
 
-test('upgrade over payment data from the prior schema: existing allocations start undecided and HSA works on them', { skip: skipDb }, async () => {
+test('upgrade over payment data from the prior schema: existing allocations are eligible by default and HSA works on them', { skip: skipDb }, async () => {
   const db = await freshDatabase({ migrateAll: false });
   try {
     await migrate(db.pool, { upTo: '0005' });
@@ -682,9 +686,9 @@ test('upgrade over payment data from the prior schema: existing allocations star
     await db.pool.query(
       `insert into payment_entries (id, household_id, payment_id, event_id, kind, bill_id, allocation_id, amount_cents, effective_date, reason, created_by)
        values (gen_random_uuid(), $1, $2, gen_random_uuid(), 'refund', $3, $4, -1500, '2026-05-01', 'Provider refund', $5)`, [householdId, pm.id, b.id, refundable.allocationId, adminUserId]);
-    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016', '0017', '0018']);
+    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016', '0017', '0018', '0019']);
     const a = await hsaRepo.getAllocation(db.pool, actor.householdId, refundable.allocationId);
-    assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '0', '0', '0', '0', '0']);
+    assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '6000', '0', '0', '6000', '0']);
     await hsa.recordDecision(db.pool, actor, { idempotencyKey: randomUUID(), allocationId: a.allocationId, version: '0', status: 'eligible', eligibleAmount: '60.00', rationale: 'Qualified', evidenceType: 'eob', evidenceNote: 'EOB', decidedOn: '2026-05-02' }, 'r');
     const c = await hsa.submitClaim(db.pool, actor, { idempotencyKey: randomUUID(), submittedOn: '2026-05-03', administrator: 'Example HSA Bank', lines: [{ allocationId: a.allocationId, amount: '60.00' }] }, 'r');
     assert.ok(c.id);

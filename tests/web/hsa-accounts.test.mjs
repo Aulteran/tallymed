@@ -153,11 +153,11 @@ test('paying with an HSA card records a direct payment: nothing to claim, decide
     assert.deepEqual([ordFigs.directHsa, ordFigs.availableCents], [false, '1000']);
 
     const totals = await hsa.hsaSummary(t.db.pool, t.actor, {});
-    assert.deepEqual([totals.directCount, totals.paidDirectlyCents, totals.undecidedCount, totals.availableCents, totals.eligibleCents], [1, '10000', 0, '1000', '1000']);
+    assert.deepEqual([totals.directCount, totals.paidDirectlyCents, totals.availableCents, totals.eligibleCents], [1, '10000', '1000', '1000']);
     const contract = (await listHsaFigures(t.db.pool, t.actor)).items.find((x) => x.allocationId === da);
     assert.deepEqual([contract.directHsa, contract.availableCents], [true, '0']);
-    // The undecided queue never asks for a decision on a direct payment.
-    assert.equal((await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'undecided' })).items.length, 0);
+    // A direct payment is never eligible: its ceiling stays zero although a payment with no decision is eligible by default.
+    assert.ok(!(await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'eligible' })).items.some((r) => r.allocationId === da));
 
     // A refund of a direct payment returns cash to the HSA: net cash falls, and the account figures follow the cash summary.
     await t.refund(direct.id, { allocationId: da, amount: '25.00' });
@@ -385,10 +385,11 @@ test('a partly applied direct payment: the HSA card counts what was applied, the
     assert.deepEqual([totals.directCount, totals.paidDirectlyCents], [1, '6000'], 'the HSA page counts cash applied to bills');
     assert.equal((await acc.listHsaAccounts(t.db.pool, t.actor)).items[0].netCashCents, '10000', 'the account counts the whole payment');
     assert.equal((await t.payment(direct.id)).payment.unappliedCents, '4000');
-    // The export marks the row instead of calling it undecided.
+    // The export marks the row as paid directly.
     const out = await hsa.exportHsa(t.db.pool, t.actor, { kind: 'allocations' }, 'r');
     assert.match(out.csv, /paid_directly_from_hsa/);
     assert.doesNotMatch(out.csv, /,unknown,/);
+    assert.match(out.csv.split('\n')[0], /payment_marked_ineligible/);
     // Dotted or slashed account-number-like labels are refused too (best effort; another separator would pass).
     for (const name of ['1234.5678.9012', '1234/5678/9012', '1234_5678_9012']) await assert.rejects(account(t, { name }), code('invalid_input'));
   } finally { await t.db.drop(); }
