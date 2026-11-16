@@ -15,7 +15,7 @@ export default async function PaymentMethodsPage({ searchParams }: { searchParam
   const accounts = await pickHsaAccounts(ctx.pool, actor, p.hsaAccountId);
   const keep = pick(p, ['archived']);
   const open = !!p.error || p.add === '1';
-  return <main id="main">
+  return <main id="main" className="wide">
     <div className="page-head">
       <h1>Payment methods</h1>
       <AddDialog label="Add payment method" open={open} keep={keep}>
