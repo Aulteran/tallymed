@@ -30,7 +30,7 @@ export default async function DocumentPage({ params, searchParams }: { params: P
       {attachments.length === 0 ? <p>This document is not attached to any record. Attach it from a bill, visit or HSA record, or below.</p> : <table className="stack">
         <thead><tr><th>Record</th><th>Version</th><th>Linked</th><th>Status</th></tr></thead>
         <tbody>{attachments.map((a) => { const href = targetHref(a); return <tr key={a.id}>
-          <td data-label="Record">{href ? <Link href={href}>{targetLabel(a.targetType)}</Link> : targetLabel(a.targetType)}{a.note ? ` · ${a.note}` : ''}</td>
+          <td data-label="Record">{href ? <Link href={href}>{targetLabel(a.targetType)}</Link> : targetLabel(a.targetType)}{a.targetRemoved ? ' (deleted)' : ''}{a.note ? ` · ${a.note}` : ''}</td>
           <td data-label="Version">{a.versionNo}</td><td data-label="Linked">{dateOf(a.createdAt)} by {a.createdByName ?? 'unknown'}</td>
           <td data-label="Status">{a.detachedAt ? `Detached ${dateOf(a.detachedAt)} by ${a.detachedByName ?? 'unknown'}: ${a.detachReason}` : (
             <form method="post" action="/api/documents/detach"><Csrf token={csrf} /><input type="hidden" name="attachmentId" value={a.id} /><input type="hidden" name="returnTo" value={here} />

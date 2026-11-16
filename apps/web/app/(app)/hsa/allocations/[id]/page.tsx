@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { AttachmentsPanel } from '../../../../components/documents.tsx';
 import { getHsaAllocationDetail } from '../../../../../server/services/hsa.ts';
-import { AMOUNT_PATTERN, DecisionPill, EvidenceOptions, FigureCards, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
+import { can } from '../../../../../server/authz.ts';
+import { AMOUNT_PATTERN, DELETE_EFFECT, DecisionPill, DeleteHsaRecord, EvidenceOptions, FigureCards, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
 import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, q80, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,7 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
   const frozen = BigInt(a.needsReviewCents) > 0n;
   const canClaim = !frozen && BigInt(a.availableCents) > 0n;
   const current = decisions[0];
+  const admin = can(actor, 'records:remove');
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/hsa">← HSA</Link></p>
     <h1>HSA: {a.memberName} · {a.billLabel}</h1>
@@ -75,10 +77,13 @@ export default async function HsaAllocationPage({ params, searchParams }: { para
     </div>
     <div className="card"><h2>Decisions</h2>
       {decisions.length === 0 ? <p>None yet.</p> : <table className="stack">
-        <thead><tr><th>Decided</th><th>Decision</th><th className="num">Eligible</th><th>Rationale</th><th>Evidence</th><th>By</th></tr></thead>
+        <thead><tr><th>Decided</th><th>Decision</th><th className="num">Eligible</th><th>Rationale</th><th>Evidence</th><th>By</th>{admin && <th>Delete</th>}</tr></thead>
         <tbody>{decisions.map((d) => <tr key={d.id}><td data-label="Decided">{d.decidedOn}</td><td data-label="Decision">{label(d.status)}</td><td data-label="Eligible" className="num"><Money cents={d.eligibleCents} /></td>
           <td data-label="Rationale">{d.rationale}</td><td data-label="Evidence">{d.evidenceType ? `${label(d.evidenceType)}: ${d.evidenceNote ?? ''}` : 'None'}{d.contextNote ? ` · ${d.contextNote}` : ''}</td>
-          <td data-label="By">{d.createdByName ?? ''} {dateOf(d.createdAt)}</td></tr>)}</tbody></table>}
+          <td data-label="By">{d.createdByName ?? ''} {dateOf(d.createdAt)}</td>
+          {admin && <td data-label="Delete"><DeleteHsaRecord id={`delete-decision-${d.id}`} label="Delete decision" title="Delete this eligibility decision?" action="/api/expenses/hsa/decision-remove" csrf={csrf}
+            fields={{ decisionId: d.id, allocationId: a.allocationId }} deletable={d.deletable} effect={DELETE_EFFECT.decision}
+            record={<>{label(d.status)} decision of {d.decidedOn}{d.status === 'eligible' ? <> (eligible <Money cents={d.eligibleCents} />)</> : null}</>} /></td>}</tr>)}</tbody></table>}
       <p className="muted">Decisions are immutable. The newest one is current.</p>
     </div>
     <div className="card"><h2>Ledger</h2>

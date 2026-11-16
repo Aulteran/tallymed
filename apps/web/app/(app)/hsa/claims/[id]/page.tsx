@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { getHsaClaimDetail } from '../../../../../server/services/hsa.ts';
-import { AMOUNT_PATTERN, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
+import { can } from '../../../../../server/authz.ts';
+import { AMOUNT_PATTERN, DELETE_EFFECT, DeleteHsaRecord, LineStatusPill, SourceOptions } from '../../../../components/hsa.tsx';
 import { Banner, Csrf, dateOf, flatWithFlash, label, load, Money, newKey, requireSession, todayUtc, type SearchParams } from '../../../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -11,12 +12,17 @@ export default async function HsaClaimPage({ params, searchParams }: { params: P
   const { id } = await params;
   const q = await flatWithFlash(searchParams, `/hsa/claims/${id}`);
   const { data } = await load(() => getHsaClaimDetail(ctx.pool, actor, id), null);
-  const { claim, lines, entries, history } = data!;
+  const { claim, lines, entries, history, deletable } = data!;
   const base = <><Csrf token={csrf} /><input type="hidden" name="claimId" value={claim.id} /></>;
   const key = <input type="hidden" name="idempotencyKey" value={newKey()} />;
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/hsa/claims">← Claims</Link></p>
-    <h1>Claim submitted {claim.submittedOn}</h1>
+    <div className="page-head">
+      <h1>Claim submitted {claim.submittedOn}</h1>
+      {can(actor, 'records:remove') && <DeleteHsaRecord id="delete-claim" label="Delete claim" title="Delete this claim?" action="/api/expenses/hsa/claim-remove" csrf={csrf}
+        fields={{ claimId: claim.id }} deletable={deletable} effect={DELETE_EFFECT.claim}
+        record={<>claim submitted {claim.submittedOn} to {claim.administrator} (reserved <Money cents={claim.reservedCents} />)</>} />}
+    </div>
     <p>{claim.administrator}{claim.reference ? ` · ${claim.reference}` : ''} · by {claim.createdByName ?? 'unknown'} {dateOf(claim.createdAt)} <span className={claim.open ? 'pill warn' : 'pill neutral'}>{claim.open ? 'Open' : 'Closed'}</span> · <Link href="/hsa/claims">All claims</Link></p>
     {claim.note && <p>{claim.note}</p>}
     <Banner code={q.error} />

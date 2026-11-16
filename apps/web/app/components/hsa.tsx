@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { Money, label } from './ui.tsx';
+import type { ReactNode } from 'react';
+import { ConfirmDialog } from './ConfirmDialog.tsx';
+import { Csrf, Money, label, newKey } from './ui.tsx';
 import type { HsaAllocation, LineStatus } from '../../server/repositories/hsa.ts';
 
 export const EVIDENCE_TYPES = ['receipt', 'eob', 'statement', 'provider_letter', 'plan_document', 'other'] as const;
@@ -37,3 +39,38 @@ export function FigureCards({ a }: { a: HsaAllocation }) {
 
 export const AllocationLink = ({ a }: { a: Pick<HsaAllocation, 'allocationId' | 'memberName' | 'billLabel' | 'paidOn'> }) =>
   <Link href={`/hsa/allocations/${a.allocationId}`}>{a.memberName} · {a.billLabel} · paid {a.paidOn}</Link>;
+
+export type Deletable = { deletable: boolean; reason: string | null } | null | undefined;
+
+/**
+ * Administrator-only delete control for an HSA record. `deletable` is null for operators, so nothing renders for them. When the record
+ * cannot be deleted yet, a disabled button is shown with the reason as visible text (also its description), never as a tooltip.
+ */
+export function DeleteHsaRecord({ id, label: buttonLabel, title, action, fields, csrf, deletable, record, effect }: {
+  id: string; label: string; title: string; action: string; fields: Record<string, string>; csrf: string; deletable: Deletable; record: ReactNode; effect: string;
+}) {
+  if (!deletable) return null;
+  if (!deletable.deletable) return <span className="delete-blocked">
+    <button type="button" className="secondary" disabled aria-describedby={`${id}-why-not`}>{buttonLabel}</button>
+    <span id={`${id}-why-not`} className="muted">{deletable.reason ?? 'This cannot be deleted right now.'}</span>
+  </span>;
+  return <ConfirmDialog id={id} label={buttonLabel} title={title}>
+    <form method="post" action={action}>
+      <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
+      {Object.entries(fields).map(([name, value]) => <input key={name} type="hidden" name={name} value={value} />)}
+      <p>This deletes the {record}.</p>
+      <ul>
+        <li>{effect}</li>
+        <li>You can undo this for 3 minutes or until your next action.</li>
+      </ul>
+      <label htmlFor={`${id}-why`}>Reason</label><input id={`${id}-why`} name="reason" required maxLength={500} defaultValue="Removed by administrator" />
+      <div className="modal-actions"><button type="submit" className="danger">{buttonLabel}</button></div>
+    </form>
+  </ConfirmDialog>;
+}
+
+export const DELETE_EFFECT = {
+  receipt: 'Its amount goes back to pending on the claim lines and the received total falls.',
+  claim: 'Its reserved amounts are released and the payments become available to claim again.',
+  decision: 'The previous decision (if any) applies again; with none, the payment has no eligibility decision.',
+};

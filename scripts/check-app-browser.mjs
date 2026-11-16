@@ -907,6 +907,159 @@ try {
   assert.equal(await hsaRows(), 1, 'the HSA page lists the restored payment exactly once, with no zero-dollar duplicate');
   ok('administrator deletes a payment, sees the undo banner, undoes it and the payment is back; operators see neither; delete dialogs pass axe at phone width');
 
+  // Delete HSA records (administrators only): receipt, then claim, then decision, each with an undo. A fresh fabricated payment keeps the earlier flows intact.
+  await enterBill({ provider: 'Example Clinic', reference: 'HSA-DEL-1', amount: '100.00', responsibility: '100.00', status: 'confirmed', visit: true });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  const delBillId = page.url().split('/').pop();
+  await page.goto(`${origin}/payments?billId=${delBillId}`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#paidOn', '2026-03-10');
+  await page.fill('#amount', '100.00');
+  await page.fill('#allocateAmount', '100.00');
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  await page.goto(`${origin}/hsa`);
+  await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'paid 2026-03-10' }).first().click();
+  await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
+  const delAllocUrl = page.url();
+  await page.selectOption('#status', 'eligible');
+  await page.fill('#eligibleAmount', '80.00');
+  await page.fill('#rationale', 'Qualified medical expense');
+  await page.selectOption('#evidenceType', 'receipt');
+  await page.fill('#evidenceNote', 'Fabricated receipt on file');
+  await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
+  await page.waitForURL(delAllocUrl);
+  await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '60.00');
+  await page.fill('#administrator', 'Example HSA Bank');
+  await page.fill('#reference', 'CLM-DEL-1');
+  await page.click('form[action="/api/expenses/hsa/claim"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/claims\/[0-9a-f-]{36}$/);
+  const delClaimUrl = page.url();
+  await page.fill('form[action="/api/expenses/hsa/receipt"] input[name=amount]', '25.00');
+  await page.click('form[action="/api/expenses/hsa/receipt"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/receipts\/[0-9a-f-]{36}$/);
+  const delReceiptUrl = page.url();
+  const figure = async (label) => (await page.locator(`.card:has(> span:text-is("${label}")) > strong`).first().innerText()).trim();
+  const noOverflow = async (what) => {
+    const o = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, right: document.querySelector('dialog[open]')?.getBoundingClientRect().right ?? 0 }));
+    assert.ok(o.scrollWidth <= o.width && o.right <= o.width, `${what} fits a phone: ${JSON.stringify(o)}`);
+  };
+  // Open one delete dialog at phone width, check it, then close it and return to desktop width.
+  const phoneConfirm = async (url, button, dialogId, effect) => {
+    await page.goto(url);
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.click(`button:has-text("${button}")`);
+    const dlg = page.locator(`dialog#${dialogId}`);
+    await dlg.waitFor({ state: 'visible' });
+    assert.match(await dlg.innerText(), effect);
+    assert.match(await dlg.innerText(), /undo this for 3 minutes or until your next action/);
+    assert.equal(await dlg.locator('input[name=reason]').inputValue(), 'Removed by administrator');
+    await a11y(`${dialogId} dialog at phone width`);
+    await noOverflow(dialogId);
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 1280, height: 900 });
+  };
+  const confirmDelete = async (url, button, dialogId) => {
+    await page.goto(url);
+    await page.click(`button:has-text("${button}")`);
+    await page.locator(`dialog#${dialogId}`).waitFor({ state: 'visible' });
+    await page.locator(`dialog#${dialogId} button[type=submit]`).click();
+  };
+  const banner = page.locator('[role=status]');
+  const undoNow = async () => { await page.click('[role=status] button:has-text("Undo")'); await page.waitForLoadState(); assert.equal(await banner.count(), 0, 'the banner is gone once the slot is used'); };
+
+  // The claim cannot be deleted while it has a reimbursement: a disabled button with the reason in plain sight.
+  await page.goto(delClaimUrl);
+  const blocked = page.locator('button:has-text("Delete claim")');
+  assert.equal(await blocked.isDisabled(), true);
+  assert.match(await text(), /Delete its reimbursements first/);
+  assert.equal(await page.locator('dialog#delete-claim').count(), 0, 'no dialog while the claim cannot be deleted');
+  assert.match(await page.locator(`#${await blocked.getAttribute('aria-describedby')}`).innerText(), /Delete its reimbursements first/);
+  assert.match(await figure('Pending'), /\$35\.00/);
+  await a11y('HSA claim page with Delete disabled and its reason');
+  await phoneConfirm(delReceiptUrl, 'Delete reimbursement', 'delete-receipt', /goes back to pending on the claim lines and the received total falls/);
+
+  // Delete the receipt: the received figure falls and the claim line's pending rises; undo brings both back.
+  await page.goto(delAllocUrl);
+  assert.match(await figure('Received'), /\$25\.00/);
+  await confirmDelete(delReceiptUrl, 'Delete reimbursement', 'delete-receipt');
+  await page.waitForURL(delClaimUrl);
+  assert.equal(await banner.count(), 1);
+  assert.match(await banner.innerText(), /HSA reimbursement deleted/);
+  await a11y('HSA claim page with the undo banner');
+  assert.match(await figure('Pending'), /\$60\.00/);
+  const geometry = await page.evaluate(() => {
+    const b = document.querySelector('aside.undo-bar').getBoundingClientRect();
+    const m = document.querySelector('main').getBoundingClientRect();
+    return { bannerBottom: b.bottom, bannerHeight: b.height, mainTop: m.top };
+  });
+  assert.ok(geometry.bannerHeight < 160, `undo banner is a slim bar on the HSA claim page: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.mainTop >= geometry.bannerBottom - 1 && geometry.mainTop - geometry.bannerBottom < 80, `the HSA claim page sits right under the undo banner: ${JSON.stringify(geometry)}`);
+  assert.equal((await page.goto(delReceiptUrl)).status(), 404, 'a deleted reimbursement is not found');
+  await page.goto(delAllocUrl);
+  assert.match(await figure('Received'), /\$0\.00/);
+  assert.match(await figure('Pending'), /\$60\.00/);
+  assert.match(await page.locator('tr:has(a[href^="/hsa/claims/"])').first().innerText(), /\$60\.00/, 'the claim line shows the pending amount again');
+  await undoNow();
+  await page.waitForURL(delReceiptUrl);
+  assert.match(await text(), /Reimbursement of\s*\$25\.00/);
+  await page.goto(delAllocUrl);
+  assert.match(await figure('Received'), /\$25\.00/);
+  assert.match(await figure('Pending'), /\$35\.00/);
+
+  // Delete the receipt again, then the claim (now enabled); the payment is available to claim again.
+  await confirmDelete(delReceiptUrl, 'Delete reimbursement', 'delete-receipt');
+  await page.waitForURL(delClaimUrl);
+  assert.equal(await page.locator('button[aria-haspopup=dialog]:has-text("Delete claim")').isDisabled(), false, 'the claim can be deleted once it has no reimbursements');
+  await phoneConfirm(delClaimUrl, 'Delete claim', 'delete-claim', /reserved amounts are released and the payments become available to claim again/);
+  await confirmDelete(delClaimUrl, 'Delete claim', 'delete-claim');
+  await page.waitForURL(`${origin}/hsa/claims`);
+  assert.match(await banner.innerText(), /HSA claim deleted/);
+  await a11y('HSA claims list with the undo banner');
+  assert.doesNotMatch(await text(), /CLM-DEL-1/);
+  assert.equal((await page.goto(delClaimUrl)).status(), 404, 'a deleted claim is not found');
+  await page.goto(`${origin}/hsa`);
+  assert.match(await page.locator('tr', { has: page.locator('a', { hasText: 'paid 2026-03-10' }) }).locator('td[data-label=Available]').innerText(), /\$80\.00/, 'the payment is available to claim again');
+  await page.goto(delAllocUrl);
+  assert.match(await figure('Available'), /\$80\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 1, 'a new claim can be submitted');
+
+  // Delete the decision row (nothing supports it any more); undo restores it.
+  await page.goto(delAllocUrl);
+  const decisionDialogId = await page.locator('dialog[id^=delete-decision-]').first().getAttribute('id');
+  await phoneConfirm(delAllocUrl, 'Delete decision', decisionDialogId, /previous decision \(if any\) applies again; with none, the payment has no eligibility decision/);
+  await confirmDelete(delAllocUrl, 'Delete decision', decisionDialogId);
+  await page.waitForURL(delAllocUrl);
+  assert.match(await banner.innerText(), /HSA eligibility decision deleted/);
+  await a11y('HSA payment page with the decision deleted and the undo banner');
+  assert.match(await text(), /No decision yet/);
+  assert.match(await figure('Available'), /\$0\.00/);
+  await undoNow();
+  await page.waitForURL(delAllocUrl);
+  assert.match(await text(), /Current: Eligible \$80\.00/);
+  assert.match(await figure('Available'), /\$80\.00/);
+
+  // Operators see no Delete buttons and no undo banner on any of the three pages (the receipt and claim were deleted, so use the surviving decision page and a fresh claim).
+  await page.goto(delAllocUrl);
+  await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '10.00');
+  await page.fill('#administrator', 'Example HSA Bank');
+  await page.click('form[action="/api/expenses/hsa/claim"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/claims\/[0-9a-f-]{36}$/);
+  const opClaimUrl = page.url();
+  await page.fill('form[action="/api/expenses/hsa/receipt"] input[name=amount]', '4.00');
+  await page.click('form[action="/api/expenses/hsa/receipt"] button[type=submit]');
+  await page.waitForURL(/\/hsa\/receipts\/[0-9a-f-]{36}$/);
+  const opReceiptUrl = page.url();
+  for (const url of [delAllocUrl, opClaimUrl, opReceiptUrl]) {
+    await page.goto(url);
+    assert.ok(await page.locator('button:has-text("Delete")').count() >= 1, `an administrator sees Delete on ${url}`);
+    await sam.goto(url);
+    assert.equal(await sam.locator('button:has-text("Delete")').count(), 0, `operators see no Delete on ${url}`);
+    assert.equal(await sam.locator('dialog[id^=delete-]').count(), 0, `operators get no delete dialog on ${url}`);
+    assert.equal(await sam.locator('[role=status]').count(), 0, `operators see no undo banner on ${url}`);
+  }
+  ok('administrator deletes an HSA receipt, claim and decision in order (disabled with a reason until the leaf is gone), sees the figures change and the undo banner, and undoes; operators see no Delete; dialogs pass axe and fit at phone width');
+
   // User menu: settings dialog, theme choice, and sign out only after confirming.
   await page.click('button[aria-label="User settings"]');
   const settingsDialog = page.locator('dialog[aria-labelledby="user-settings-title"]');
