@@ -2,11 +2,12 @@ import Link from 'next/link';
 import { formatCents } from '../../../server/money.ts';
 import { pickParties } from '../../../server/services/expenses.ts';
 import { pickPayableBills } from '../../../server/services/payments.ts';
-import { listInstallmentQueue, listPlans } from '../../../server/services/plans.ts';
+import { listInstallmentQueue, listPlans, previewNewPlan } from '../../../server/services/plans.ts';
 import { AddDialog } from '../../components/AddDialog.tsx';
+import { PlanPreviewPanel, PreviewButton, SaveButton, tryPreview } from '../../components/PlanPreview.tsx';
 import { PlanScheduleFields } from '../../components/PlanScheduleFields.tsx';
 import {
-  Banner, Csrf, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, pick, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
+  Banner, Empty, flatWithFlash, label, load, Money, NarrowForm, newKey, Options, Pager, pick, q80, requireSession, StatePill, todayUtc, Truncated, type SearchParams,
 } from '../../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
@@ -23,7 +24,8 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
   const { data, invalid } = await load(() => listPlans(ctx.pool, actor, { ...filters, cursor: p.cursor }, asOf), { items: [], nextCursor: null });
   const queue = await load(() => listInstallmentQueue(ctx.pool, actor, { state: p.state, asOf, limit: 25 }), { items: [], nextCursor: null });
   const byProvider = [...Map.groupBy(bills.items, (b) => b.providerName)].sort(([a], [b]) => a.localeCompare(b));
-  const open = !!p.error || p.add === '1';
+  const open = !!p.error || p.add === '1' || p.preview === 'create';
+  const preview = p.preview === 'create' ? await tryPreview(() => previewNewPlan(ctx.pool, actor, p)) : null;
   return <main id="main" className="wide">
     <div className="page-head">
       <h1>Payment Plans</h1>
@@ -34,7 +36,7 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
           <NarrowForm inDialog fields={[{ name: 'billQ', label: 'Find a bill' }]} values={p} />
         </>}
         <form method="post" action="/api/expenses/plans/create">
-          <Csrf token={csrf} /><input type="hidden" name="idempotencyKey" value={newKey()} />
+          <input type="hidden" name="idempotencyKey" value={newKey()} />
           <p className="muted">A plan is an obligation: its installments schedule amounts to pay, and creating one moves no cash. Record the actual payments on the Payments page, then match them to installments.</p>
           <label htmlFor="name">Plan name</label><input id="name" name="name" required maxLength={120} defaultValue={p.name} />
           <fieldset>
@@ -48,10 +50,11 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
           </fieldset>
           <label htmlFor="startedOn">Plan start date (optional)</label><input id="startedOn" name="startedOn" type="date" max={asOf} defaultValue={p.startedOn} />
           <p className="muted">When the plan began, if that was before today. Leave empty for today. It is a label only; the real time of entry is kept in the history.</p>
-          <label className="checkbox"><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error ? p.matchExisting !== undefined : true} /> Match payments made since the start date</label>
+          <label className="checkbox"><input id="matchExisting" type="checkbox" name="matchExisting" value="on" defaultChecked={p.error || p.preview ? p.matchExisting !== undefined : true} /> Match payments made since the start date</label>
           <p className="muted">Payments made on or after the start date and already applied to the ticked bills are matched to the earliest installments, oldest payment first, so those installments show as paid. This only links to cash already recorded; it adds no cash and changes no bill balance. The first due date can be in the past.</p>
           <PlanScheduleFields idPrefix="new" defaults={{ inputMode: p.inputMode, totalAmount: p.totalAmount, installmentCount: p.installmentCount, installmentAmount: p.installmentAmount, remainder: p.remainder, firstDueDate: p.firstDueDate, cadence: p.cadence }} />
-          <button type="submit">Create plan</button>
+          {preview && <PlanPreviewPanel result={preview} />}
+          <div className="actions"><SaveButton csrf={csrf}>Create plan</SaveButton><PreviewButton action="/plans" kind="create" /></div>
           <p className="muted">Installments always add up exactly to the total. A plan is saved even if its total differs from the bills' open balance; the difference is shown on the plan.</p>
         </form>
       </AddDialog>

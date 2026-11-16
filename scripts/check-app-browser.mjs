@@ -438,6 +438,117 @@ try {
   await a11y('overview with payments and plans');
   ok('plan created, installment partly matched, bill balance unchanged, overdue queue on the overview');
 
+  // "The plan was restructured": fully paid installments are kept and the rest is scheduled again from an amount per installment.
+  // Fabricated figures: a $30.00 plan of 3 x $10.00 with the first installment fully paid; $20.00 is left, restarted at $15.00 (a smaller last $5.00).
+  await page.goto(planUrl);
+  assert.equal(await page.locator('button:has-text("Plan was restructured")').count(), 0, 'no restructure button while nothing is fully paid');
+  await page.selectOption('#installmentId', { index: 1 });
+  await page.selectOption('#allocationId', { index: 1 });
+  await page.fill('#amount', '5.00');
+  await page.click('form[action="/api/expenses/plans/match"] button[type=submit]');
+  await page.waitForURL(planUrl);
+  const versionRows = () => page.locator('div.card:has(h2:has-text("Schedule versions")) tbody tr').count();
+  const scheduleRows = () => page.locator('div.card:has(h2:has-text("Current schedule")) tbody tr');
+  assert.equal(await versionRows(), 1);
+  const restructure = page.locator('dialog:has(#rs-amount)');
+  await page.click('.page-head .page-action button:has-text("Plan was restructured")');
+  await restructure.waitFor({ state: 'visible' });
+  assert.match(await restructure.innerText(), /1 installment is fully paid \(\$10\.00\)\. Still to schedule: \$20\.00/);
+  assert.equal(await page.inputValue('#rs-total'), '20.00', 'the total still to schedule is prefilled');
+  assert.equal(await restructure.locator('[name=installmentCount]').count(), 0, 'no installment count in the restructure dialog');
+  await a11y('plan detail with the restructure dialog');
+  await page.fill('#rs-amount', '15.00');
+  await page.fill('#rs-first', '2026-05-01');
+  await page.fill('#rs-why', 'Provider restructured the plan');
+  // Preview is a GET back to this page: the typed values come back, nothing is written and no secret reaches the address.
+  await restructure.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=restructure/);
+  assert.ok(!/csrf/i.test(page.url()), `the preview address carries no CSRF token: ${page.url()}`);
+  await restructure.waitFor({ state: 'visible' });
+  const previewRows = restructure.locator('.preview tbody tr');
+  assert.equal(await previewRows.count(), 3);
+  assert.match(await previewRows.nth(0).innerText(), /\$10\.00\s+kept, paid/);
+  assert.match(await previewRows.nth(1).innerText(), /2026-05-01\s+\$15\.00\s+new/);
+  assert.match(await previewRows.nth(2).innerText(), /2026-06-01\s+\$5\.00\s+new/);
+  assert.match(await restructure.innerText(), /3 installments totalling \$30\.00/);
+  assert.equal(await page.inputValue('#rs-amount'), '15.00', 'the form stays filled after Preview');
+  assert.equal(await page.inputValue('#rs-why'), 'Provider restructured the plan');
+  await a11y('plan detail with the restructure preview');
+  assert.equal(await versionRows(), 1, 'Preview saved nothing');
+  // An impossible schedule shows its message instead of a table.
+  await page.fill('#rs-total', '0.00');
+  await restructure.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=restructure/);
+  assert.equal(await restructure.locator('.preview table').count(), 0);
+  assert.match(await restructure.locator('.preview').innerText(), /would not be saved/);
+  await page.fill('#rs-total', '20.00');
+  await restructure.locator('button:has-text("Save new schedule")').click();
+  await page.waitForURL(planUrl);
+  assert.equal(await versionRows(), 2);
+  assert.equal(await scheduleRows().count(), 3);
+  assert.match(await scheduleRows().nth(2).innerText(), /2026-06-01\s+\$5\.00/);
+  assert.match(await text(), /Plan total\s*\n?\s*\$30\.00/);
+  // A refused restructure reopens its own dialog with the typed values.
+  await page.click('.page-head .page-action button:has-text("Plan was restructured")');
+  await restructure.waitFor({ state: 'visible' });
+  await page.fill('#rs-amount', '5.00');
+  await page.fill('#rs-total', '5000000.00');
+  await page.fill('#rs-first', '2026-09-01');
+  await page.fill('#rs-why', 'Too many installments');
+  await restructure.locator('button:has-text("Save new schedule")').click();
+  await page.waitForURL(/error=/);
+  await restructure.waitFor({ state: 'visible' });
+  assert.equal(await page.inputValue('#rs-amount'), '5.00');
+  assert.equal(await page.inputValue('#rs-why'), 'Too many installments');
+  assert.ok((await restructure.locator('.error').count()) > 0, 'the error shows inside the restructure dialog');
+  assert.equal(await versionRows(), 2);
+  await page.goto(planUrl);
+  // The full revise form previews too, with its own values.
+  await page.check('#rv-keep');
+  await page.check('#rv-mode-per');
+  await page.fill('#rv-total', '20.00');
+  await page.fill('#rv-amount', '8.00');
+  await page.fill('#rv-first', '2026-07-01');
+  await page.click('form.card[action="/api/expenses/plans/revise"] button:has-text("Preview")');
+  await page.waitForURL(/preview=revise/);
+  assert.ok(!/csrf/i.test(page.url()));
+  const revisePreviewRows = page.locator('form.card .preview tbody tr');
+  assert.equal(await revisePreviewRows.count(), 4);
+  assert.match(await revisePreviewRows.nth(3).innerText(), /\$4\.00/);
+  assert.equal(await page.inputValue('#rv-amount'), '8.00');
+  assert.equal(await versionRows(), 2, 'Preview saved nothing');
+  await a11y('plan detail with the revise preview');
+  // The restructure dialog and its preview fit a phone.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`${planUrl}?preview=restructure&installmentAmount=7.00&totalAmount=20.00&firstDueDate=2026-09-01`);
+  await restructure.waitFor({ state: 'visible' });
+  await a11y('restructure dialog with a preview at phone width');
+  const rsFit = await page.evaluate(() => { const d = document.querySelector('dialog[open]'); return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: d.scrollWidth, dialogClient: d.clientWidth, right: d.getBoundingClientRect().right }; });
+  assert.ok(rsFit.scrollWidth <= rsFit.width && rsFit.dialog <= rsFit.dialogClient && rsFit.right <= rsFit.width, `the restructure dialog fits a phone: ${JSON.stringify(rsFit)}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // The create form previews as well and writes nothing.
+  await page.goto(`${origin}/plans`);
+  const planCount = () => page.locator('main table.stack').last().locator('tbody tr').count();
+  const plansBefore = await planCount();
+  await openAdd('Create plan');
+  await page.fill('#name', 'Previewed plan');
+  await page.check(`#bill_${billId}`);
+  await page.uncheck('#matchExisting');
+  await page.fill('#new-total', '30.00');
+  await page.fill('#new-count', '3');
+  await page.fill('#new-first', '2026-09-01');
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=create/);
+  assert.ok(!/csrf/i.test(page.url()));
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await addDialog.locator('.preview tbody tr').count(), 3);
+  assert.match(await addDialog.locator('.preview').innerText(), /3 installments totalling \$30\.00/);
+  assert.match(await addDialog.locator('.preview').innerText(), /above the balance/);
+  assert.equal(await page.inputValue('#name'), 'Previewed plan');
+  await a11y('plans list with the create preview');
+  assert.equal(await planCount(), plansBefore, 'Preview created no plan');
+  ok('plan restructure dialog: keeps the paid installment, previews $10.00 kept + $15.00 + $5.00 without saving or putting a token in the address, saves it, reopens with an error; revise and create forms preview; dialog fits a phone');
+
   // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
   await a11y('HSA list');
