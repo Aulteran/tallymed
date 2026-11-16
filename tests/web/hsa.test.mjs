@@ -682,7 +682,7 @@ test('upgrade over payment data from the prior schema: existing allocations star
     await db.pool.query(
       `insert into payment_entries (id, household_id, payment_id, event_id, kind, bill_id, allocation_id, amount_cents, effective_date, reason, created_by)
        values (gen_random_uuid(), $1, $2, gen_random_uuid(), 'refund', $3, $4, -1500, '2026-05-01', 'Provider refund', $5)`, [householdId, pm.id, b.id, refundable.allocationId, adminUserId]);
-    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016']);
+    assert.deepEqual(await migrate(db.pool), ['0006', '0007', '0008', '0009', '0010', '0011', '0012', '0013', '0014', '0015', '0016', '0017']);
     const a = await hsaRepo.getAllocation(db.pool, actor.householdId, refundable.allocationId);
     assert.deepEqual([a.netCents, a.decisionStatus, ...figsOf(a)], ['6000', null, '0', '0', '0', '0', '0']);
     await hsa.recordDecision(db.pool, actor, { idempotencyKey: randomUUID(), allocationId: a.allocationId, version: '0', status: 'eligible', eligibleAmount: '60.00', rationale: 'Qualified', evidenceType: 'eob', evidenceNote: 'EOB', decidedOn: '2026-05-02' }, 'r');

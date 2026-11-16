@@ -839,6 +839,54 @@ try {
   await page.waitForURL(`${origin}/users`);
   assert.equal(await page.inputValue('select[aria-label="Role for Sam Example"]'), 'operator');
 
+  // Delete a payment (administrators only) and undo it. A fresh fabricated payment keeps the earlier flows' payment intact.
+  await page.goto(`${origin}/payments?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  await page.fill('#paidOn', '2026-03-09');
+  await page.fill('#amount', '12.34');
+  await page.fill('#reference', 'UNDO-TEST-1');
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  const undoPaymentUrl = page.url();
+  assert.equal(await page.locator('[role=status]').count(), 0, 'no undo banner while nothing can be undone');
+  // An operator sees neither the delete button nor an undo banner.
+  await sam.goto(undoPaymentUrl);
+  assert.equal(await sam.locator('button:has-text("Delete payment")').count(), 0, 'operators do not see Delete payment');
+  assert.equal(await sam.locator('[role=status]').count(), 0, 'operators see no undo banner');
+  await sam.goto(planUrl);
+  assert.equal(await sam.locator('button:has-text("Delete plan")').count(), 0, 'operators do not see Delete plan');
+  await page.goto(planUrl);
+  await page.click('button:has-text("Delete plan")');
+  await page.locator('dialog#delete-plan').waitFor({ state: 'visible' });
+  await a11y('plan detail with the delete dialog');
+  await page.keyboard.press('Escape');
+  // The delete dialog is accessible and fits a phone.
+  await page.goto(undoPaymentUrl);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.click('button:has-text("Delete payment")');
+  const deleteDialog = page.locator('dialog#delete-payment');
+  await deleteDialog.waitFor({ state: 'visible' });
+  assert.match(await deleteDialog.innerText(), /3 minutes/);
+  assert.equal(await page.inputValue('#remove-why'), 'Removed by administrator');
+  await a11y('delete payment dialog at phone width');
+  const phoneDialog = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, right: document.querySelector('dialog#delete-payment').getBoundingClientRect().right }));
+  assert.ok(phoneDialog.scrollWidth <= phoneDialog.width && phoneDialog.right <= phoneDialog.width, `delete dialog fits a phone: ${JSON.stringify(phoneDialog)}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await deleteDialog.locator('button[type=submit]').click();
+  await page.waitForURL(`${origin}/payments`);
+  const undoBanner = page.locator('[role=status]');
+  assert.equal(await undoBanner.count(), 1);
+  assert.match(await undoBanner.innerText(), /Payment removed/);
+  await a11y('payments list with the undo banner');
+  assert.doesNotMatch(await text(), /UNDO-TEST-1/);
+  assert.equal((await page.goto(undoPaymentUrl)).status(), 404, 'a removed payment is not found');
+  await page.goto(`${origin}/payments`);
+  await page.click('[role=status] button:has-text("Undo")');
+  await page.waitForURL(undoPaymentUrl);
+  assert.match(await text(), /Payment of \$12\.34 on 2026-03-09/);
+  assert.equal(await page.locator('[role=status]').count(), 0, 'the banner is gone once the slot is used');
+  ok('administrator deletes a payment, sees the undo banner, undoes it and the payment is back; operators see neither; delete dialogs pass axe at phone width');
+
   // User menu: settings dialog, theme choice, and sign out only after confirming.
   await page.click('button[aria-label="User settings"]');
   const settingsDialog = page.locator('dialog[aria-labelledby="user-settings-title"]');

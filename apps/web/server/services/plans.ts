@@ -2,6 +2,7 @@
 // A plan match references an existing payment allocation. It never creates, moves or double counts cash. Lock order is
 // payments, then bills, then plans (see services/payments.ts).
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { authorize, type Actor } from '../authz.ts';
 import { withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
@@ -11,9 +12,11 @@ import * as expenseRepo from '../repositories/expenses.ts';
 import * as payments from '../repositories/payments.ts';
 import * as repo from '../repositories/plans.ts';
 import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
+import { setUndoSlot } from '../repositories/undo.ts';
 import { requireActive } from './expenses.ts';
 import { idempotent, RetryTransaction, todayUtc, withRetry } from './support.ts';
 
+const REMOVED_MESSAGE = 'That plan was removed';
 const cents = (v: bigint) => v.toString();
 const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
 
@@ -233,11 +236,12 @@ export async function installmentSummary(pool: Pool, actor: Actor, asOf?: string
 /** How many matchable allocations a plan page lists before it is marked as truncated. */
 export const MATCH_PICK_LIMIT = 100;
 
-export async function getPlanDetail(pool: Pool, actor: Actor, id: string, o: { asOf?: string; allocationId?: string | null } = {}) {
+/** `includeRemoved` is internal (restore only); a removed plan is otherwise not found. */
+export async function getPlanDetail(pool: Pool, actor: Actor, id: string, o: { asOf?: string; allocationId?: string | null; includeRemoved?: boolean } = {}) {
   authorize(actor, 'expenses:read');
   const planId = parse(schemas.id, id);
   const asOf = asOfDate(o.asOf);
-  const plan = await repo.getPlan(pool, actor.householdId, planId, asOf);
+  const plan = await repo.getPlan(pool, actor.householdId, planId, asOf, { includeRemoved: o.includeRemoved === true });
   if (!plan) throw new AppError('not_found');
   const billIds = await repo.planBillIds(pool, actor.householdId, planId);
   const current = o.allocationId && schemas.id.safeParse(o.allocationId).success ? o.allocationId : null;
@@ -259,7 +263,7 @@ export async function getPlanDetail(pool: Pool, actor: Actor, id: string, o: { a
  * not locked appears once the plan is locked, a payment lock must not be taken while holding the plan: the transaction is
  * restarted (RetryTransaction) so the larger set is locked in the documented order from the start.
  */
-async function lockPlanWithPayments(tx: Queryable, actor: Actor, planId: string): Promise<{ status: 'active' | 'cancelled'; version: number }> {
+async function lockPlanWithPayments(tx: Queryable, actor: Actor, planId: string): Promise<{ status: 'active' | 'cancelled'; version: number; removed: boolean }> {
   const wanted = await repo.paymentsMatchedByPlan(tx, actor.householdId, planId);
   const locked = new Set(wanted.length > 0 ? await payments.lockPayments(tx, actor.householdId, wanted) : []);
   const [plan] = await repo.lockPlans(tx, actor.householdId, [planId]);
@@ -403,6 +407,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
     const replayId = await idempotent(tx, actor, 'plan.revise', idempotencyKey, fingerprint, revisionId);
     if (replayId) return { id: replayId, replayed: true };
     const lock = await lockPlanWithPayments(tx, actor, planId);
+    if (lock.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     if (lock.version !== version) throw new AppError('stale_version');
     if (lock.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
     const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
@@ -462,6 +467,7 @@ export async function cancelPlan(pool: Pool, actor: Actor, input: unknown, reque
   return withRetry(() => withTransaction(pool, async (tx) => {
     const [lock] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
     if (!lock) throw new AppError('not_found');
+    if (lock.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     if (lock.version !== d.version) throw new AppError('stale_version');
     if (lock.status !== 'active') throw new AppError('conflict', 'That plan was already cancelled');
     const plan = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
@@ -481,6 +487,7 @@ export async function renamePlan(pool: Pool, actor: Actor, input: unknown, reque
   return withRetry(() => withTransaction(pool, async (tx) => {
     const [lock] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
     if (!lock) throw new AppError('not_found');
+    if (lock.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     const plan = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
     await repo.renamePlan(tx, actor.householdId, d.planId, d.name);
     await recordAudit(tx, {
@@ -509,6 +516,7 @@ export async function matchInstallment(pool: Pool, actor: Actor, input: unknown,
     await payments.lockPayments(tx, actor.householdId, [alloc0.paymentId]);
     const [plan] = await repo.lockPlans(tx, actor.householdId, [probe.planId]);
     if (!plan) throw new AppError('not_found');
+    if (plan.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
     const inst = (await repo.getInstallment(tx, actor.householdId, d.installmentId, asOf))!;
     const alloc = (await payments.getAllocation(tx, actor.householdId, d.allocationId))!;
@@ -551,6 +559,7 @@ export async function matchExistingPayments(pool: Pool, actor: Actor, input: unk
     const locked = await lockBillPayments(tx, actor, billIds);
     const [plan] = await repo.lockPlans(tx, actor.householdId, [d.planId]);
     if (!plan) throw new AppError('not_found');
+    if (plan.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     const plan0 = (await repo.getPlan(tx, actor.householdId, d.planId, todayUtc()))!;
     if (plan.version !== d.version) throw new AppError('stale_version');
     if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
@@ -583,7 +592,9 @@ export async function unmatchInstallment(pool: Pool, actor: Actor, input: unknow
     const alloc0 = await payments.getAllocation(tx, actor.householdId, d.allocationId);
     if (!probe || !alloc0) throw new AppError('not_found');
     await payments.lockPayments(tx, actor.householdId, [alloc0.paymentId]);
-    await repo.lockPlans(tx, actor.householdId, [probe.planId]);
+    const [plan] = await repo.lockPlans(tx, actor.householdId, [probe.planId]);
+    if (!plan) throw new AppError('not_found');
+    if (plan.removed) throw new AppError('conflict', REMOVED_MESSAGE);
     const inst = (await repo.getInstallment(tx, actor.householdId, d.installmentId, asOf))!;
     if (!inst.planCurrent) throw new AppError('conflict', 'That installment belongs to an earlier version of the schedule');
     const matched = await repo.matchedNet(tx, actor.householdId, inst.id, d.allocationId);
@@ -601,4 +612,102 @@ export async function unmatchInstallment(pool: Pool, actor: Actor, input: unknow
     });
     return { id, replayed: false };
   }));
+}
+
+// ---------- removal and restore (administrators only) ----------
+
+const releasedMatch = z.strictObject({
+  installmentId: z.string().uuid(), allocationId: z.string().uuid(), paymentId: z.string().uuid(), revisionId: z.string().uuid(), cents: z.string().regex(/^[1-9][0-9]*$/),
+});
+const planRemovalPayload = z.strictObject({ wasActive: z.boolean(), releasedMatches: z.array(releasedMatch) });
+
+/**
+ * Hides a plan. An active plan first releases every live match with negative match rows (the same pattern as "unmatch", audited as
+ * plan.match_released), so no cash or balance is touched and no payment changes; a cancelled plan keeps its matches as history and is
+ * only hidden. Locks: the payments behind the plan's matches, then the plan (the global order). Sets the actor's undo slot.
+ */
+export async function removePlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'records:remove');
+  const { csrf: _csrf, idempotencyKey, planId, version, reason } = parse(paymentSchemas.removePlan, input);
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, 'plan.remove', idempotencyKey, { planId, version, reason }, planId);
+    if (replayId) return { id: replayId, replayed: true };
+    const lock = await lockPlanWithPayments(tx, actor, planId);
+    if (lock.removed) throw new AppError('conflict', 'That plan was already removed');
+    if (lock.version !== version) throw new AppError('stale_version');
+    const plan = (await repo.getPlan(tx, actor.householdId, planId, todayUtc()))!;
+    const released: Array<z.infer<typeof releasedMatch>> = [];
+    if (lock.status === 'active') {
+      const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
+      for (const m of await repo.currentMatchPairs(tx, actor.householdId, planId)) {
+        await repo.insertMatch(tx, {
+          id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId: cur.id, installmentId: m.installmentId,
+          paymentId: m.paymentId, allocationId: m.allocationId, billId: m.billId, kind: 'unmatch', amountCents: -m.cents, carried: false, reason: 'Released because the plan was removed',
+        });
+        await recordAudit(tx, {
+          householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.match_released', entityType: 'payment_plan', entityId: planId, requestId,
+          detail: { planId, installmentId: m.installmentId, paymentId: m.paymentId, allocationId: m.allocationId, amountCents: cents(m.cents), matchedBeforeCents: cents(m.cents), matchedAfterCents: '0' },
+        });
+        released.push({ installmentId: m.installmentId, allocationId: m.allocationId, paymentId: m.paymentId, revisionId: cur.id, cents: cents(m.cents) });
+      }
+    }
+    if (!(await repo.removePlanRow(tx, actor.householdId, planId, version, actor.userId, reason))) throw new AppError('stale_version');
+    const releasedCents = sum(released.map((m) => BigInt(m.cents)));
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.removed', entityType: 'payment_plan', entityId: planId, requestId,
+      detail: {
+        planId, status: lock.status, totalCents: plan.totalCents, matchedBeforeCents: plan.matchedCents, releasedMatchCount: released.length, releasedMatchCents: cents(releasedCents),
+        matchedAfterCents: cents(BigInt(plan.matchedCents) - releasedCents), revisionNo: plan.revisionNo, installmentCount: plan.installmentCount,
+      },
+    });
+    await setUndoSlot(tx, actor, { kind: 'plan_remove', entityId: planId, payload: { wasActive: lock.status === 'active', releasedMatches: released } satisfies z.infer<typeof planRemovalPayload> });
+    return { id: planId, replayed: false };
+  }));
+}
+
+/**
+ * The inverse of removePlan, used only by undo inside its transaction (the caller authorized `records:remove`). Shows the plan again and,
+ * if it is active, re-posts each released match within the usual limits: the installment must still owe it, and the allocation must still
+ * have that much net cash unmatched. A match that no longer fits is skipped and listed in the audit. Nothing about cash changes.
+ */
+export async function restorePlan(tx: Queryable, actor: Actor, planId: string, rawPayload: unknown, requestId: string): Promise<{ restoredCount: number; skippedCount: number }> {
+  const parsed = planRemovalPayload.safeParse(rawPayload);
+  if (!parsed.success) throw new AppError('conflict', 'Nothing to undo');
+  const payload = parsed.data;
+  // Payments first (the matches' payments), then the plan.
+  const paymentIds = [...new Set(payload.releasedMatches.map((m) => m.paymentId))];
+  if (paymentIds.length > 0) await payments.lockPayments(tx, actor.householdId, paymentIds);
+  const [lock] = await repo.lockPlans(tx, actor.householdId, [planId]);
+  if (!lock) throw new AppError('not_found');
+  if (!lock.removed) throw new AppError('conflict', 'That plan is no longer removed');
+  await repo.restorePlanRow(tx, actor.householdId, planId);
+  const asOf = todayUtc();
+  const skipped: Array<{ installmentId: string; allocationId: string; cents: bigint }> = [];
+  let restored = 0n;
+  let restoredCount = 0;
+  if (payload.wasActive && lock.status === 'active') {
+    for (const m of payload.releasedMatches) {
+      const amount = BigInt(m.cents);
+      const inst = await repo.getInstallment(tx, actor.householdId, m.installmentId, asOf);
+      const alloc = await payments.getAllocation(tx, actor.householdId, m.allocationId);
+      const fits = inst !== null && alloc !== null && inst.planId === planId && inst.planCurrent && alloc.paymentId === m.paymentId
+        && amount <= BigInt(inst.unpaidCents) && amount <= BigInt(alloc.netCents) - BigInt(alloc.matchedCents);
+      if (!fits) { skipped.push({ installmentId: m.installmentId, allocationId: m.allocationId, cents: amount }); continue; }
+      await repo.insertMatch(tx, {
+        id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId: inst.revisionId, installmentId: m.installmentId,
+        paymentId: alloc.paymentId, allocationId: alloc.allocationId, billId: alloc.billId, kind: 'match', amountCents: amount, carried: false, reason: 'Restored by undo',
+      });
+      restored += amount;
+      restoredCount++;
+    }
+  }
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.restored', entityType: 'payment_plan', entityId: planId, requestId,
+    detail: {
+      planId, wasActive: payload.wasActive, releasedMatchCount: payload.releasedMatches.length, restoredMatchCount: restoredCount, restoredCents: cents(restored),
+      skippedMatchCount: skipped.length, skippedCents: cents(sum(skipped.map((k) => k.cents))),
+      skippedInstallmentIds: skipped.map((k) => k.installmentId).join(','), skippedAllocationIds: skipped.map((k) => k.allocationId).join(','),
+    },
+  });
+  return { restoredCount, skippedCount: skipped.length };
 }

@@ -1,6 +1,8 @@
 import Link from 'next/link';
+import { ConfirmDialog } from '../../../components/ConfirmDialog.tsx';
 import { AddDialog } from '../../../components/AddDialog.tsx';
 import { PlanScheduleFields } from '../../../components/PlanScheduleFields.tsx';
+import { can } from '../../../../server/authz.ts';
 import { formatCents } from '../../../../server/money.ts';
 import { getPlanDetail } from '../../../../server/services/plans.ts';
 import {
@@ -62,6 +64,18 @@ export default async function PlanPage({ params, searchParams }: { params: Promi
           <button type="submit">Rename</button>
         </form>
       </AddDialog>
+      {can(actor, 'records:remove') && <ConfirmDialog id="delete-plan" label="Delete plan" title="Delete this payment plan?">
+        <form method="post" action="/api/expenses/plans/remove">
+          {base}{key()}<input type="hidden" name="version" value={plan.version} />
+          <p>This deletes the plan &quot;{plan.name}&quot;. Its schedule and its matches to payments are removed.</p>
+          <ul>
+            <li>Payments and bills are kept. No cash or bill balance changes.</li>
+            <li>You can undo this for 3 minutes, or until your next action.</li>
+          </ul>
+          <label htmlFor="remove-plan-why">Reason</label><input id="remove-plan-why" name="reason" required maxLength={500} defaultValue="Removed by administrator" />
+          <div className="modal-actions"><button type="submit" className="danger">Delete plan</button></div>
+        </form>
+      </ConfirmDialog>}
     </div>
     <p>{plan.providerNames.length > 1 ? <span title="One plan covering bills from several providers">{plan.providerNames.join(', ')}</span> : plan.payee} · started {plan.startedOn} (recorded {dateOf(plan.createdAt)}) · {active ? <span className="pill">Active</span> : <span className="pill warn">Cancelled</span>} · schedule version {plan.revisionNo}</p>
     {!renameFailed && <Banner code={q.error} />}

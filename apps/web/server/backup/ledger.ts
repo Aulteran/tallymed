@@ -13,10 +13,20 @@ import type { Queryable } from '../db.ts';
 const MAX_CENTS = '10000000000000';
 
 /** `table`: the check applies only where that table exists, so a database restored from an older version can still be checked before it is upgraded. */
-const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string }> = [
+const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessTable?: string }> = [
+  {
+    rule: 'a payment paid directly from an HSA has no HSA claim, reimbursement or eligibility decision',
+    table: 'payment_hsa_funding_events',
+    // From 0017 a funding can be released, after which the payment is an ordinary one that may be claimed.
+    sql: `select f.payment_id from payment_hsa_funding f
+           where payment_is_direct_hsa(f.payment_id)
+             and (exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
+              or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id))`,
+  },
   {
     rule: 'a payment paid directly from an HSA has no HSA claim, reimbursement or eligibility decision',
     table: 'payment_hsa_funding',
+    unlessTable: 'payment_hsa_funding_events',
     sql: `select f.payment_id from payment_hsa_funding f
            where exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
               or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id)`,
@@ -43,6 +53,16 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string }> = [
                           group by e.payment_id
                          having coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) <> 0
                              or coalesce(sum(e.amount_cents) filter (where e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) <> 0)`,
+  },
+  {
+    rule: 'a removed payment keeps no applied or refunded cash',
+    table: 'payment_removal_events',
+    sql: `select p.id from payments p
+           left join lateral (
+             select coalesce(sum(e.amount_cents) filter (where e.bill_id is not null), 0) as applied,
+                    -coalesce(sum(e.amount_cents) filter (where e.kind in ('refund', 'unapplied_refund', 'refund_reversal')), 0) as refunded
+               from payment_entries e where e.payment_id = p.id) s on true
+           where payment_is_removed(p.id) and (s.applied <> 0 or s.refunded <> 0)`,
   },
   {
     rule: 'an allocation stays between zero and its original amount',
@@ -154,6 +174,7 @@ export async function ledgerViolations(db: Queryable): Promise<string[]> {
   const broken: string[] = [];
   for (const check of CHECKS) {
     if (check.table && !(await db.query(`select to_regclass($1) is not null as present`, [`public.${check.table}`])).rows[0]!.present) continue;
+    if (check.unlessTable && (await db.query(`select to_regclass($1) is not null as present`, [`public.${check.unlessTable}`])).rows[0]!.present) continue;
     const r = await db.query<{ n: string }>(`select count(*) as n from (${check.sql}) v`);
     const n = Number(r.rows[0]!.n);
     if (n > 0) broken.push(`${check.rule} (${n} record${n === 1 ? '' : 's'})`);
@@ -191,6 +212,14 @@ export async function ledgerSummary(db: Queryable): Promise<Record<string, strin
        (select count(*) from audit_events)::text as "auditEvents"`,
   );
   const s = r.rows[0]!;
+  // Only a database at migration 0017 or later knows about removed payments; an older one reports no such total.
+  if ((await db.query<{ present: boolean }>(`select to_regprocedure('payment_is_removed(uuid)') is not null as present`)).rows[0]!.present) {
+    s.removedPayments = (await db.query<{ n: string }>(`select count(*)::text as n from payments where payment_is_removed(id)`)).rows[0]!.n;
+  }
+  // Plans carry removal in columns (0017). An older database has no such column and reports no total.
+  if ((await db.query<{ present: boolean }>(`select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'payment_plans' and column_name = 'removed_at') as present`)).rows[0]!.present) {
+    s.removedPlans = (await db.query<{ n: string }>(`select count(*)::text as n from payment_plans where removed_at is not null`)).rows[0]!.n;
+  }
   // Open balance is derived, not stored: responsibility (base plus signed adjustments) minus net applied payments.
   s.openBalanceCents = (BigInt(s.baseResponsibilityCents!) + BigInt(s.adjustmentCents!) - BigInt(s.netAppliedCents!)).toString();
   return s;

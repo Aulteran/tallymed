@@ -63,11 +63,16 @@ export async function setLink(db: Queryable, v: { householdId: string; userId: s
      on conflict (method_id) do update set hsa_account_id = excluded.hsa_account_id`, [v.methodId, v.householdId, v.accountId, v.userId]);
 }
 
-/** The HSA account that paid a payment directly, or null for an ordinary payment. */
+/** The HSA account that paid a payment directly, or null for an ordinary payment (or one whose funding was released). */
 export async function fundingOfPayment(db: Queryable, householdId: string, paymentId: string): Promise<string | null> {
   const { rows } = await db.query<{ accountId: string }>(
-    `select hsa_account_id as "accountId" from payment_hsa_funding where household_id = $1 and payment_id = $2`, [householdId, paymentId]);
+    `select hsa_account_id as "accountId" from payment_hsa_funding where household_id = $1 and payment_id = $2 and payment_is_direct_hsa(payment_id)`, [householdId, paymentId]);
   return rows[0]?.accountId ?? null;
+}
+
+/** Appends a release (the payment becomes an ordinary, claimable payment) or a reinstatement of its direct HSA funding. */
+export async function insertFundingEvent(db: Queryable, v: { householdId: string; userId: string; paymentId: string; action: 'release' | 'reinstate' }): Promise<void> {
+  await db.query(`insert into payment_hsa_funding_events (household_id, payment_id, action, created_by) values ($1, $2, $3, $4)`, [v.householdId, v.paymentId, v.action, v.userId]);
 }
 
 export async function insertFunding(db: Queryable, v: { householdId: string; userId: string; paymentId: string; accountId: string }): Promise<void> {
