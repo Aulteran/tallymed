@@ -321,7 +321,8 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 
 ### Screen lock follow-ups handoff
 
-- Branch: `fix/pin-followups-gate-tests-blocklist-reset` (PR against `dev`). No migration. Closes review items M1, L1, L2, L3 and L5 from #44 (M2, provider sign-in, stays an accepted limit; L4 is a documented tradeoff). Independent security review pending on the PR head.
+- PR: Aulteran/tallymed#57, squash-merged into `dev` as `d8111bcadb456eda144f3c2354acc390fd7de531` by Claude under the owner's merge authorization (CLAUDE.md). Final reviewed and tested head `1eaead1da38326b71d2e4b10a267b227e41e674c`; CI `verify` and `compose-smoke` green on it; independent security review (separate agent, comment on the PR) APPROVE with no blocking findings; 476 tests pass. No migration. Closes review items M1, L1, L2, L3 and L5 from #44 (M2, provider sign-in, stays an accepted limit; L4 is a documented tradeoff).
+- Review notes carried (non-blocking): the PIN blocklist removes only about 0.2% of PINs (the five-attempts-per-session limit is the real control; existing weak PINs are grandfathered); turning Keep me signed in off does not revoke sessions already kept; after a reset the account has no PIN and no lock until it sets one. The gate test's string-matching weaknesses (commented-out call, inverted condition) are closed in the follow-up PR that records this.
 - Changed: `isTrivialPin` and `weak_pin` (passwords, errors, messages), PIN cleared in `setTemporaryPassword`, `TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS=0` switch (config, login, login page, change password), General settings note, locked-redirect `next` from Referer in `http.ts`, `tests/web/lock-page-gates.test.mjs` and new cases in `tests/web/lock-and-pin.test.mjs`, docs and decisions.
 
 ### Keep me signed in, screen lock and PIN: acceptance evidence
