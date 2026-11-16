@@ -65,8 +65,29 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/web/**/*.[jt]s', 'apps/web/**/*.[jt]sx', 'apps/web/**/*.mjs', 'apps/web/**/*.css', '!apps/web/.next/**', '!apps/web/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-
       - run: npm run build -w @tallymed/web
-      - run: npx playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       - name: Verify expense screens and contrast in the ${{ matrix.scheme }} theme (disposable PostgreSQL)
         run: npm run test:app-browser
         env:
@@ -80,9 +101,30 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/marketing/.next/cache
+          key: ${{ runner.os }}-next-marketing-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/marketing/**/*.[jt]s', 'apps/marketing/**/*.[jt]sx', 'apps/marketing/**/*.mjs', 'apps/marketing/**/*.css', '!apps/marketing/.next/**', '!apps/marketing/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-marketing-${{ hashFiles('package-lock.json') }}-
       - run: npm run build:marketing
       - run: npm run test:export
-      - run: npx playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       - run: npm run test:browser
       - run: npm run test:performance
       - name: Verify repository-path export
@@ -111,15 +153,23 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/web/**/*.[jt]s', 'apps/web/**/*.[jt]sx', 'apps/web/**/*.mjs', 'apps/web/**/*.css', '!apps/web/.next/**', '!apps/web/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-
       - run: npm run build -w @tallymed/web
       - name: Verify HTTPS proxy and network boundary (disposable PostgreSQL)
         run: npm run test:proxy
       - name: Verify backup and restore reconciliation with a PostgreSQL 17 client (disposable PostgreSQL)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-common
+          # The PGDG setup script runs its own apt-get update after adding the repository, so the client install needs no further update.
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -qq postgresql-client-17
+          sudo apt-get -o Acquire::Retries=3 install -y -qq postgresql-client-17
           PATH=/usr/lib/postgresql/17/bin:$PATH npm run test:restore
   compose-smoke:
     runs-on: ubuntu-latest
