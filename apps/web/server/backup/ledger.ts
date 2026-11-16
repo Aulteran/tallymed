@@ -32,6 +32,11 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
               or exists (select 1 from @D@ d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id)`,
   },
   {
+    rule: 'a payment marked ineligible for HSA is not paid directly from an HSA',
+    table: 'payment_hsa_ineligible',
+    sql: `select i.payment_id from payment_hsa_ineligible i where payment_is_direct_hsa(i.payment_id)`,
+  },
+  {
     rule: 'bill responsibility is between zero and the supported maximum',
     sql: `select b.id from bills b
            where b.base_responsibility_cents + coalesce((select sum(a.amount_cents) from bill_adjustments a where a.bill_id = b.id), 0)

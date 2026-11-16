@@ -32,8 +32,8 @@ async function hsaView(t) {
   const csv = (await hsa.exportHsa(t.db.pool, t.actor, { kind: 'allocations' }, 'r')).csv.trim().split('\n');
   const totals = await hsa.hsaSummary(t.db.pool, t.actor, {});
   const queues = await hsa.hsaQueues(t.db.pool, t.actor, {}, 50);
-  const undecided = (await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'undecided' })).items;
-  return { ids: list.map((a) => a.allocationId).sort(), allIds: all.map((a) => a.allocationId).sort(), csvRows: csv.length - 2, totals, queues, undecided, list };
+  const eligible = (await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'eligible', limit: '100' })).items;
+  return { ids: list.map((a) => a.allocationId).sort(), allIds: all.map((a) => a.allocationId).sort(), csvRows: csv.length - 2, totals, queues, eligible, list };
 }
 const figures = async (t, billIds) => ({
   summary: await pay.cashSummary(t.db.pool, t.actor),
@@ -67,11 +67,12 @@ test('a removed payment has no row or count on the HSA side, and undo shows each
     const baseView = await hsaView(t); const baseFig = await figures(t, bills);
 
     const direct = await t.pay1({ amount: '80.00', billId: dirBill.id, allocateAmount: '80.00', paidWithId: card.id });
-    const ordinary = await t.pay1({ amount: '60.00', billId: ordBill.id, allocateAmount: '60.00' }); // no decision yet: in the undecided queue
+    const ordinary = await t.pay1({ amount: '60.00', billId: ordBill.id, allocateAmount: '60.00' }); // no decision needed: eligible for its net cash by default
     const fullView = await hsaView(t); const fullFig = await figures(t, bills);
     agree(fullView);
     assert.equal(fullView.ids.length, 3);
-    assert.deepEqual([fullView.totals.directCount, fullView.totals.undecidedCount], [1, 1]);
+    assert.equal(fullView.totals.directCount, 1);
+    assert.ok(fullView.eligible.some((r) => r.paymentId === ordinary.id) && !fullView.eligible.some((r) => r.paymentId === direct.id), 'the ordinary payment is eligible by default, the direct one never');
 
     for (const x of [direct, ordinary]) {
       const [orig] = await allocIds(t, x.id);
@@ -79,7 +80,7 @@ test('a removed payment has no row or count on the HSA side, and undo shows each
       const v = await hsaView(t);
       agree(v);
       assert.equal(rowsOf(v, x.id).length, 0, 'no list row');
-      assert.ok(!v.allIds.includes(orig) && !v.undecided.some((r) => r.paymentId === x.id));
+      assert.ok(!v.allIds.includes(orig) && !v.eligible.some((r) => r.paymentId === x.id));
       assert.ok(![...v.queues.available, ...v.queues.needsReview].some((r) => r.paymentId === x.id), 'no queue row');
       await assert.rejects(hsa.getHsaAllocationDetail(t.db.pool, t.actor, orig), { code: 'not_found' });
       // The other pages already agree: the payment is gone from the list and the cash summary, and its bill is open again.
@@ -132,7 +133,7 @@ test('a fully reversed allocation is hidden unless it has HSA history; counts, t
     assert.ok(v.allIds.includes(decided.al), 'a zero-net allocation with a decision stays');
     assert.equal(v.list.find((r) => r.allocationId === decided.al).netCents, '0');
     assert.deepEqual(v.ids, v.allIds); assert.equal(v.csvRows, 3); assert.equal(v.totals.allocationCount, 3);
-    assert.equal(v.undecided.length, 1, 'only the live allocation still needs a decision');
+    assert.ok(v.eligible.every((r) => r.allocationId !== plain.al && r.allocationId !== decided.al), 'a reversed allocation holds no eligible cash');
     assert.ok(v.queues.needsReview.every((r) => r.allocationId !== plain.al));
 
     // A claim on the allocation keeps it visible even when its cash is reversed (the claim above the net cash is a needs-review case).

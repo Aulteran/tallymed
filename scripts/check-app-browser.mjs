@@ -797,22 +797,16 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 });
   ok('plan from a listed schedule: table with Fill down (monthly and weekly), Remove row and a live total with the difference from the price; Preview shows the listed rows; pasted text with one bad line is named by line in the Preview and on save, then saves; table fits a phone');
 
-  // HSA: decide eligibility with evidence, claim, receive in part, then a refund pushes the payment into review.
+  // HSA: a payment is eligible by default; claim, receive in part, then a refund pushes the payment into review.
   await page.goto(`${origin}/hsa`);
   await a11y('HSA list');
-  assert.match(await text(), /Not decided yet\s*\n?\s*1/); // the directly paid allocation is not counted: it takes no decision
+  assert.doesNotMatch(await text(), /Not decided yet/);
   await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'INV-1' }).first().click();
   await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
   const hsaUrl = page.url();
   await a11y('HSA payment page');
-  await page.selectOption('#status', 'eligible');
-  await page.fill('#eligibleAmount', '60.00');
-  await page.fill('#rationale', 'Qualified medical expense');
-  await page.selectOption('#evidenceType', 'receipt');
-  await page.fill('#evidenceNote', 'Clinic receipt on file');
-  await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
-  await page.waitForURL(hsaUrl);
-  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$60\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/decide"]').count(), 0, 'the eligibility decision form is gone');
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$85\.00/);
   await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '50.00');
   await page.fill('#administrator', 'Example HSA Bank');
   await page.fill('#reference', 'CLM-0001');
@@ -830,10 +824,10 @@ try {
   const figures = await text();
   assert.match(figures, /Pending\s*\n?\s*\$30\.00/);
   assert.match(figures, /Received\s*\n?\s*\$20\.00/);
-  assert.match(figures, /Available\s*\n?\s*\$10\.00/);
+  assert.match(figures, /Available\s*\n?\s*\$35\.00/);
   await page.goto(billUrl);
   assert.match(await text(), /Open balance\s*\n?\s*\$10\.00/);
-  ok('HSA decision, claim and partial receipt reconcile ($30 pending, $20 received, $10 available) and the bill balance is unchanged');
+  ok('HSA claim and partial receipt reconcile against the default-eligible payment ($30 pending, $20 received, $35 available) and the bill balance is unchanged');
   await page.goto(paymentUrl);
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=amount]', '40.00');
   await page.fill('form[action="/api/expenses/payments/refund"] input[name=reason]', 'Second provider refund');
@@ -1343,13 +1337,23 @@ try {
   await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'paid 2026-03-10' }).first().click();
   await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
   const delAllocUrl = page.url();
-  await page.selectOption('#status', 'eligible');
-  await page.fill('#eligibleAmount', '80.00');
-  await page.fill('#rationale', 'Qualified medical expense');
-  await page.selectOption('#evidenceType', 'receipt');
-  await page.fill('#evidenceNote', 'Fabricated receipt on file');
-  await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
+  // The decision form is gone from the page. An existing-style decision (kept for the record) is posted through the same endpoint the API
+  // uses, with the hidden fields of the claim form, so the delete-and-undo flow below still has a decision to delete.
+  // The page is already at this URL, so waiting on the URL would return at once: wait for the navigation the submit causes.
+  await Promise.all([page.waitForNavigation(), page.evaluate(() => {
+    const claim = document.querySelector('form[action="/api/expenses/hsa/claim"]');
+    const f = document.createElement('form');
+    f.method = 'post';
+    f.action = '/api/expenses/hsa/decide';
+    const add = (n, v) => { const i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; f.append(i); };
+    for (const n of ['csrf', 'allocationId', 'idempotencyKey']) add(n, claim.querySelector(`input[name=${n}]`).value);
+    add('version', '0'); add('status', 'eligible'); add('eligibleAmount', '80.00'); add('rationale', 'Qualified medical expense');
+    add('evidenceType', 'receipt'); add('evidenceNote', 'Fabricated receipt on file'); add('decidedOn', '2026-03-10');
+    document.body.append(f);
+    f.submit();
+  })]);
   await page.waitForURL(delAllocUrl);
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$80\.00/, 'the recorded decision lowers the ceiling to $80.00');
   await page.fill('form[action="/api/expenses/hsa/claim"] #amount', '60.00');
   await page.fill('#administrator', 'Example HSA Bank');
   await page.fill('#reference', 'CLM-DEL-1');
@@ -1448,16 +1452,19 @@ try {
   // Delete the decision row (nothing supports it any more); undo restores it.
   await page.goto(delAllocUrl);
   const decisionDialogId = await page.locator('dialog[id^=delete-decision-]').first().getAttribute('id');
-  await phoneConfirm(delAllocUrl, 'Delete decision', decisionDialogId, /previous decision \(if any\) applies again; with none, the payment has no eligibility decision/);
+  await phoneConfirm(delAllocUrl, 'Delete decision', decisionDialogId, /previous decision \(if any\) applies again; with none, the payment is eligible for its full net cash by default/);
   await confirmDelete(delAllocUrl, 'Delete decision', decisionDialogId);
   await page.waitForURL(delAllocUrl);
   assert.match(await banner.innerText(), /HSA eligibility decision deleted/);
   await a11y('HSA payment page with the decision deleted and the undo banner');
-  assert.match(await text(), /No decision yet/);
-  assert.match(await figure('Available'), /\$0\.00/);
+  // Deleting the only decision falls back to the default: the whole $100.00 net cash is eligible again (not zero, as before default-eligible).
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$100\.00/);
+  assert.match(await figure('Available'), /\$100\.00/);
+  assert.equal(await page.locator('dialog[id^=delete-decision-]').count(), 0, 'no decision left to delete');
   await undoNow();
   await page.waitForURL(delAllocUrl);
-  assert.match(await text(), /Current: Eligible \$80\.00/);
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$80\.00/);
+  assert.match(await page.locator('.card:has(h2:has-text("Past eligibility decisions"))').innerText(), /Eligible\s+\$80\.00/);
   assert.match(await figure('Available'), /\$80\.00/);
 
   // Operators see no Delete buttons and no undo banner on any of the three pages (the receipt and claim were deleted, so use the surviving decision page and a fresh claim).
@@ -1718,6 +1725,36 @@ try {
     assert.match(await text(), /Open balance\s*\n?\s*\$0\.00/, `${label} is paid in full`);
   }
   ok('one $70.00 payment split across two bills ($45.00 and $25.00) through the dialog: a repeated bill is refused with the typed rows kept, both balances reach $0.00, dialog passes axe and fits a phone');
+  // "This payment is ineligible for HSA." (fabricated figures: a $20.00 bill and a $20.00 payment). The box exists, survives a rejected submit,
+  // and a payment recorded with it shows the note and has a zero ceiling on the HSA side.
+  await enterBill({ provider: 'Example Clinic', reference: 'INELIG-A', amount: '20.00', status: 'confirmed' });
+  await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+  await page.goto(`${origin}/payments?add=1`);
+  await addDialog.waitFor({ state: 'visible' });
+  const inelBox = page.getByLabel('This payment is ineligible for HSA.');
+  assert.equal(await inelBox.count(), 1, 'the ineligible checkbox is on the payment form');
+  assert.equal(await inelBox.isChecked(), false, 'unticked by default');
+  await page.fill('#paidOn', '2026-03-12');
+  await page.fill('#amount', '20.00');
+  await page.selectOption('#alloc-bill-0', await billOption('#alloc-bill-0', 'INELIG-A'));
+  await page.fill('#alloc-amount-0', '25.00');
+  await inelBox.check();
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\?error=/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.getByLabel('This payment is ineligible for HSA.').isChecked(), true, 'the ticked box survives a rejected submit');
+  assert.equal(await page.inputValue('#amount'), '20.00');
+  await page.fill('#alloc-amount-0', '20.00');
+  await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+  await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /recorded as ineligible for HSA/);
+  await page.goto(`${origin}/hsa`);
+  await page.locator('a[href^="/hsa/allocations/"]', { hasText: 'INELIG-A' }).first().click();
+  await page.waitForURL(/\/hsa\/allocations\/[0-9a-f-]{36}$/);
+  assert.match(await text(), /Eligible ceiling\s*\n?\s*\$0\.00/);
+  assert.match(await text(), /Available\s*\n?\s*\$0\.00/);
+  assert.equal(await page.locator('form[action="/api/expenses/hsa/claim"]').count(), 0, 'nothing can be claimed on a payment recorded as ineligible');
+  ok('"This payment is ineligible for HSA." is on the payment form, stays ticked after a rejected submit, and a payment recorded with it shows the note and has a $0.00 ceiling and nothing claimable');
   // Suggested matches: payments already applied to a plan's bill are offered as ticked rows; unticking one leaves it out.
   // Fabricated figures: a $30.00 bill, a plan of 3 x $10.00, and payments of $12.00 and $18.00 applied to the bill. The oldest cash fills the
   // earliest installments: #1 $10.00 from the first payment, #2 $2.00 from it and $8.00 from the second, #3 $10.00 from the second.

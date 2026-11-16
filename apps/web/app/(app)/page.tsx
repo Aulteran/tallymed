@@ -66,7 +66,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <div className="grid-2">
       <div className="card">
         <h2>Available HSA reimbursements</h2>
-        {hsaQueue.available.length === 0 ? <p>Nothing is available to claim in this view. <Link href={hsaLink('undecided')}>{hsaTotals.undecidedCount} payments have no eligibility decision.</Link></p> : <ul className="rows">{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>}
+        {hsaQueue.available.length === 0 ? <p>Nothing is available to claim in this view.</p> : <ul className="rows">{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>}
       </div>
       <div className="card">
         <h2>HSA payments that need review</h2>
