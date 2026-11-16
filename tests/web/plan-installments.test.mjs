@@ -176,3 +176,19 @@ test('a list too long for the flash cookie loses whole lines from its end and sa
   // Ordinary values keep their old cap and the old null when they alone are too big.
   assert.equal(readFlash(flashSetCookie({ secureCookies: false }, '/plans', { reason: 'x'.repeat(900) }, PREVIEW_KEEP).split(';')[0].split('=')[1], '/plans').reason.length, 300);
 });
+
+test('a table cell longer than the cookie takes is trimmed first and, if still too long, flagged so a Preview refuses instead of showing another amount', () => {
+  // Whitespace around a cell is trimmed before the length is counted, so padding alone is not "too long".
+  const padded = withInstRowsFlash({ 'inst.0.dueDate': '  2026-09-01  ', 'inst.0.amount': ` ${'\t'.repeat(30)}1.25 ` });
+  assert.equal(padded.instRows, '2026-09-01|1.25');
+  assert.equal(padded.flashTrimmed, undefined);
+  // "$" + 20 spaces + "1.25" is 25 characters: it used to be cut to $1.20 in the Preview while a save read $1.25.
+  const long = withInstRowsFlash({ 'inst.0.dueDate': '2026-09-01', 'inst.0.amount': `$${' '.repeat(20)}1.25` });
+  assert.equal(long.flashTrimmed, 'instRows');
+  const values = readFlash(flashSetCookie({ secureCookies: false }, '/plans', long, PREVIEW_KEEP).split(';')[0].split('=')[1], '/plans');
+  assert.equal(values.flashTrimmed, 'instRows');
+  assert.equal(listFormState({ ...values, error: 'invalid_input' }).listTrimmed, true);
+  // Only the names of lists are honoured from a posted marker.
+  const other = readFlash(flashSetCookie({ secureCookies: false }, '/plans', { name: 'x', flashTrimmed: 'name,reason' }, PREVIEW_KEEP).split(';')[0].split('=')[1], '/plans');
+  assert.equal(other.flashTrimmed, undefined);
+});

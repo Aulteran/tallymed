@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { InstallmentTimeline } from './InstallmentTimeline.tsx';
+import { addCadence, centsOf, formatCents } from './installment-timeline.ts';
 
 /** Most rows the table offers (the plan limit). */
 export const MAX_INSTALLMENT_ROWS = 120;
@@ -8,35 +10,12 @@ export const DEFAULT_INSTALLMENT_ROWS = 12;
 
 interface Row { key: number; dueDate: string; amount: string }
 
-/** Whole cents from a typed amount ("40", "40.5", "$1,250.00"); null when blank or not a plain amount. Integer arithmetic only, no floats. */
-const centsOf = (v: string): bigint | null => {
-  const m = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(v.trim().replace(/^\$/, '').replaceAll(',', ''));
-  return m ? BigInt(m[1]!) * 100n + BigInt((m[2] ?? '').padEnd(2, '0') || '0') : null;
-};
-const formatCents = (v: bigint) => {
-  const abs = v < 0n ? -v : v;
-  return `${v < 0n ? '-' : ''}$${(abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${(abs % 100n).toString().padStart(2, '0')}`;
-};
-
 const ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
-const isoOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-/** The date after `prev` for a cadence. Monthly moves to the next month and keeps `anchorDay` (the first row's day of month), clamped to the month's last day. */
-function nextDate(prev: string, cadence: string, anchorDay: number): string | null {
-  const m = ISO.exec(prev);
-  if (!m || Number.isNaN(Date.parse(prev))) return null;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (cadence === 'weekly' || cadence === 'biweekly') return isoOf(Date.UTC(y, mo - 1, d) + (cadence === 'weekly' ? 7 : 14) * 86_400_000);
-  // The zero-based index of the next month is `mo`.
-  const year = y + Math.floor(mo / 12);
-  const month = mo % 12;
-  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-  return isoOf(Date.UTC(year, month, Math.min(anchorDay, last)));
-}
 
 /**
  * The table of "List each installment" rows, posted as `inst.<n>.dueDate` and `inst.<n>.amount` (docs/contracts.md, "Form row lists").
  * Server-rendered it is plain fields (a blank row is ignored by the server), so it works without JavaScript. With JavaScript it adds
- * "Add row", "Remove row" (the rows are renumbered, so the indexes stay without gaps), "Fill down" and a live count and total in whole
+ * a month timeline above the table (InstallmentTimeline.tsx; it only rewrites these rows), "Add row", "Remove row" (the rows are renumbered, so the indexes stay without gaps), "Fill down" and a live count and total in whole
  * cents (never floats). The server reads the rows again and decides; the footer is a hint.
  */
 export function InstallmentRows({ idPrefix, values, cadenceId, totalId, modeId }: {
@@ -82,7 +61,7 @@ export function InstallmentRows({ idPrefix, values, cadenceId, totalId, modeId }
       const prev = out[i - 1]!;
       const cur = out[i]!;
       if (cur.dueDate.trim() !== '' || cur.amount.trim() !== '' || centsOf(prev.amount) === null) continue;
-      const date = nextDate(prev.dueDate, cadence, anchorDay);
+      const date = addCadence(prev.dueDate, cadence, anchorDay);
       if (date) { cur.dueDate = date; cur.amount = prev.amount; }
     }
     return out;
@@ -99,6 +78,7 @@ export function InstallmentRows({ idPrefix, values, cadenceId, totalId, modeId }
   const diff = totalCents === null ? null : cents - totalCents;
 
   return <div className="inst-rows" ref={box}>
+    {enhanced && <InstallmentTimeline idPrefix={idPrefix} rows={rows} onChange={setRows} cadenceId={cadenceId} makeRow={make} maxRows={MAX_INSTALLMENT_ROWS} />}
     <div className="inst-head" aria-hidden="true"><span>#</span><span>Due date</span><span>Amount (USD)</span></div>
     {rows.map((r, i) => <div className="inst-row" key={r.key}>
       <span className="inst-n" aria-hidden="true">{i + 1}</span>
