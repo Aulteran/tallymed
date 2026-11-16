@@ -10,7 +10,7 @@ export interface AppConfig {
   proxySecret: string | null;
   sessionAbsoluteSeconds: number;
   sessionIdleSeconds: number;
-  /** Lifetime and idle limit of a session started with "Keep me signed in". */
+  /** Lifetime (0 = the option is off) and idle limit of a session started with "Keep me signed in". */
   rememberSessionAbsoluteSeconds: number;
   rememberSessionIdleSeconds: number;
   /** Seconds without activity after which a session of an account that has a PIN is locked. */
@@ -213,7 +213,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     proxySecret,
     sessionAbsoluteSeconds: intEnv(env, 'TALLYMED_SESSION_ABSOLUTE_SECONDS', 12 * 3600, 60, 30 * 86400),
     sessionIdleSeconds: intEnv(env, 'TALLYMED_SESSION_IDLE_SECONDS', 2 * 3600, 60, 7 * 86400),
-    rememberSessionAbsoluteSeconds: intEnv(env, 'TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS', 30 * 86400, 3600, 90 * 86400),
+    // 0 turns Keep me signed in off: no checkbox on the sign-in form, and a ticked box is ignored.
+    rememberSessionAbsoluteSeconds: intEnv(env, 'TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS', 30 * 86400, 0, 90 * 86400),
     rememberSessionIdleSeconds: intEnv(env, 'TALLYMED_REMEMBER_SESSION_IDLE_SECONDS', 14 * 86400, 3600, 90 * 86400),
     lockIdleSeconds: intEnv(env, 'TALLYMED_LOCK_IDLE_SECONDS', 300, 180, 86400),
     invitationSeconds: intEnv(env, 'TALLYMED_INVITATION_SECONDS', 72 * 3600, 60, 14 * 86400),

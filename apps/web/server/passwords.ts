@@ -34,8 +34,21 @@ export async function verifyPassword(stored: string | null, password: string): P
 // so the hash is only defence in depth: the real control is the attempt limit on the session (see services/pin.ts).
 export const PIN_PATTERN = /^\d{6}$/;
 
+/**
+ * The PINs a guesser tries first, and the only attempts a stolen session gets are five: one repeated digit (000000), a run up or down
+ * (123456, 654321), a repeated pair or triple (121212, 123123) and doubled pairs (112233). Refused when a PIN is chosen, never when one is checked.
+ */
+export function isTrivialPin(pin: string): boolean {
+  const d = [...pin].map(Number);
+  if (d.every((x) => x === d[0])) return true;
+  if (d.every((x, i) => i === 0 || x - d[i - 1]! === 1) || d.every((x, i) => i === 0 || d[i - 1]! - x === 1)) return true;
+  if (pin.slice(0, 3) === pin.slice(3) || pin.slice(0, 2) === pin.slice(2, 4) && pin.slice(2, 4) === pin.slice(4)) return true;
+  return d[0] === d[1] && d[2] === d[3] && d[4] === d[5];
+}
+
 export function assertPinPolicy(pin: string) {
   if (!PIN_PATTERN.test(pin)) throw new AppError('invalid_input', 'The PIN must be exactly six digits');
+  if (isTrivialPin(pin)) throw new AppError('weak_pin', 'Choose a PIN that is not a simple pattern');
 }
 
 export async function hashPin(pin: string): Promise<string> {

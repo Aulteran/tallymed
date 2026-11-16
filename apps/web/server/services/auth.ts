@@ -82,7 +82,7 @@ export async function login(
   // A temporary-password session lives only long enough to choose a new password.
   // "Keep me signed in" never applies to the restricted session of a temporary password.
   const restricted = user.mustChangePassword || !!viaEmail;
-  const remember = !!input.remember && !restricted;
+  const remember = !!input.remember && !restricted && config.rememberSessionAbsoluteSeconds > 0;
   const lifetimeSeconds = restricted
     ? Math.min(config.sessionAbsoluteSeconds, config.passwordChangeSessionSeconds)
     : remember ? config.rememberSessionAbsoluteSeconds : config.sessionAbsoluteSeconds;

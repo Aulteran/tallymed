@@ -14,6 +14,7 @@ export type ErrorCode =
   | 'locked'
   | 'invalid_pin'
   | 'pin_not_set'
+  | 'weak_pin'
   | 'pin_attempts_exceeded'
   | 'temporary_password_expired'
   | 'self_reset_blocked'
@@ -56,6 +57,7 @@ const STATUS: Record<ErrorCode, number> = {
   locked: 423,
   invalid_pin: 401,
   pin_not_set: 409,
+  weak_pin: 400,
   pin_attempts_exceeded: 401,
   temporary_password_expired: 401,
   self_reset_blocked: 403,
