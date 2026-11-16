@@ -421,6 +421,9 @@ try {
   assert.match(await text(), /Matched to payments\s*\n?\s*\$5\.00/);
   assert.match(await text(), /Partial/);
   await a11y('plan detail');
+  // The revise form must not reuse the current total or count: a leftover count would silently drop the remainder.
+  assert.equal(await page.inputValue('#rv-total'), '');
+  assert.equal(await page.inputValue('#rv-count'), '');
   // Renaming happens in a pop-up opened from the page header.
   await openAdd('Rename');
   await a11y('plan detail with the rename dialog');
