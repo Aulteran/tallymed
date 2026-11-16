@@ -667,6 +667,97 @@ try {
   await page.goto(`${origin}/plans`);
   assert.equal(await planCount(), listPlansBefore + 2);
 
+  // The schedule timeline over the table: keyboard move, drag, split, merge, day field and restart only rewrite the table rows. Fabricated: $30.01 + $20.00 + $10.00 = $60.01.
+  await page.goto(`${origin}/plans`);
+  const timelinePlansBefore = await planCount();
+  await openAdd('Create plan');
+  await page.fill('#name', 'Timeline plan');
+  await page.check(`#bill_${billId}`);
+  await page.uncheck('#matchExisting');
+  await page.check('#new-mode-list');
+  const tlRows = [['2026-09-15', '30.01'], ['2026-10-15', '20.00'], ['2026-11-15', '10.00']];
+  for (const [i, [d, a]] of tlRows.entries()) { await page.fill(`input[name="inst.${i}.dueDate"]`, d); await page.fill(`input[name="inst.${i}.amount"]`, a); }
+  const tlTable = async () => (await Promise.all(Array.from({ length: 5 }, async (_, i) => [await page.inputValue(`input[name="inst.${i}.dueDate"]`), await page.inputValue(`input[name="inst.${i}.amount"]`)]))).filter(([d, a]) => d || a);
+  const tlSummary = () => addDialog.locator('[data-inst-summary]').innerText();
+  const tlStatus = () => addDialog.locator('[data-tl-status]').innerText();
+  const chip = (n) => addDialog.locator(`button.tl-chip[data-n="${n}"]`);
+  assert.equal(await addDialog.locator('button.tl-chip').count(), 3, 'one chip per dated row');
+  assert.equal(await addDialog.locator('.tl-col').count(), 6, 'six months to start with');
+  assert.match(await tlSummary(), /3 installments, total \$60\.01/);
+  // Keyboard: focus the third chip and press ArrowRight, which moves it one month; the table follows and the move is announced.
+  await chip(3).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.inputValue('input[name="inst.2.dueDate"]'), '2026-12-15');
+  assert.match(await tlStatus(), /Installment 3 moved to December 2026/);
+  assert.equal(await chip(3).evaluate((el) => el === document.activeElement), true, 'focus stays on the moved chip');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.inputValue('input[name="inst.2.dueDate"]'), '2026-12-16', 'Down moves a day');
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await page.inputValue('input[name="inst.2.dueDate"]'), '2026-12-15');
+  await a11y('plans form with the schedule timeline and a selected installment');
+  // Mouse: drag the second chip into November and back into October (neighbouring columns, so both are in view); the day is kept.
+  const dragChip = async (n, month) => {
+    const from = await chip(n).boundingBox();
+    const to = await addDialog.locator(`.tl-col[data-month="${month}"]`).boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2 + 10, from.y + from.height / 2 + 5, { steps: 3 });
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height - 10, { steps: 10 });
+    await page.mouse.up();
+  };
+  await dragChip(2, '2026-11');
+  assert.equal(await page.inputValue('input[name="inst.1.dueDate"]'), '2026-11-15', 'dragging to a month keeps the day');
+  await dragChip(2, '2026-10');
+  assert.equal(await page.inputValue('input[name="inst.1.dueDate"]'), '2026-10-15');
+  await chip(3).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.inputValue('input[name="inst.2.dueDate"]'), '2027-01-15');
+  // Split the first: $30.01 becomes $15.01 and $15.00, the second a month later (the cadence is monthly), inserted after it in the table.
+  await chip(1).click();
+  await addDialog.locator('button:has-text("Split in two")').click();
+  assert.deepEqual((await tlTable()).slice(0, 4), [['2026-09-15', '15.01'], ['2026-10-15', '15.00'], ['2026-10-15', '20.00'], ['2027-01-15', '10.00']]);
+  assert.match(await tlSummary(), /4 installments, total \$60\.01/);
+  assert.match(await tlStatus(), /Installment 1 split in two: \$15\.01 and \$15\.00/);
+  // Merge it back with the next chip by date: $30.01 again, three rows.
+  await chip(1).click();
+  await addDialog.locator('button:has-text("Merge with next")').click();
+  assert.deepEqual(await tlTable(), [['2026-09-15', '30.01'], ['2026-10-15', '20.00'], ['2027-01-15', '10.00']]);
+  assert.match(await tlSummary(), /3 installments, total \$60\.01/);
+  // The day field of the selected chip, then restart the second chip and everything after it from December 2026.
+  await chip(1).click();
+  await page.fill('#new-tl-day', '30');
+  assert.equal(await page.inputValue('input[name="inst.0.dueDate"]'), '2026-09-30');
+  await chip(2).click();
+  await addDialog.locator('.tl-month', { hasText: 'December 2026' }).click();
+  await addDialog.locator('button:has-text("Restart here")').click();
+  assert.deepEqual(await tlTable(), [['2026-09-30', '30.01'], ['2026-12-15', '20.00'], ['2027-03-15', '10.00']]);
+  assert.match(await tlSummary(), /3 installments, total \$60\.01/);
+  // An edit in the table moves the chip.
+  await page.fill('input[name="inst.1.dueDate"]', '2026-11-20');
+  assert.match(await addDialog.locator('.tl-col[data-month="2026-11"]').innerText(), /\$20\.00/);
+  await page.fill('input[name="inst.1.dueDate"]', '2026-12-15');
+  await a11y('plans form with the schedule timeline after edits');
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=create/);
+  cleanPreviewUrl('create');
+  await addDialog.waitFor({ state: 'visible' });
+  const tlPreview = await addDialog.locator('.preview').innerText();
+  assert.match(tlPreview, /3 installments totalling \$60\.01/);
+  assert.match(tlPreview, /2026-09-30\s+\$30\.01/);
+  assert.match(tlPreview, /2027-03-15\s+\$10\.00/);
+  assert.equal(await addDialog.locator('button.tl-chip').count(), 3, 'the timeline is back after Preview');
+  assert.equal(await planCount(), timelinePlansBefore, 'Preview created no plan');
+  await a11y('plans form with the timeline and its preview');
+  await addDialog.locator('button:has-text("Create plan")').click();
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const tlSaved = await text();
+  assert.match(tlSaved, /2026-09-30/);
+  assert.match(tlSaved, /\$30\.01/);
+  assert.match(tlSaved, /2027-03-15/);
+  await page.goto(`${origin}/plans`);
+  assert.equal(await planCount(), timelinePlansBefore + 1);
+  ok('schedule timeline: keyboard move (Left/Right month, Up/Down day), drag to a month, split in cents, merge, day field and restart rewrite the table rows, the footer total stays $60.01, edits in the table move chips, Preview and save match, announced in a live region');
+
   // A phone: the table of rows fits without sideways scrolling.
   await page.setViewportSize({ width: 390, height: 800 });
   await page.goto(`${origin}/plans`);
@@ -680,6 +771,18 @@ try {
   });
   assert.ok(instFit.rows >= 13 && instFit.scrollWidth <= instFit.width && instFit.dialog <= instFit.dialogClient && instFit.rowRight <= instFit.dialogRight, `the installment table fits a phone: ${JSON.stringify(instFit)}`);
   await a11y('plans list with the installment list at phone width');
+  // The timeline scrolls inside its own box; the page and the dialog do not.
+  await page.fill('input[name="inst.0.dueDate"]', '2026-09-01');
+  await page.fill('input[name="inst.0.amount"]', '40.00');
+  await addDialog.locator('button:has-text("Fill down")').click();
+  assert.equal(await addDialog.locator('button.tl-chip').count(), 13, 'every filled row is a chip');
+  const tlFit = await page.evaluate(() => {
+    const box = document.querySelector('dialog[open] .tl-scroll');
+    const dialog = document.querySelector('dialog[open]');
+    return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: dialog.scrollWidth, dialogClient: dialog.clientWidth, box: box.scrollWidth, boxClient: box.clientWidth, boxRight: box.getBoundingClientRect().right, dialogRight: dialog.getBoundingClientRect().right };
+  });
+  assert.ok(tlFit.scrollWidth <= tlFit.width && tlFit.dialog <= tlFit.dialogClient && tlFit.boxRight <= tlFit.dialogRight && tlFit.box > tlFit.boxClient, `the timeline scrolls itself and the page does not: ${JSON.stringify(tlFit)}`);
+  await a11y('plans list with the schedule timeline at phone width');
   await page.setViewportSize({ width: 1280, height: 900 });
   ok('plan from a listed schedule: table with Fill down (monthly and weekly), Remove row and a live total with the difference from the price; Preview shows the listed rows; pasted text with one bad line is named by line in the Preview and on save, then saves; table fits a phone');
 

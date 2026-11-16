@@ -19,7 +19,8 @@ export const flashCookieName = (config: Pick<AppConfig, 'secureCookies'>) => (co
 /** Builds the Set-Cookie value for the typed fields, or null when there is nothing to keep (or what must be kept cannot be made to fit). */
 export function flashSetCookie(config: Pick<AppConfig, 'secureCookies'>, path: string, body: Record<string, unknown>, fields: string[]): string | null {
   const v: Record<string, string> = {};
-  const trimmed = new Set<string>();
+  // A route that already cut a list before this point (a table cell that was too long) says so in `flashTrimmed`; only list names are honoured.
+  const trimmed = new Set<string>(typeof body.flashTrimmed === 'string' ? body.flashTrimmed.split(',').filter((n) => FLASH_LONG_FIELDS.includes(n)) : []);
   for (const f of fields) {
     if (typeof body[f] !== 'string' || body[f] === '') continue;
     if (!FLASH_LONG_FIELDS.includes(f)) { v[f] = (body[f] as string).slice(0, MAX_VALUE); continue; }

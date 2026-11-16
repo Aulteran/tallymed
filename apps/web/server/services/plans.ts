@@ -81,6 +81,9 @@ export function dueDateAt(first: string, cadence: 'weekly' | 'biweekly' | 'month
  * Builds a schedule from either an explicit installment list (custom cadence) or a total, a count, a first due date and a
  * cadence. Generated totals split exactly: the first (total mod count) installments carry one extra cent. No floats.
  */
+/** The leftover-cents choice for the audit detail: only a price-and-count schedule reads it; null for the other modes, so the record never shows a default that was not used. */
+const remainderUsed = (mode: Schedule['inputMode'], remainder: Remainder | undefined): Remainder | null => (mode === 'total' ? (remainder ?? 'earliest') : null);
+
 export function buildSchedule(d: {
   cadence: 'weekly' | 'biweekly' | 'monthly' | 'custom'; totalAmount: bigint | null; installmentCount: number | null; firstDueDate: string | null;
   installments?: Array<{ dueDate: string; amount: bigint; keepFrom?: string }>;
@@ -503,7 +506,7 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
         installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
         scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
         startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
-        inputMode: d.inputMode, remainder: d.remainder, expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
+        inputMode: schedule.inputMode, remainder: remainderUsed(schedule.inputMode, d.remainder), expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
         warningCodes: planWarnings({
           schedule, matchedCents: sum(fill.map((f) => f.amount)),
           openBalanceCents: sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents)),
@@ -571,7 +574,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
         fromInstallmentCount: before!.installmentCount, toInstallmentCount: installments.length, fromCadence: cur.cadence, toCadence: schedule.cadence,
         carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
         reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
-        inputMode: rest.inputMode, remainder: rest.remainder, expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
+        inputMode: restSchedule.inputMode, remainder: remainderUsed(restSchedule.inputMode, rest.remainder), expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
         warningCodes: revisionWarningList.map((w) => w.code).join(','),
       },
     });

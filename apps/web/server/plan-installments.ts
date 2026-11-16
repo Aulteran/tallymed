@@ -149,17 +149,25 @@ export function listProblems(values: Record<string, string | undefined>): string
 // The cookie only takes short values with dotted names, so the table rows travel as one text value, a `date|amount` line per row, and come back
 // as `inst.<n>.*` values for the form. Blank rows are not kept, so the rows after a gap move up on the way back.
 
-const clean = (v: unknown) => (typeof v === 'string' ? v.replace(/[|\r\n]/g, ' ').trim().slice(0, 24) : '');
+const MAX_CELL = 24;
+/** A table cell for the flash cookie: separators become spaces and whitespace is trimmed first, so only real characters count toward the limit. */
+const clean = (v: unknown) => (typeof v === 'string' ? v.replace(/[|\r\n]/g, ' ').trim() : '');
 
-/** The body with its `inst.<n>.*` values also spelled as one `instRows` text for the flash cookie. Lenient: a bad key is simply not kept. */
+/**
+ * The body with its `inst.<n>.*` values also spelled as one `instRows` text for the flash cookie. Lenient: a bad key is simply not kept.
+ * A cell longer than 24 characters (after trimming) is cut for the cookie and the body says `flashTrimmed: 'instRows'`, so a Preview refuses
+ * instead of showing a different amount than a save would read.
+ */
 export function withInstRowsFlash(body: Record<string, unknown>): Record<string, unknown> {
   const lines: string[] = [];
+  let cut = false;
   for (let i = 0; i < MAX_LIST_INSTALLMENTS; i++) {
     const d = clean(body[`inst.${i}.dueDate`]);
     const a = clean(body[`inst.${i}.amount`]);
-    if (d !== '' || a !== '') lines.push(`${d}|${a}`);
+    if (d.length > MAX_CELL || a.length > MAX_CELL) cut = true;
+    if (d !== '' || a !== '') lines.push(`${d.slice(0, MAX_CELL)}|${a.slice(0, MAX_CELL)}`);
   }
-  return lines.length > 0 ? { ...body, instRows: lines.join('\n') } : body;
+  return lines.length > 0 ? { ...body, instRows: lines.join('\n'), ...(cut ? { flashTrimmed: 'instRows' } : {}) } : body;
 }
 
 /** The flash values with `instRows` expanded back into the `inst.<n>.dueDate` / `inst.<n>.amount` values the form and the converter read. */

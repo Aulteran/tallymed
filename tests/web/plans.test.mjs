@@ -1407,6 +1407,8 @@ test('a plan created from the table rows or from pasted text is the same schedul
     // A listed plan in the audit trail records the cents it was saved with, and nothing the person typed as free text.
     const created = (await t.audit('plan.created')).find((x) => x.entity_id === idA);
     assert.equal(created.detail.computedTotalCents, '20000');
+    assert.equal(created.detail.inputMode, 'list', 'the audit names the mode that was saved, not the schema default');
+    assert.equal(created.detail.remainder, null, 'no leftover-cents choice was used');
     // The idempotency key makes a replayed post one plan.
     const key = t.key();
     const post1 = await s.form('plans/create', { ...base, idempotencyKey: key, name: 'Replay plan', ...s.padded });
