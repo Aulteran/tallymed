@@ -5,7 +5,7 @@ import type { Actor } from '../authz.ts';
 import { verifyPassword } from '../passwords.ts';
 import { log } from '../log.ts';
 import { recordAudit } from '../repositories/audit.ts';
-import { findActiveSession, insertSession, revokeSession, revokeUserSessions, touchSession } from '../repositories/sessions.ts';
+import { findActiveSession, insertSession, markSessionLocked, revokeSession, revokeUserSessions, touchSession } from '../repositories/sessions.ts';
 import { clearAccountFailures, countRecentFailures, lockThrottleKeys, pruneAttempts, pruneKeys, recordAttempt } from '../repositories/throttle.ts';
 import { findOpenEmailReset, findPending, markUsed, supersedeOpenEmailResets } from '../repositories/password-resets.ts';
 import { findUserByEmail, findUserInHousehold, setTemporaryPassword } from '../repositories/users.ts';
@@ -31,7 +31,7 @@ export interface LoginResult {
  */
 export async function login(
   pool: Pool, config: AppConfig,
-  input: { email: string; password: string; ip: string | null; requestId: string; previousToken?: string | null },
+  input: { email: string; password: string; ip: string | null; requestId: string; previousToken?: string | null; remember?: boolean },
 ): Promise<LoginResult> {
   await refreshRuntimeConfig(config, pool);
   // An administrator who signs in through the provider may have switched passwords off. Checked before any password work or counting.
@@ -78,8 +78,12 @@ export async function login(
   }
   const token = newToken();
   // A temporary-password session lives only long enough to choose a new password.
-  const lifetimeSeconds = user.mustChangePassword || viaEmail
-    ? Math.min(config.sessionAbsoluteSeconds, config.passwordChangeSessionSeconds) : config.sessionAbsoluteSeconds;
+  // "Keep me signed in" never applies to the restricted session of a temporary password.
+  const restricted = user.mustChangePassword || !!viaEmail;
+  const remember = !!input.remember && !restricted;
+  const lifetimeSeconds = restricted
+    ? Math.min(config.sessionAbsoluteSeconds, config.passwordChangeSessionSeconds)
+    : remember ? config.rememberSessionAbsoluteSeconds : config.sessionAbsoluteSeconds;
   const expiresAt = new Date(Date.now() + lifetimeSeconds * 1000);
   const outcome = await withTransaction(pool, async (tx) => {
     // Re-read under a row lock: the password was verified outside this transaction, so a concurrent reset, password change,
@@ -117,7 +121,7 @@ export async function login(
       resetId = pending.id;
     }
     if (input.previousToken) {
-      const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds);
+      const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds, config.rememberSessionIdleSeconds);
       if (prev) await revokeSession(tx, prev.sessionId, 'rotated_at_login');
     }
     if (!resetId && !current.mustChangePassword && (await supersedeOpenEmailResets(tx, current.id)) > 0) {
@@ -128,7 +132,7 @@ export async function login(
       });
     }
     const sessionId = await insertSession(tx, {
-      userId: user.id, householdId: user.householdId, tokenHash: digest(token), expiresAt,
+      userId: user.id, householdId: user.householdId, tokenHash: digest(token), expiresAt, remember,
     });
     await clearAccountFailures(tx, key);
     if (resetId) {
@@ -139,7 +143,7 @@ export async function login(
     }
     await recordAudit(tx, {
       householdId: user.householdId, actorUserId: user.id, action: 'auth.login', entityType: 'session', entityId: sessionId,
-      requestId: input.requestId, detail: resetId ? { restricted: true } : {},
+      requestId: input.requestId, detail: { ...(resetId ? { restricted: true } : {}), ...(remember ? { remember: true } : {}) },
     });
     return 'ok' as const;
   });
@@ -160,15 +164,33 @@ export async function login(
   };
 }
 
-/** Resolves a cookie token to an actor, or null when absent, unknown, revoked, expired or idle. */
+/**
+ * Resolves a cookie token to an actor, or null when absent, unknown, revoked, expired or idle.
+ *
+ * Locking is decided here, once, for every route and page. A session is locked when the account has a PIN and either the lock was
+ * set (by the person, or by the browser's idle timer) or the session has been quiet for `lockIdleSeconds`, which covers a browser that
+ * was closed without locking. The idle rule is evaluated before the activity touch below, because the touch would erase it, and it is
+ * stored at once so it cannot be undone by a later request. A locked session is not touched: a page left open cannot keep it fresh.
+ * An account without a PIN, or one that must still replace a temporary password, is never locked.
+ */
 export async function authenticate(pool: Pool, config: AppConfig, token: string | null | undefined): Promise<Actor | null> {
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
   await refreshRuntimeConfig(config, pool);
-  const session = await findActiveSession(pool, digest(token), config.sessionIdleSeconds);
+  const session = await findActiveSession(pool, digest(token), config.sessionIdleSeconds, config.rememberSessionIdleSeconds);
   if (!session) return null;
-  if (Date.now() - session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) await touchSession(pool, session.sessionId);
-  const { lastSeenAt: _ignored, ...actor } = session;
-  return actor;
+  const quietMs = Date.now() - session.lastSeenAt.getTime();
+  const lockable = session.hasPin && !session.mustChangePassword;
+  const idleLocked = lockable && !session.lockedAt && quietMs > config.lockIdleSeconds * 1000;
+  if (idleLocked && (await markSessionLocked(pool, session.sessionId))) {
+    await recordAudit(pool, {
+      householdId: session.householdId, actorUserId: session.userId, action: 'auth.session_locked', entityType: 'session',
+      entityId: session.sessionId, detail: { reason: 'idle' },
+    });
+  }
+  const locked = lockable && (!!session.lockedAt || idleLocked);
+  if (!locked && quietMs > TOUCH_INTERVAL_MS) await touchSession(pool, session.sessionId);
+  const { lastSeenAt: _seen, lockedAt: _locked, ...actor } = session;
+  return { ...actor, locked };
 }
 
 export async function logout(pool: Pool, actor: Actor, requestId: string): Promise<void> {

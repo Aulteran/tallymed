@@ -3,7 +3,7 @@ import { AppError } from '../errors.ts';
 import { log } from '../log.ts';
 import { BOOTSTRAP_LOCK, checkSetupToken, closeSetup } from '../setup-token.ts';
 import { isUniqueViolation, withTransaction, type Pool } from '../db.ts';
-import { hashPassword } from '../passwords.ts';
+import { hashNewPin, hashPassword } from '../passwords.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import { insertUser } from '../repositories/users.ts';
 import { parse, schemas } from '../validation.ts';
@@ -24,6 +24,7 @@ export async function bootstrapAdmin(
 ): Promise<{ householdId: string; adminUserId: string }> {
   const data = parse(schemas.bootstrap, input);
   const passwordHash = await hashPassword(data.password);
+  const pinHash = await hashNewPin(data.pin, data.confirmPin);
   try {
     return await withTransaction(pool, async (tx) => {
       await tx.query('select pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
@@ -31,7 +32,7 @@ export async function bootstrapAdmin(
       const h = await tx.query<{ id: string }>('insert into households (name) values ($1) returning id', [data.householdName]);
       const householdId = h.rows[0]!.id;
       const adminUserId = await insertUser(tx, {
-        householdId, email: data.email, displayName: data.displayName, role: 'admin', passwordHash,
+        householdId, email: data.email, displayName: data.displayName, role: 'admin', passwordHash, pinHash,
       });
       await tx.query('insert into bootstrap_state (household_id, admin_user_id) values ($1, $2)', [householdId, adminUserId]);
       await recordAudit(tx, {

@@ -401,3 +401,10 @@ dialog.confirm-modal { width: min(34rem, calc(100vw - 2rem)); }
 .confirm-modal .modal-body :is(input, select, textarea) { max-width: none; }
 .confirm-modal .modal-body ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 .confirm-modal label:has(+ :required)::after { content: " *"; content: " *" / ""; color: var(--danger-fg); font-weight: 700; }
+
+/* ---------- Interface lock ---------- */
+/* Covers the page at once while the lock is being recorded; the PIN screen replaces it. */
+.lock-cover { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--bg); color: var(--fg); }
+.lock-cover p { font-size: var(--text-lg, 1.125rem); }
+.pin-input { letter-spacing: 0.35em; max-width: 12rem; font-variant-numeric: tabular-nums; }
+.account-pin-note { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--fg-muted); }

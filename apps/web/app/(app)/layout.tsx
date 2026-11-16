@@ -9,6 +9,7 @@ import { Lockup } from '../components/brand.tsx';
 import { ShellNav, type NavGroup } from '../components/ShellNav.tsx';
 import { UndoBanner } from '../components/UndoBanner.tsx';
 import { AccountMenu } from '../components/AccountMenu.tsx';
+import { LockWatcher } from '../components/LockWatcher.tsx';
 import { roleLabel } from '../components/ui.tsx';
 import { readTheme } from '../components/theme.ts';
 
@@ -20,6 +21,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
   const session = await pageSession(appContext(), await headers());
   if (!session) redirect('/login');
   if (session.actor.mustChangePassword) redirect('/password/change');
+  if (session.actor.locked) redirect('/locked');
   const { actor, csrf } = session;
   const pending = await pendingProposalCount(appContext().pool, actor);
   const admin: NavGroup['items'] = [
@@ -47,9 +49,10 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
         <Link href="/" className="brand"><Lockup onDark title="TallyMed overview" /></Link>
       </div>
       <ShellNav groups={groups}>
-        <AccountMenu displayName={actor.displayName} roleLabel={roleLabel(actor.role)} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} />
+        <AccountMenu displayName={actor.displayName} roleLabel={roleLabel(actor.role)} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} hasPin={actor.hasPin} />
       </ShellNav>
     </header>
+    {actor.hasPin && <LockWatcher csrf={csrf} idleSeconds={appContext().config.lockIdleSeconds} />}
     <UndoBanner actor={actor} csrf={csrf} />
     {children}
   </>;

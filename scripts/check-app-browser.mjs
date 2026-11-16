@@ -29,6 +29,8 @@ const freePort = () => new Promise((resolve) => {
 const dbName = `tallymed_ui_${randomBytes(5).toString('hex')}`;
 const password = 'synthetic passphrase for tests';
 const setupToken = randomBytes(24).toString('base64url');
+const pin = '482916';
+const samPin = '735190';
 const restoreDbName = `tallymed_ui_restore_${randomBytes(5).toString('hex')}`;
 let app;
 let restoredApp;
@@ -102,14 +104,19 @@ try {
   await page.fill('#displayName', 'Alex Example');
   await page.fill('#email', 'admin@example.test');
   await page.fill('#password', password);
+  await page.fill('#pin', pin);
+  await page.fill('#confirmPin', pin);
   await page.click('button[type=submit]');
   await page.waitForURL(`${origin}/setup?error=invalid_setup_token`);
   assert.match(await text(), /setup token was not accepted/);
   assert.equal(await page.inputValue('#email'), 'admin@example.test', 'typed details are kept, the token and password are not');
   assert.equal(await page.inputValue('#setupToken'), '');
   assert.equal(await page.inputValue('#password'), '');
+  assert.equal(await page.inputValue('#pin'), '', 'the PIN is not kept either');
   await page.fill('#setupToken', setupToken);
   await page.fill('#password', password);
+  await page.fill('#pin', pin);
+  await page.fill('#confirmPin', pin);
   await page.click('button[type=submit]');
   await page.waitForURL(`${origin}/login?notice=setup_complete`);
   assert.match(await text(), /Administrator created/);
@@ -128,11 +135,15 @@ try {
   await page.goto(`${origin}/login`);
   await page.fill('#email', 'admin@example.test');
   await page.fill('#password', password);
+  assert.equal(await page.isChecked('input[name=remember]'), false, 'keep me signed in is off until chosen');
+  await page.check('input[name=remember]');
   await page.click('button[type=submit]');
   await page.waitForURL(`${origin}/`);
   assert.match(await text(), /Overview/);
+  const sessionCookie = (await page.context().cookies()).find((c) => c.name === 'tallymed_session');
+  assert.ok(sessionCookie.expires * 1000 > Date.now() + 20 * 86_400_000, 'keep me signed in gives a cookie that lasts weeks, not hours');
   await a11y('overview');
-  ok('sign in lands on the expense overview');
+  ok('sign in lands on the expense overview, and keep me signed in sets a long-lived session');
 
   await page.goto(`${origin}/members`);
   await openAdd('Add family member');
@@ -813,6 +824,8 @@ try {
   await sam.goto(inviteLink);
   await sam.fill('#displayName', 'Sam Example');
   await sam.fill('#password', samPassword);
+  await sam.fill('#pin', samPin);
+  await sam.fill('#confirmPin', samPin);
   await sam.click('button[type=submit]');
   await sam.waitForURL(/\/login\?notice=account_created/);
   await sam.fill('#email', 'sam@example.test');
@@ -900,11 +913,85 @@ try {
   assert.equal(await page.locator('[role=status]').count(), 0, 'the banner is gone once the slot is used');
   ok('administrator deletes a payment, sees the undo banner, undoes it and the payment is back; operators see neither; delete dialogs pass axe at phone width');
 
+  // Interface lock: Lock now hides everything behind a PIN screen without signing out, a wrong PIN is counted, the right one returns to the same page.
+  await page.goto(`${origin}/bills?q=lock-check`);
+  await page.click('button[aria-label="User settings"]');
+  await page.locator('dialog[aria-labelledby="user-settings-title"] button', { hasText: 'Lock now' }).click();
+  await page.waitForURL(/\/locked\?next=%2Fbills%3Fq%3Dlock-check$/);
+  assert.equal(await page.locator('header.shell').count(), 0, 'the PIN screen has no navigation');
+  assert.equal(await page.locator('table').count(), 0, 'the PIN screen holds no records');
+  assert.match(await page.locator('main').innerText(), /still signed in/);
+  await a11y('locked');
+  await page.fill('#pin', '000000');
+  await page.click('button[type=submit]');
+  await page.waitForURL(/\/locked\?error=invalid_pin&left=4/);
+  assert.match(await page.locator('main').innerText(), /not correct\. 4 attempts left/);
+  await a11y('locked with a wrong PIN');
+  await page.fill('#pin', pin);
+  await page.click('button[type=submit]');
+  await page.waitForURL(`${origin}/bills?q=lock-check`);
+  assert.equal(await page.locator('header.shell').count(), 1, 'unlocking returns to the page the person was on');
+  // Every page and API is closed while locked, even by address; a locked session opened at a bare address returns to the overview.
+  await page.click('button[aria-label="User settings"]');
+  await page.locator('dialog[aria-labelledby="user-settings-title"] button', { hasText: 'Lock now' }).click();
+  await page.waitForURL(/\/locked/);
+  for (const closed of ['/payments', '/bills', '/account/pin', '/users', '/documents']) {
+    await page.goto(`${origin}${closed}`);
+    assert.equal(new URL(page.url()).pathname, '/locked', `${closed} is closed while locked`);
+    assert.equal(await page.locator('table').count(), 0);
+  }
+  assert.equal((await page.request.get(`${origin}/api/hsa/export`)).status(), 423);
+  await page.fill('#pin', pin);
+  await page.click('button[type=submit]');
+  await page.waitForURL(`${origin}/`);
+  ok('Lock now shows a PIN screen with no records, counts a wrong PIN, refuses every page and API while locked, and returns to the same page on the right PIN');
+
+  // Set or change the PIN from the user menu: the account page asks for the current PIN or the password.
+  await page.click('button[aria-label="User settings"]');
+  await page.locator('dialog[aria-labelledby="user-settings-title"] a', { hasText: 'Change PIN' }).click();
+  await page.waitForURL(`${origin}/account/pin`);
+  await a11y('change PIN');
+  await page.fill('#currentPin', pin);
+  await page.fill('#newPin', '112358');
+  await page.fill('#confirmPin', '112358');
+  await page.click('main form button[type=submit]');
+  await page.waitForURL(`${origin}/?notice=pin_changed`);
+  assert.match(await text(), /Your PIN was changed/);
+  await page.goto(`${origin}/account/pin`);
+  await page.fill('#currentPin', '112358');
+  await page.fill('#newPin', pin);
+  await page.fill('#confirmPin', pin);
+  await page.click('main form button[type=submit]');
+  await page.waitForURL(`${origin}/?notice=pin_changed`);
+  ok('the PIN can be changed from the user menu with the current PIN');
+
+  // Idle lock in the browser: after the configured quiet time the page covers itself, locks the session on the server and shows the PIN screen.
+  const idleContext = await browser.newContext({ colorScheme });
+  const idle = await idleContext.newPage();
+  await idle.clock.install();
+  await idle.goto(`${origin}/login`);
+  await idle.fill('#email', 'admin@example.test');
+  await idle.fill('#password', password);
+  await idle.click('button[type=submit]');
+  await idle.waitForURL(`${origin}/`);
+  await idle.clock.runFor(60_000);
+  assert.equal(new URL(idle.url()).pathname, '/', 'activity-free but short of the limit: still unlocked');
+  await idle.clock.runFor(6 * 60_000);
+  await idle.waitForURL(/\/locked\?next=/);
+  assert.equal(await idle.locator('header.shell').count(), 0);
+  const idleCookie = (await idleContext.cookies()).find((c) => c.name === 'tallymed_session');
+  assert.ok(idleCookie, 'the session cookie is still there: locking never signs out');
+  await idle.fill('#pin', pin);
+  await idle.click('button[type=submit]');
+  await idle.waitForURL(`${origin}/`);
+  await idleContext.close();
+  ok('the browser locks the screen after the idle time without signing out, and the PIN opens it again');
+
   // User menu: settings dialog, theme choice, and sign out only after confirming.
   await page.click('button[aria-label="User settings"]');
   const settingsDialog = page.locator('dialog[aria-labelledby="user-settings-title"]');
   await settingsDialog.waitFor({ state: 'visible' });
-  assert.deepEqual(await settingsDialog.locator('strong').allInnerTexts(), ['Change password', 'Change theme', 'Sign out']);
+  assert.deepEqual(await settingsDialog.locator('strong').allInnerTexts(), ['Change password', 'Lock now', 'Change PIN', 'Change theme', 'Sign out']);
   const box = await settingsDialog.boundingBox();
   assert.ok(Math.abs(box.x + box.width / 2 - 640) <= 2 && Math.abs(box.y + box.height / 2 - 450) <= 2, 'the settings dialog is centred');
   for (let i = 0; i < 12; i++) {

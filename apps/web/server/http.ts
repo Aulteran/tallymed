@@ -29,7 +29,8 @@ import { restoreFromSetup, startBackup } from './services/backup.ts';
 import { refreshRuntimeConfig } from './settings.ts';
 import { clearUndoSlot } from './repositories/undo.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
-import { parse, schemas } from './validation.ts';
+import { parse, safeReturnPath, schemas } from './validation.ts';
+import { changePin, lockSession, unlockSession } from './services/pin.ts';
 
 export interface AppContext { config: AppConfig; pool: Pool; /** Private document volume. Null or absent disables document upload and download. */ store?: ObjectStore | null }
 
@@ -265,6 +266,11 @@ function route(opts: {
    */
   allowPendingPasswordChange?: boolean;
   /**
+   * Lets a locked session through. Every other authenticated route refuses it with `locked`, so a new route cannot forget the lock: the
+   * default is closed. Only lock, unlock and sign-out set it.
+   */
+  allowLocked?: boolean;
+  /**
    * Every authenticated POST is a mutation by its actor, and a mutation supersedes that actor's undo slot (see the hook in the pipeline
    * below). Set false only for the `undo` action itself and for session, password and download routes that change no record.
    */
@@ -286,6 +292,7 @@ function route(opts: {
         actor = await authenticate(ctx.pool, ctx.config, sessionToken);
         if (!actor || !sessionToken) throw new AppError('unauthenticated');
         if (actor.mustChangePassword && !opts.allowPendingPasswordChange) throw new AppError('password_change_required');
+        if (actor.locked && !opts.allowLocked) throw new AppError('locked');
       };
       if (opts.session && opts.authBeforeBody) {
         await signIn();
@@ -322,6 +329,10 @@ function route(opts: {
       if (error instanceof AppError && error.code === 'password_change_required' && wantsHtml(req)) {
         return redirect(ctx.config, '/password/change', BASE_HEADERS);
       }
+      // A browser form post from a locked session lands on the PIN screen, and the unlock returns the person to the page they were on.
+      if (error instanceof AppError && error.code === 'locked' && wantsHtml(req)) {
+        return redirect(ctx.config, '/locked', BASE_HEADERS);
+      }
       return errorResponse(req, ctx, error, errorPath, flash, opts.redirectAllErrors);
     }
   };
@@ -334,7 +345,7 @@ export const handleLogin = route({
   async run({ ctx, body, sessionToken, client, requestId, req }) {
     const data = parse(schemas.login, body);
     const result = await login(ctx.pool, ctx.config, {
-      email: data.email, password: data.password, ip: client.ip, requestId, previousToken: sessionToken,
+      email: data.email, password: data.password, ip: client.ip, requestId, previousToken: sessionToken, remember: data.remember,
     });
     const cookie = cookieHeader(ctx.config, result.token, Math.max(1, Math.floor((result.expiresAt.getTime() - Date.now()) / 1000)));
     if (wantsHtml(req)) return { response: redirect(ctx.config, result.passwordChangeRequired ? '/password/change' : '/', { 'Set-Cookie': cookie }) };
@@ -342,6 +353,88 @@ export const handleLogin = route({
       json: { ok: true, csrfToken: csrfFor(result.token), ...(result.passwordChangeRequired ? { passwordChangeRequired: true } : {}) },
       headers: { 'Set-Cookie': cookie },
     };
+  },
+});
+
+
+// ---------- interface lock and security PIN ----------
+// The lock is a state of the session (see services/auth.ts `authenticate`), so signing in stays untouched: these routes only change that state.
+
+/** Locks the caller's own session now: the Lock button, the browser's idle timer and the cross-tab signal all post here. */
+export const handleLock = route({
+  name: 'lock',
+  keepsUndo: true,
+  session: true,
+  allowLocked: true,
+  errorPath: () => '/',
+  async run({ ctx, actor, body, req, requestId }) {
+    await lockSession(ctx.pool, actor!, body, requestId);
+    const next = safeReturnPath(body.next);
+    if (wantsHtml(req)) return { response: redirect(ctx.config, next === '/' ? '/locked' : `/locked?next=${encodeURIComponent(next)}`) };
+    return { json: { ok: true } };
+  },
+});
+
+/** Opens a locked session with the PIN. The session cookie is not replaced and nothing else changes. */
+export const handleUnlock = route({
+  name: 'unlock',
+  keepsUndo: true,
+  session: true,
+  allowLocked: true,
+  errorPath: (b) => { const next = safeReturnPath(b.next); return next === '/' ? '/locked' : `/locked?next=${encodeURIComponent(next)}`; },
+  async run({ ctx, actor, body, req, requestId }) {
+    const result = await unlockSession(ctx.pool, actor!, body, requestId);
+    const next = safeReturnPath(body.next);
+    if (result.status === 'ok') {
+      if (wantsHtml(req)) return { response: redirect(ctx.config, next) };
+      return { json: { ok: true } };
+    }
+    if (result.status === 'revoked') {
+      // The one time the lock signs anyone out: too many wrong PINs on this session. The cookie goes with it.
+      const cookie = cookieHeader(ctx.config, '', 0);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?error=pin_attempts_exceeded', { 'Set-Cookie': cookie }) };
+      return { json: { error: { code: 'pin_attempts_exceeded', message: 'Too many wrong PINs' } }, status: 401, headers: { 'Set-Cookie': cookie } };
+    }
+    if (wantsHtml(req)) {
+      const q = new URLSearchParams({ error: 'invalid_pin', left: String(result.remaining) });
+      if (next !== '/') q.set('next', next);
+      return { response: redirect(ctx.config, `/locked?${q}`) };
+    }
+    return { json: { error: { code: 'invalid_pin', message: 'That PIN is not correct' }, remaining: result.remaining }, status: 401 };
+  },
+});
+
+/** Sets the first PIN or changes it (needs the current PIN or the password). */
+export const handleChangePin = route({
+  name: 'change-pin',
+  keepsUndo: true,
+  session: true,
+  errorPath: () => '/account/pin',
+  async run({ ctx, actor, body, req, requestId }) {
+    const result = await changePin(ctx.pool, actor!, body, requestId);
+    if (result.status === 'revoked') {
+      const cookie = cookieHeader(ctx.config, '', 0);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, '/login?error=pin_attempts_exceeded', { 'Set-Cookie': cookie }) };
+      return { json: { error: { code: 'pin_attempts_exceeded', message: 'Too many wrong PINs' } }, status: 401, headers: { 'Set-Cookie': cookie } };
+    }
+    if (result.status === 'wrong') {
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `/account/pin?error=invalid_pin&left=${result.remaining}`) };
+      return { json: { error: { code: 'invalid_pin', message: 'That PIN is not correct' }, remaining: result.remaining }, status: 401 };
+    }
+    if (wantsHtml(req)) return { response: redirect(ctx.config, `/?notice=${result.first ? 'pin_set' : 'pin_changed'}`) };
+    return { json: { ok: true } };
+  },
+});
+
+/** Keeps a session that is in use from looking idle: the browser posts here while the person is active, since reading a page makes no request. */
+export const handleHeartbeat = route({
+  name: 'heartbeat',
+  keepsUndo: true,
+  session: true,
+  errorPath: () => '/',
+  async run({ body }) {
+    parse(schemas.heartbeat, body);
+    return { json: { ok: true } };
   },
 });
 
@@ -438,6 +531,7 @@ export const handleLogout = route({
   keepsUndo: true,
   session: true,
   allowPendingPasswordChange: true,
+  allowLocked: true,
   errorPath: () => '/',
   async run({ ctx, actor, body, req, requestId }) {
     parse(schemas.logout, body);
@@ -628,6 +722,8 @@ export async function pageSession(ctx: AppContext, headers: Headers): Promise<{ 
 export async function pageActor(ctx: AppContext, headers: Headers): Promise<{ actor: Actor; csrf: string } | null> {
   const session = await pageSession(ctx, headers);
   if (session?.actor.mustChangePassword) throw new AppError('password_change_required');
+  // Closed by default for the lock too: a locked session reads nothing until the PIN is entered.
+  if (session?.actor.locked) throw new AppError('locked');
   return session;
 }
 

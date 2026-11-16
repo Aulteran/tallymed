@@ -2,7 +2,7 @@ import type { AppConfig } from '../config.ts';
 import { AppError } from '../errors.ts';
 import { isUniqueViolation, withTransaction, type Pool } from '../db.ts';
 import { authorize, type Actor, type Role } from '../authz.ts';
-import { hashPassword } from '../passwords.ts';
+import { hashNewPin, hashPassword } from '../passwords.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import {
   expireOpenInvitationsFor, findOpenInvitation, insertInvitation, listOpenInvitations, markInvitationAccepted,
@@ -88,18 +88,19 @@ export async function acceptInvitation(pool: Pool, input: unknown, requestId: st
   // Cheap precheck before spending Argon2 time on unknown tokens.
   if (!(await findOpenInvitation(pool, tokenHash))) throw new AppError('not_found', 'Invitation is invalid or expired');
   const passwordHash = await hashPassword(data.password);
+  const pinHash = await hashNewPin(data.pin, data.confirmPin);
   try {
     return await withTransaction(pool, async (tx) => {
       const invitation = await findOpenInvitation(tx, tokenHash);
       if (!invitation) throw new AppError('not_found', 'Invitation is invalid or expired');
       const userId = await insertUser(tx, {
         householdId: invitation.householdId, email: invitation.email, displayName: data.displayName,
-        role: invitation.role, passwordHash,
+        role: invitation.role, passwordHash, pinHash,
       });
       await markInvitationAccepted(tx, invitation.id);
       await recordAudit(tx, {
         householdId: invitation.householdId, actorUserId: userId, action: 'operator.accepted_invitation',
-        entityType: 'user', entityId: userId, requestId, detail: { role: invitation.role },
+        entityType: 'user', entityId: userId, requestId, detail: { role: invitation.role, pinSet: pinHash !== null },
       });
       return { userId };
     });

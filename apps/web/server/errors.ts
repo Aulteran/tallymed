@@ -11,6 +11,10 @@ export type ErrorCode =
   | 'invalid_setup_token'
   | 'rate_limited'
   | 'password_change_required'
+  | 'locked'
+  | 'invalid_pin'
+  | 'pin_not_set'
+  | 'pin_attempts_exceeded'
   | 'temporary_password_expired'
   | 'self_reset_blocked'
   | 'reset_not_allowed'
@@ -49,6 +53,10 @@ const STATUS: Record<ErrorCode, number> = {
   invalid_setup_token: 403,
   rate_limited: 429,
   password_change_required: 403,
+  locked: 423,
+  invalid_pin: 401,
+  pin_not_set: 409,
+  pin_attempts_exceeded: 401,
   temporary_password_expired: 401,
   self_reset_blocked: 403,
   reset_not_allowed: 409,
