@@ -737,6 +737,7 @@ test('plans can be created per installment, with the leftover on the last one, a
     assert.deepEqual(d.installments.map((i) => i.amountCents), ['10000', '10000', '10000', '10000']);
     const audit = (await t.audit('plan.created')).find((a) => a.detail.planId === created.id).detail;
     assert.equal(audit.inputMode, 'per_installment');
+    assert.equal(audit.remainder, null, 'a per-installment plan never used the leftover-cents choice, so none is recorded');
     assert.equal(audit.warningCodes, 'bill_balance_mismatch');
     assert.deepEqual([audit.expectedTotalCents, audit.computedTotalCents], [null, '40000']);
     // A count and a total that disagree are saved as count x amount, and both figures are recorded so the plan page can show the difference.
@@ -754,6 +755,14 @@ test('plans can be created per installment, with the leftover on the last one, a
     assert.equal(dl.installments.reduce((a, i) => a + BigInt(i.amountCents), 0n), 30000n);
     assert.equal(dl.installments[6].amountCents, '4290');
     assert.equal(dl.installments[0].amountCents, '4285');
+    // A price-and-count plan records the leftover-cents choice it used (the default when none was given); the list and per-installment modes record none.
+    const lastAudit = (await t.audit('plan.created')).find((a) => a.detail.planId === last.id).detail;
+    assert.deepEqual([lastAudit.inputMode, lastAudit.remainder], ['total', 'last_extra']);
+    const defaultAudit = (await t.audit('plan.created')).find((a) => a.detail.planId === s.plan.id).detail;
+    assert.deepEqual([defaultAudit.inputMode, defaultAudit.remainder], ['total', 'earliest']);
+    const listed = await plans.createPlan(t.db.pool, t.actor, { idempotencyKey: t.key(), name: 'Listed', billId: s.b.id, startedOn: '2026-01-01', installments: [{ dueDate: '2026-09-01', amount: '100.00' }, { dueDate: '2026-10-01', amount: '200.00' }] }, 'r');
+    const listedAudit = (await t.audit('plan.created')).find((a) => a.detail.planId === listed.id).detail;
+    assert.deepEqual([listedAudit.inputMode, listedAudit.remainder, listedAudit.expectedTotalCents], ['list', null, null]);
     // An amount per installment with the total mode is refused.
     await assert.rejects(plans.createPlan(t.db.pool, t.actor, { ...body, idempotencyKey: t.key(), inputMode: 'total', totalAmount: '300.00' }, 'r'), code('invalid_input'));
     assert.equal(await t.count('payments'), 0, 'no mode of plan creation moves cash');

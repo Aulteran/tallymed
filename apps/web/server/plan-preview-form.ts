@@ -3,7 +3,7 @@
 // parts: which fields travel, how the bill ticks are spelled in the cookie, and which page the redirect goes to.
 import { AppError } from './errors.ts';
 
-export const PREVIEW_KINDS = ['create', 'revise', 'restructure'] as const;
+export const PREVIEW_KINDS = ['create', 'progress', 'revise', 'restructure'] as const;
 export type PreviewKind = typeof PREVIEW_KINDS[number];
 
 export const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
@@ -12,8 +12,10 @@ export const LIST_FIELDS = ['installmentsText', 'instRows'];
 /** `readFlash` only accepts names of letters, digits and dots, so the `bill_<id>` ticks of the create form travel as `bill.<n>` with the id as the value. */
 export const PREVIEW_BILL_SLOTS = 20;
 export const BILL_KEYS = Array.from({ length: PREVIEW_BILL_SLOTS }, (_, i) => `bill.${i}`);
+/** The fields only "Add a plan that's already in progress" adds: was it restructured, and the restart (its own names, since the form also carries the original schedule's `firstDueDate`, `installmentAmount` and `cadence`). */
+export const PROGRESS_FIELDS = ['restructured', 'restartOn', 'restartAmount', 'restartCadence'];
 /** Every field a preview keeps for re-filling the form it came from (never the idempotency key, the version or the CSRF token). */
-export const PREVIEW_KEEP = ['name', 'startedOn', 'matchExisting', 'billId', 'reason', 'dialog', ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS];
+export const PREVIEW_KEEP = ['name', 'startedOn', 'matchExisting', 'billId', 'reason', 'dialog', ...PROGRESS_FIELDS, ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BILL_TICK = /^bill_([0-9a-f-]{36})$/;
@@ -26,7 +28,7 @@ export function previewKind(body: Record<string, unknown>): PreviewKind {
 
 /** The page a preview of this kind returns to: the plan list for a new plan, the plan itself otherwise. Built from fixed paths and a validated id only. */
 export function previewPage(kind: PreviewKind, body: Record<string, unknown>): string {
-  if (kind === 'create') return '/plans';
+  if (kind === 'create' || kind === 'progress') return '/plans';
   const id = body.planId;
   if (typeof id !== 'string' || !UUID.test(id)) throw new AppError('invalid_input');
   return `/plans/${id}`;

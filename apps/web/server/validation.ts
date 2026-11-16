@@ -186,6 +186,19 @@ export const schedulePreviewSchema = z.object({
 /** Creating a plan adds a start date and whether existing payments are matched; the bills come from `bill_<id>` ticks. */
 export const createPlanPreviewSchema = schedulePreviewSchema.extend({ startedOn: optional(isoDate), matchExisting: checkbox.optional() });
 
+/**
+ * What "Add a plan that's already in progress" adds to a plan's fields: whether the plan was restructured (a Yes/No radio, or JSON `true`) and
+ * the restructure itself. With "No" the restart fields are accepted and ignored, since a form without JavaScript always sends them.
+ */
+const inProgressFields = {
+  restructured: checkbox.optional(),
+  restartOn: optional(isoDate), restartAmount: optional(positiveUsd), restartCadence: z.preprocess(blank, z.enum(['weekly', 'biweekly', 'monthly']).default('monthly')),
+  reason: optionalText(500),
+};
+
+/** The in-progress form's fields alone (a preview reads them from its flash cookie). The start date is required, though a preview names it itself. */
+export const createPlanInProgressPreviewSchema = z.object({ ...scheduleInput, startedOn: optional(isoDate), matchExisting: checkbox.optional(), ...inProgressFields });
+
 export const paymentSchemas = {
   createPayment: z.strictObject({
     idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, paidWithId: optional(uuid), reference: optional(text(80).min(1)), note: optionalText(500),
@@ -252,6 +265,17 @@ export const paymentSchemas = {
   archivePaymentMethod: z.strictObject({ id: uuid, version, archived: checkbox, ...csrf }),
   createPlan: z.strictObject({
     idempotencyKey, name: text(120).min(1), billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), matchExisting: checkbox.optional(), startedOn: optional(isoDate), ...scheduleInput, ...csrf,
+  }).transform((d, ctx) => {
+    const billIds = d.billIds && d.billIds.length > 0 ? d.billIds : d.billId ? [d.billId] : [];
+    if ((d.billIds?.length && d.billId) || billIds.length === 0 || new Set(billIds).size !== billIds.length) {
+      ctx.addIssue({ code: 'custom', message: 'choose the bills the plan covers' });
+      return z.NEVER;
+    }
+    const { billId: _b, billIds: _l, ...rest } = d;
+    return { ...rest, billIds };
+  }),
+  createPlanInProgress: z.strictObject({
+    idempotencyKey, name: text(120).min(1), billIds: z.array(uuid).max(20).optional(), billId: optional(uuid), startedOn: isoDate, matchExisting: checkbox.optional(), ...scheduleInput, ...inProgressFields, ...csrf,
   }).transform((d, ctx) => {
     const billIds = d.billIds && d.billIds.length > 0 ? d.billIds : d.billId ? [d.billId] : [];
     if ((d.billIds?.length && d.billId) || billIds.length === 0 || new Set(billIds).size !== billIds.length) {

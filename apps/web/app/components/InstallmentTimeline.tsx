@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import {
-  centsOf, chipOrder, formatCents, mergeWithNext, monthLabel, monthOf, moveByDays, moveByMonths, moveToMonth, nextChip, parseIso, restartFrom, setDay, splitRow, timelineMonths,
+  centsOf, chipOrder, completeDay, formatCents, mergeWithNext, monthLabel, monthOf, moveByDays, moveByMonths, moveToMonth, nextChip, parseIso, restartFrom, setDay, splitRow, timelineMonths, typedDay,
   type TimelineEdit, type TimelineRow,
 } from './installment-timeline.ts';
 
@@ -81,6 +81,15 @@ export function InstallmentTimeline({ idPrefix, rows, onChange, cadenceId, makeR
     if (i >= 0) run(moveToMonth(rows, i, target), monthMoved, true);
   };
 
+  /** A day typed on the way (a "1" before the "5") only changes the date once it is whole: here, on Enter or when the field loses focus. Until then the date keeps its own day; an unusable value is dropped. */
+  const applyTypedDay = () => {
+    const draft = dayDraft;
+    setDayDraft(null);
+    if (draft === null || index < 0 || draft.trim() === '' || completeDay(draft) !== null) return;
+    const d = typedDay(draft);
+    if (d === null) setMessage('Enter a day from 1 to 31.'); else run(setDay(rows, index, d), dayMoved, false, 'Enter a day from 1 to 31.');
+  };
+
   const dayOfSel = sel ? parseIso(sel.dueDate)?.d : undefined;
   return <div className="tl" ref={root} role="group" aria-labelledby={id('title')}>
     <p id={id('title')} className="tl-title">Schedule timeline</p>
@@ -123,8 +132,9 @@ export function InstallmentTimeline({ idPrefix, rows, onChange, cadenceId, makeR
         <div className="tl-actions">
           <label htmlFor={id('day')}>Day of month</label>
           <input id={id('day')} type="number" min={1} max={31} inputMode="numeric" value={dayDraft ?? String(dayOfSel)}
-            onChange={(e) => { setDayDraft(e.target.value); const d = Number(e.target.value); if (e.target.value !== '' && Number.isInteger(d)) run(setDay(rows, index, d), dayMoved, false, 'Enter a day from 1 to 31.'); }}
-            onBlur={() => setDayDraft(null)} />
+            onChange={(e) => { setDayDraft(e.target.value); const d = completeDay(e.target.value); if (d !== null) run(setDay(rows, index, d), dayMoved, false, 'Enter a day from 1 to 31.'); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyTypedDay(); } }}
+            onBlur={applyTypedDay} />
           <button type="button" className="secondary" onClick={() => run(moveByMonths(rows, index, -1), monthMoved, false)}>Earlier month</button>
           <button type="button" className="secondary" onClick={() => run(moveByMonths(rows, index, 1), monthMoved, false)}>Later month</button>
           <button type="button" className="secondary" disabled={!month} onClick={() => run(moveToMonth(rows, index, month!), movedTo, false)}>Move to month</button>

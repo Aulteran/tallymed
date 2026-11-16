@@ -85,7 +85,7 @@ try {
   };
   const text = () => page.locator('main').innerText();
   // The add form of a list page lives in a dialog opened by the button at the top right of the page header.
-  const addDialog = page.locator('dialog.form-modal');
+  const addDialog = page.locator('dialog.form-modal[open]'); // a page can carry two add dialogs (Payment plans); the one that is open is meant
   const openAdd = async (label) => {
     await page.click(`.page-head .page-action button:has-text("${label}")`);
     await addDialog.waitFor({ state: 'visible' });
@@ -1437,6 +1437,128 @@ try {
   assert.match(await sugRows.nth(0).innerText(), /#2 due 2026-05-01\s+2026-03-01, \$12\.00\s+\$2\.00/);
   await a11y('plan detail with the remaining suggestion');
   ok('plan page suggests matches for payments already applied (4 rows, $28.00 + $2.00, ticked), passes axe and fits a phone; unticking one and Match selected matches only the other three ($28.00)');
+
+  // "Add a plan already in progress": one guided form, one save. Fabricated figures: a plan that started ten months ago, 12 installments of $60.00
+  // ($720.00) over two bills ($400.00 and $320.00), the first three paid on their due dates, restructured from the fourth month at $45.00 each.
+  // The dates are worked from today, so the plan is always ten months old.
+  const monthStart = (back) => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - back, 1)).toISOString().slice(0, 10); };
+  const progStart = monthStart(10);
+  const progDue = (i) => monthStart(10 - i);
+  const progBills = [];
+  for (const [reference, amount] of [['PROGRESS-A', '400.00'], ['PROGRESS-B', '320.00']]) {
+    await enterBill({ provider: 'Example Clinic', reference, amount, responsibility: amount, status: 'confirmed' });
+    await page.waitForURL(/\/bills\/[0-9a-f-]{36}$/);
+    progBills.push(page.url().split('/').pop());
+  }
+  for (let i = 0; i < 3; i++) {
+    await page.goto(`${origin}/payments?billId=${progBills[i % 2]}`);
+    await addDialog.waitFor({ state: 'visible' });
+    await page.fill('#paidOn', progDue(i));
+    await page.fill('#amount', '60.00');
+    await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
+    await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
+  }
+  await page.goto(`${origin}/plans`);
+  assert.equal(await page.locator('.page-head .page-action button:has-text("Create plan")').count(), 1);
+  assert.equal(await page.locator('.page-head .page-action button.secondary:has-text("Add a plan already in progress")').count(), 1, 'a second, secondary header button');
+  const progressPlansBefore = await page.locator('main table.stack').last().locator('tbody tr').count();
+  await openAdd('Add a plan already in progress');
+  assert.equal(await page.locator('dialog.form-modal[open]').count(), 1, 'only the new dialog is open');
+  assert.deepEqual(await addDialog.locator('fieldset > legend').allInnerTexts().then((l) => l.map((x) => x.trim()).filter((x) => x && !/Bills covered|How do you want|Table of/.test(x))), ['The plan', 'The original agreement', "Payments you've already made", 'Was the plan restructured?', 'Reason']);
+  assert.ok(await addDialog.locator('#ip-matchExisting').isChecked(), 'matching existing payments starts on');
+  assert.ok(await addDialog.locator('#ip-restructured-no').isChecked(), 'restructured starts on No');
+  assert.equal(await addDialog.locator('.inst-rows, .tl').count() > 0, true, 'the shared schedule fields, including the list and timeline, are here');
+  await a11y('add a plan already in progress dialog');
+  await page.fill('#ip-name', 'Imaging plan in progress');
+  await page.check(`#ip-bill_${progBills[0]}`);
+  await page.check(`#ip-bill_${progBills[1]}`);
+  await page.fill('#ip-startedOn', progStart);
+  await page.check('#ip-mode-per');
+  await page.fill('#ip-amount', '60.00');
+  await page.fill('#ip-count', '12');
+  await page.fill('#ip-first', progStart);
+  await page.check('#ip-restructured-yes');
+  await page.fill('#ip-restartOn', progDue(3));
+  await page.fill('#ip-restartAmount', '45.00');
+  await page.fill('#ip-reason', 'Provider restructured the plan');
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=progress/);
+  cleanPreviewUrl('progress');
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('dialog.form-modal[open]').count(), 1, 'the new dialog reopens, not Create plan');
+  const progPreview = addDialog.locator('.preview');
+  assert.equal(await progPreview.locator('table[aria-label="Original schedule"] tbody tr').count(), 12);
+  assert.equal(await progPreview.locator('table[aria-label="Original schedule"] tbody tr', { hasText: 'paid by your payments' }).count(), 3, 'the payments fill and fully pay the first three');
+  const afterRows = progPreview.locator('table[aria-label="Schedule after the restructure"] tbody tr');
+  assert.equal(await afterRows.count(), 15, '3 kept and 12 new installments');
+  assert.equal(await afterRows.filter({ hasText: 'kept, paid' }).count(), 3);
+  assert.equal(await afterRows.filter({ hasText: 'new' }).count(), 12);
+  assert.match(await afterRows.nth(0).innerText(), /\$60\.00/);
+  assert.match(await afterRows.nth(3).innerText(), /\$45\.00/);
+  const progText = await progPreview.innerText();
+  assert.match(progText, /\$180\.00 of your payments would be matched/);
+  assert.match(progText, /Still to schedule: \$540\.00/);
+  assert.match(progText, /Final plan total: \$720\.00/);
+  assert.equal(await page.inputValue('#ip-name'), 'Imaging plan in progress', 'the typed values come back');
+  assert.ok(await page.locator(`#ip-bill_${progBills[0]}`).isChecked() && await page.locator('#ip-restructured-yes').isChecked());
+  await a11y('add a plan already in progress with its preview');
+  await page.goto(`${origin}/plans`);
+  assert.equal(await page.locator('main table.stack').last().locator('tbody tr').count(), progressPlansBefore, 'the preview saved nothing');
+  // A refused save (a restart date before the last paid installment) reopens the same dialog with the values and the error.
+  await openAdd('Add a plan already in progress');
+  await page.fill('#ip-name', 'Imaging plan in progress');
+  await page.check(`#ip-bill_${progBills[0]}`);
+  await page.check(`#ip-bill_${progBills[1]}`);
+  await page.fill('#ip-startedOn', progStart);
+  await page.check('#ip-mode-per');
+  await page.fill('#ip-amount', '60.00');
+  await page.fill('#ip-count', '12');
+  await page.fill('#ip-first', progStart);
+  await page.check('#ip-restructured-yes');
+  await page.fill('#ip-restartOn', progDue(1));
+  await page.fill('#ip-restartAmount', '45.00');
+  await page.fill('#ip-reason', 'Provider restructured the plan');
+  await addDialog.locator('button:has-text("Save plan")').click();
+  await page.waitForURL(/\/plans\?error=conflict/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('dialog.form-modal[open]').count(), 1);
+  assert.equal(await page.inputValue('#ip-restartOn'), progDue(1), 'the typed restart date is kept');
+  assert.equal(await page.inputValue('#ip-name'), 'Imaging plan in progress');
+  assert.ok(await page.locator('#ip-restructured-yes').isChecked());
+  assert.equal(await page.inputValue('#name'), '', 'the Create plan form is untouched');
+  assert.ok((await addDialog.locator('.error, [role=alert]').count()) > 0, 'the error shows inside the dialog');
+  await a11y('add a plan already in progress with an error');
+  // The phone: the dialog with its preview fits 390px without page overflow.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.fill('#ip-restartOn', progDue(3));
+  await addDialog.locator('button:has-text("Preview")').click();
+  await page.waitForURL(/preview=progress/);
+  await addDialog.waitFor({ state: 'visible' });
+  assert.ok((await addDialog.locator('.preview tbody tr').count()) > 0, 'the preview shows at phone width');
+  await a11y('add a plan already in progress with a preview at phone width');
+  const progFit = await page.evaluate(() => { const d = document.querySelector('dialog[open]'); return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, dialog: d.scrollWidth, dialogClient: d.clientWidth, right: d.getBoundingClientRect().right }; });
+  assert.ok(progFit.scrollWidth <= progFit.width && progFit.dialog <= progFit.dialogClient && progFit.right <= progFit.width, `the dialog fits a phone: ${JSON.stringify(progFit)}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // Save: one step, one transaction.
+  await addDialog.locator('button:has-text("Save plan")').click();
+  await page.waitForURL(/\/plans\/[0-9a-f-]{36}$/);
+  const progPlanText = await text();
+  assert.match(progPlanText, /Plan total\s*\n?\s*\$720\.00/);
+  assert.match(progPlanText, /Matched to payments\s*\n?\s*\$180\.00/);
+  assert.match(progPlanText, /Still to match\s*\n?\s*\$540\.00/);
+  const versions = page.locator('div.card:has(h2:has-text("Schedule versions")) tbody tr');
+  assert.equal(await versions.count(), 2, 'revision 2 exists beside the original agreement');
+  assert.match(await versions.nth(0).innerText(), /1\s.*\$720\.00\s+12\s·\sMonthly\s+\$180\.00\s+Initial schedule/);
+  assert.match(await versions.nth(1).innerText(), /2 \(current\).*\$720\.00\s+15\s·\sCustom\s+\$180\.00\s+Provider restructured the plan/);
+  const current = page.locator('div.card:has(h2:has-text("Current schedule")) tbody tr');
+  assert.equal(await current.count(), 15);
+  for (let i = 0; i < 3; i++) assert.match(await current.nth(i).innerText(), new RegExp(`${progDue(i)}\\s+\\$60\\.00\\s+\\$60\\.00\\s+\\$0\\.00\\s+Paid`), `kept installment ${i + 1} is matched and paid`);
+  for (let i = 3; i < 15; i++) assert.match(await current.nth(i).innerText(), new RegExp(`${monthStart(10 - i)}\\s+\\$45\\.00\\s+\\$0\\.00\\s+\\$45\\.00`), `new installment ${i + 1} is $45.00`);
+  assert.equal(await page.locator('div.card:has(h2:has-text("Match history")) tbody tr', { hasText: 'carried forward' }).count(), 3, 'the three kept matches are carried onto revision 2');
+  await a11y('plan saved in one step from the in-progress form');
+  await page.goto(`${origin}/plans`);
+  assert.equal(await page.locator('main table.stack').last().locator('tbody tr').count(), progressPlansBefore + 1, 'exactly one plan was saved');
+  ok('a plan already in progress is added in one step: the dialog passes axe, previews the original schedule with the payments that fill it, the three kept and twelve new installments, the $540.00 still to schedule and the $720.00 final total without saving; a refused save reopens it with the values; the saved plan has revision 2, three kept matched installments and twelve at $45.00; it fits a phone');
 
   await page.goto(`${origin}/`);
 } finally {

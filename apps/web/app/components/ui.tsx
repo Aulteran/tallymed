@@ -90,10 +90,14 @@ export const label = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.
 export const Truncated = ({ what }: { what: string }) => <p className="muted" role="note">Only the first 100 {what} are listed. Use the search below to narrow the list. The current choice is always kept.</p>;
 
 /** A GET search that narrows select lists without touching the saved record. Values are plain text and bounded. */
-export function NarrowForm({ fields, values, inDialog }: { fields: Array<{ name: string; label: string }>; values: Record<string, string>; /** Inside the add dialog: no card, and the result reopens the dialog. */ inDialog?: boolean }) {
+export function NarrowForm({ fields, values, inDialog, marker = '1', idPrefix = 'n' }: {
+  fields: Array<{ name: string; label: string }>; values: Record<string, string>; /** Inside the add dialog: no card, and the result reopens the dialog. */ inDialog?: boolean;
+  /** The `add` value that reopens the dialog, and the prefix of the input ids (a page with two dialogs gives each its own). */
+  marker?: string; idPrefix?: string;
+}) {
   return <form method="get" className={inDialog ? 'row' : 'card row'} role="search" aria-label="Narrow the lists">
-    {inDialog && <input type="hidden" name="add" value="1" />}
-    {fields.map((f) => <div key={f.name}><label htmlFor={`n-${f.name}`}>{f.label}</label><input id={`n-${f.name}`} name={f.name} maxLength={80} defaultValue={values[f.name]} /></div>)}
+    {inDialog && <input type="hidden" name="add" value={marker} />}
+    {fields.map((f) => <div key={f.name}><label htmlFor={`${idPrefix}-${f.name}`}>{f.label}</label><input id={`${idPrefix}-${f.name}`} name={f.name} maxLength={80} defaultValue={values[f.name]} /></div>)}
     <div><button type="submit" className="secondary">Search</button></div>
   </form>;
 }

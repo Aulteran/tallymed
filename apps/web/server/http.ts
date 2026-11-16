@@ -8,7 +8,7 @@ import { contentDisposition } from './document-files.ts';
 import { AppError } from './errors.ts';
 import { flashCookieName, flashSetCookie } from './flash.ts';
 import { withCheckedRows, withFormRows } from './form-rows.ts';
-import { BILL_KEYS, LIST_FIELDS, PREVIEW_KEEP, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
+import { BILL_KEYS, LIST_FIELDS, PREVIEW_KEEP, PROGRESS_FIELDS, previewKind, previewPage, SCHEDULE_FIELDS, withBillSlots } from './plan-preview-form.ts';
 import { withInstallmentList, withInstRowsFlash } from './plan-installments.ts';
 import { authorize } from './authz.ts';
 import { log, logError } from './log.ts';
@@ -714,6 +714,12 @@ const MONEY_ACTIONS: Record<string, {
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   // `prepare: withInstallmentList` reads the form's "List each installment" table or pasted text (docs/contracts.md, "Plans").
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: withInstallmentList, ok: (_b, id) => `/plans/${id}` },
+  // One guided form for a plan that started earlier: original agreement, payments already made, optional restructure, one save. `dialog=progress`
+  // reopens this dialog (not "Create plan") after an error; it is not part of the service input.
+  'plans/create-in-progress': {
+    service: plans.createPlanInProgress, error: () => '/plans', keep: ['name', 'startedOn', 'matchExisting', 'reason', 'dialog', ...PROGRESS_FIELDS, ...BILL_KEYS, ...SCHEDULE_FIELDS, ...LIST_FIELDS],
+    prepare: (b) => withInstallmentList(withoutFormMarker(b)), ok: (_b, id) => `/plans/${id}`,
+  },
   // `dialog` marks a post from the "Plan was restructured" dialog so an error reopens that dialog; it is not part of the service input.
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', 'dialog', ...SCHEDULE_FIELDS, ...LIST_FIELDS], prepare: (b) => withInstallmentList(withoutFormMarker(b)), ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
@@ -752,7 +758,7 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   async run({ ctx, actor, body, requestId, req }) {
     const result = await a.service(ctx.pool, actor!, a.prepare ? a.prepare(body) : body, requestId);
     if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
-    return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
+    return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'plans/create-in-progress' || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
 

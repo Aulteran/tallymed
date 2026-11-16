@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  addCadence, addDays, addMonths, amountText, centsOf, chipOrder, formatCents, mergeWithNext, monthLabel, moveByDays, moveByMonths, moveToMonth, restartFrom, setDay, splitRow, timelineMonths, totalCents,
+  addCadence, addDays, addMonths, amountText, centsOf, chipOrder, completeDay, daysInMonth, formatCents, inRange, shiftDays, mergeWithNext, monthLabel, moveByDays, moveByMonths, moveToMonth, restartFrom, setDay, splitRow, timelineMonths, totalCents, typedDay,
 } from '../../apps/web/app/components/installment-timeline.ts';
 
 const r = (dueDate, amount) => ({ dueDate, amount });
@@ -134,4 +134,63 @@ test('the months shown run from the first chip to two months past the last, in o
   assert.equal(timelineMonths([], '2026-05').months[0], '2026-05');
   assert.deepEqual(chipOrder([r('2026-05-02', '1.00'), r('', ''), r('2026-05-02', '2.00'), r('2026-01-01', '3.00')]), [3, 0, 2]);
   assert.equal(monthLabel('2026-05'), 'May 2026');
+});
+
+test('dates stay inside the years the server accepts: a move past 1900 or 2100 is refused, not clamped', () => {
+  assert.equal(inRange('1900-01-01'), true);
+  assert.equal(inRange('2100-01-01'), true);
+  assert.equal(inRange('2100-01-02'), false);
+  assert.equal(inRange('1899-12-31'), false);
+  assert.equal(addMonths('2100-01-01', 1), null);
+  assert.equal(addMonths('2099-12-31', 1), null, 'January 2100 from the 31st would be the 31st, past the 1st');
+  assert.equal(addMonths('2099-12-15', 1), null);
+  assert.equal(addMonths('2099-11-15', 1), '2099-12-15');
+  assert.equal(addMonths('1900-01-15', -1), null);
+  assert.equal(addDays('2100-01-01', 1), null);
+  assert.equal(addDays('2100-01-01', -1), '2099-12-31');
+  assert.equal(addDays('1900-01-01', -1), null);
+  assert.equal(addCadence('2099-12-20', 'monthly'), null);
+  assert.equal(addCadence('2099-12-30', 'weekly'), null);
+  const rows = [r('2099-10-15', '10.00'), r('2099-12-15', '10.00')];
+  assert.equal(moveByMonths(rows, 1, 1), null);
+  assert.equal(moveByDays([r('1900-01-01', '1.00')], 0, -1), null);
+  assert.equal(moveToMonth(rows, 0, '2101-01'), null);
+  assert.equal(moveToMonth(rows, 0, '1800-01'), null);
+  assert.equal(moveToMonth(rows, 0, '2099-11').rows[0].dueDate, '2099-11-15');
+  assert.equal(restartFrom(rows, 0, '2100-01'), null, 'one chip would leave the range, so the whole restart is refused');
+});
+
+test('addDays and daysInMonth are right for years below 100', () => {
+  assert.equal(daysInMonth(50, 2), 28);
+  assert.equal(daysInMonth(4, 2), 29, 'year 4 is a leap year');
+  assert.equal(daysInMonth(100, 2), 28, 'year 100 is not');
+  assert.equal(daysInMonth(400, 2), 29);
+  // A step in the first century is not read as 19xx (`Date.UTC` does that for years 0 to 99).
+  assert.equal(shiftDays('0050-03-01', -1), '0050-02-28');
+  assert.equal(shiftDays('0004-03-01', -1), '0004-02-29');
+  assert.equal(shiftDays('0099-12-31', 1), '0100-01-01');
+  assert.equal(shiftDays('0050-02-30', 1), null);
+  assert.equal(addDays('0050-03-01', -1), null, 'and the range check still refuses it');
+});
+
+test('the day field only changes the date once the typed day is whole', () => {
+  for (const t of ['', ' ', '1', '2', '3', '0', '00', '32', '99', 'x', '1.5', '-5', '123']) assert.equal(completeDay(t), null, `"${t}" is not settled yet`);
+  assert.equal(completeDay('4'), 4);
+  assert.equal(completeDay('9'), 9);
+  assert.equal(completeDay('10'), 10);
+  assert.equal(completeDay('15'), 15);
+  assert.equal(completeDay('31'), 31);
+  assert.equal(completeDay('04'), null, 'a leading zero is not settled by the keystroke; blur reads it');
+  assert.equal(typedDay('04'), 4);
+  assert.equal(typedDay('1'), 1);
+  assert.equal(typedDay('31'), 31);
+  assert.equal(typedDay(''), null);
+  assert.equal(typedDay('0'), null);
+  assert.equal(typedDay('32'), null);
+  assert.equal(typedDay('1.5'), null);
+  // The date keeps its day until a whole value arrives: nothing in the pure functions rewrites it for "1".
+  const rows = [r('2026-02-28', '5.00')];
+  assert.equal(setDay(rows, 0, 32), null);
+  assert.equal(setDay(rows, 0, 15).rows[0].dueDate, '2026-02-15');
+  assert.equal(setDay(rows, 0, 31).rows[0].dueDate, '2026-02-28', 'clamped to the month end');
 });
