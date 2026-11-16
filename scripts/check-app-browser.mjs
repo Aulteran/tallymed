@@ -840,14 +840,18 @@ try {
   assert.equal(await page.inputValue('select[aria-label="Role for Sam Example"]'), 'operator');
 
   // Delete a payment (administrators only) and undo it. A fresh fabricated payment keeps the earlier flows' payment intact.
-  await page.goto(`${origin}/payments?add=1`);
+  await page.goto(`${origin}/payments?billId=${billId}`);
   await addDialog.waitFor({ state: 'visible' });
   await page.fill('#paidOn', '2026-03-09');
   await page.fill('#amount', '12.34');
   await page.fill('#reference', 'UNDO-TEST-1');
+  await page.fill('#allocateAmount', '1.00'); // applied to the bill, so the HSA page lists its allocation
   await page.click('form[action="/api/expenses/payments/create"] button[type=submit]');
   await page.waitForURL(/\/payments\/[0-9a-f-]{36}$/);
   const undoPaymentUrl = page.url();
+  const hsaRows = async () => { await page.goto(`${origin}/hsa`); return page.locator('a[href^="/hsa/allocations/"]', { hasText: 'paid 2026-03-09' }).count(); };
+  assert.equal(await hsaRows(), 1, 'the HSA page lists the payment applied to the bill');
+  await page.goto(undoPaymentUrl);
   assert.equal(await page.locator('[role=status]').count(), 0, 'no undo banner while nothing can be undone');
   // An operator sees neither the delete button nor an undo banner.
   await sam.goto(undoPaymentUrl);
@@ -893,11 +897,14 @@ try {
   await page.goto(`${origin}/payments`);
   assert.doesNotMatch(await text(), /UNDO-TEST-1/);
   assert.equal((await page.goto(undoPaymentUrl)).status(), 404, 'a removed payment is not found');
+  assert.equal(await hsaRows(), 0, 'the HSA page does not list the removed payment');
+  assert.doesNotMatch(await text(), /UNDO-TEST-1/);
   await page.goto(`${origin}/payments`);
   await page.click('[role=status] button:has-text("Undo")');
   await page.waitForURL(undoPaymentUrl);
   assert.match(await text(), /Payment of \$12\.34 on 2026-03-09/);
   assert.equal(await page.locator('[role=status]').count(), 0, 'the banner is gone once the slot is used');
+  assert.equal(await hsaRows(), 1, 'the HSA page lists the restored payment exactly once, with no zero-dollar duplicate');
   ok('administrator deletes a payment, sees the undo banner, undoes it and the payment is back; operators see neither; delete dialogs pass axe at phone width');
 
   // User menu: settings dialog, theme choice, and sign out only after confirming.

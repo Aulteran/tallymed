@@ -60,8 +60,23 @@ export async function closedPayments(db: Queryable, householdId: string, payment
   return rows.map((r) => r.id);
 }
 
+/**
+ * Which allocation rows the HSA side lists, counts, totals and exports (alias `s` = hsa_allocation_status). One predicate, so they always agree:
+ * a removed payment has no HSA presence, and a fully reversed allocation with no HSA history (no decision, no entry) carries no HSA meaning
+ * (after a removal and undo the restored cash is a new allocation, so the original would only duplicate it). A zero-net allocation that has
+ * a decision, a claim or a receipt stays visible (history and needs-review cases).
+ */
+export const HSA_VISIBLE_ALLOCATION = `(not payment_is_removed(s.payment_id)
+    and (s.net_cents <> 0 or s.decision_count > 0 or exists (select 1 from hsa_entries he where he.allocation_id = s.allocation_id)))`;
+
+/** True when the payment is removed (its allocations have no HSA presence, so the allocation screen answers not found). */
+export async function paymentRemoved(db: Queryable, householdId: string, paymentId: string): Promise<boolean> {
+  const { rows } = await db.query<{ removed: boolean }>(`select payment_is_removed(id) as removed from payments where household_id = $1 and id = $2`, [householdId, paymentId]);
+  return rows[0]?.removed ?? false;
+}
+
 function scopeWhere(f: HsaScope & { state?: string }, params: unknown[]): string[] {
-  const where = ['s.household_id = $1'];
+  const where = ['s.household_id = $1', HSA_VISIBLE_ALLOCATION];
   if (f.memberId) where.push(`b.member_id = $${params.push(f.memberId)}`);
   if (f.providerId) where.push(`b.provider_id = $${params.push(f.providerId)}`);
   if (f.from) where.push(`s.paid_on >= $${params.push(f.from)}`);
