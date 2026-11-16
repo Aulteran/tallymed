@@ -17,6 +17,8 @@ export const THROTTLE_WINDOW_SECONDS = 15 * 60;
 export const MAX_ACCOUNT_FAILURES = 5;
 export const MAX_IP_FAILURES = 20;
 const TOUCH_INTERVAL_MS = 60_000;
+/** Extra quiet time the server allows beyond the browser's idle timer before it locks a session on its own. */
+export const LOCK_SERVER_SLACK_SECONDS = 60;
 
 export interface LoginResult {
   token: string; expiresAt: Date; actor: Pick<Actor, 'userId' | 'householdId' | 'role'>;
@@ -180,7 +182,9 @@ export async function authenticate(pool: Pool, config: AppConfig, token: string 
   if (!session) return null;
   const quietMs = Date.now() - session.lastSeenAt.getTime();
   const lockable = session.hasPin && !session.mustChangePassword;
-  const idleLocked = lockable && !session.lockedAt && quietMs > config.lockIdleSeconds * 1000;
+  // The browser's timer fires at `lockIdleSeconds` after the last activity; activity reaches the server at most every 30 s (heartbeat), so the
+  // server rule waits a minute longer and can never lock someone the browser still counts as active. It is the backstop for a closed browser.
+  const idleLocked = lockable && !session.lockedAt && quietMs > (config.lockIdleSeconds + LOCK_SERVER_SLACK_SECONDS) * 1000;
   if (idleLocked && (await markSessionLocked(pool, session.sessionId))) {
     await recordAudit(pool, {
       householdId: session.householdId, actorUserId: session.userId, action: 'auth.session_locked', entityType: 'session',

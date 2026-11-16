@@ -941,6 +941,10 @@ try {
     assert.equal(await page.locator('table').count(), 0);
   }
   assert.equal((await page.request.get(`${origin}/api/hsa/export`)).status(), 423);
+  // The Back button must not bring the pages visited before the lock back on screen.
+  await page.goBack();
+  assert.equal(new URL(page.url()).pathname, '/locked', 'going back from the PIN screen lands on the PIN screen again');
+  assert.equal(await page.locator('table, header.shell').count(), 0, 'no record or navigation is visible after Back');
   await page.fill('#pin', pin);
   await page.click('button[type=submit]');
   await page.waitForURL(`${origin}/`);
@@ -986,6 +990,41 @@ try {
   await idle.waitForURL(`${origin}/`);
   await idleContext.close();
   ok('the browser locks the screen after the idle time without signing out, and the PIN opens it again');
+
+  // An account created without a PIN (the API allows it; the form asks for one) is prompted, never locked, and sets its first PIN from the user menu.
+  await page.goto(`${origin}/users`);
+  await openAdd('Invite user');
+  await page.fill('form[action="/api/operators/invite"] #email', 'noel@example.test');
+  await page.click('form[action="/api/operators/invite"] button[type=submit]');
+  const noelLink = (await page.locator('code').innerText()).trim();
+  const noelContext = await browser.newContext({ colorScheme });
+  const noel = await noelContext.newPage();
+  await noel.goto(noelLink);
+  await noel.fill('#displayName', 'Noel Example');
+  await noel.fill('#password', samPassword);
+  await noel.evaluate(() => { for (const id of ['pin', 'confirmPin']) document.getElementById(id).removeAttribute('required'); });
+  await noel.click('button[type=submit]');
+  await noel.waitForURL(/\/login\?notice=account_created/);
+  await noel.fill('#email', 'noel@example.test');
+  await noel.fill('#password', samPassword);
+  await noel.click('button[type=submit]');
+  await noel.waitForURL(`${origin}/`);
+  assert.match(await noel.locator('.account-pin-note').innerText(), /Set a PIN/);
+  assert.equal(await noel.locator('button, a', { hasText: 'Lock now' }).count(), 0, 'no Lock now without a PIN');
+  await noel.click('.account-pin-note a');
+  await noel.waitForURL(`${origin}/account/pin`);
+  assert.equal(await noel.locator('#currentPin').count(), 0, 'the first PIN needs no current PIN');
+  await noel.evaluate(() => {});
+  const noelAxe = await new AxeBuilder({ page: noel }).analyze();
+  assert.deepEqual(noelAxe.violations.map((v) => v.id), [], 'accessibility on set a PIN');
+  await noel.fill('#newPin', '246813');
+  await noel.fill('#confirmPin', '246813');
+  await noel.click('main form button[type=submit]');
+  await noel.waitForURL(`${origin}/?notice=pin_set`);
+  assert.equal(await noel.locator('.account-pin-note').count(), 0, 'the prompt is gone once a PIN exists');
+  await noelContext.close();
+  ok('an account without a PIN is prompted in the sidebar, has no Lock now, and sets its first PIN without a current one');
+  await page.goto(`${origin}/`);
 
   // User menu: settings dialog, theme choice, and sign out only after confirming.
   await page.click('button[aria-label="User settings"]');

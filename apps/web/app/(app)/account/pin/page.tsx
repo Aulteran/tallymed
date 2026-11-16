@@ -20,15 +20,15 @@ export default async function SecurityPinPage({ searchParams }: { searchParams: 
       <input type="hidden" name="csrf" value={csrf} />
       {has && <>
         <label htmlFor="currentPin">Current PIN</label>
-        <input id="currentPin" name="currentPin" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" className="pin-input" />
+        <input id="currentPin" name="currentPin" type="password" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" className="pin-input" />
         <p className="muted">Forgot it? Leave this empty and enter your account password instead.</p>
         <label htmlFor="currentPassword">Account password (only if you forgot the PIN)</label>
         <input id="currentPassword" name="currentPassword" type="password" maxLength={128} autoComplete="current-password" />
       </>}
       <label htmlFor="newPin">New PIN (six digits)</label>
-      <input id="newPin" name="newPin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="off" className="pin-input" />
+      <input id="newPin" name="newPin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" className="pin-input" />
       <label htmlFor="confirmPin">Confirm new PIN</label>
-      <input id="confirmPin" name="confirmPin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="off" className="pin-input" />
+      <input id="confirmPin" name="confirmPin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" className="pin-input" />
       <button type="submit">{has ? 'Change PIN' : 'Set PIN'}</button>
     </form>
   </main>;

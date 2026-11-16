@@ -407,4 +407,5 @@ dialog.confirm-modal { width: min(34rem, calc(100vw - 2rem)); }
 .lock-cover { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--bg); color: var(--fg); }
 .lock-cover p { font-size: var(--text-lg, 1.125rem); }
 .pin-input { letter-spacing: 0.35em; max-width: 12rem; font-variant-numeric: tabular-nums; }
-.account-pin-note { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: var(--fg-muted); }
+.account-pin-note { margin: var(--space-2) var(--space-3) 0; font-size: var(--text-sm); color: var(--shell-muted); }
+.account-pin-note a { color: var(--shell-fg); text-decoration: underline; }

@@ -38,7 +38,8 @@ export async function lockSession(pool: Pool, actor: Actor, input: unknown, requ
 /** Revokes a session after too many wrong PINs; the audit row is the only trace, and holds no PIN. */
 async function endSession(pool: Pool, actor: Actor, requestId: string, context: 'unlock' | 'change'): Promise<void> {
   await withTransaction(pool, async (tx) => {
-    await revokeSession(tx, actor.sessionId, 'pin_attempts_exceeded');
+    // One audit row per revoked session, however many over-limit requests arrive in a burst.
+    if (!(await revokeSession(tx, actor.sessionId, 'pin_attempts_exceeded'))) return;
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'auth.pin_lockout', entityType: 'session', entityId: actor.sessionId,
       requestId, detail: { context },
@@ -107,7 +108,7 @@ export async function changePin(
   const first = current?.pinHash == null;
   let passwordKey: Buffer | null = null;
   if (!first) {
-    if (data.currentPin !== undefined && data.currentPassword !== undefined) throw new AppError('invalid_input', 'Give the current PIN or the password, not both');
+    // A password manager may fill the password field beside a typed PIN: the PIN wins, and it is counted like any PIN attempt.
     if (data.currentPin !== undefined) {
       if (!/^\d{6}$/.test(data.currentPin)) throw new AppError('invalid_input', 'The current PIN is six digits');
       const result = await tryPin(pool, actor, current!.pinHash, data.currentPin, requestId, 'change');

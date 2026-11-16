@@ -33,7 +33,7 @@ export default async function LockedPage({ searchParams }: { searchParams: Promi
       <input type="hidden" name="next" value={next} />
       <label htmlFor="pin">PIN</label>
       <input id="pin" name="pin" type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} required
-        autoComplete="off" autoFocus className="pin-input" />
+        autoComplete="one-time-code" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" autoFocus className="pin-input" />
       <button type="submit">Unlock</button>
     </form>
     <form method="post" action="/api/auth/logout" className="auth-secondary">

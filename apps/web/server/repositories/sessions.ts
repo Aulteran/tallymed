@@ -65,8 +65,10 @@ export async function touchSession(db: Queryable, id: string): Promise<void> {
   await db.query('update sessions set last_seen_at = now() where id = $1', [id]);
 }
 
-export async function revokeSession(db: Queryable, id: string, reason: string): Promise<void> {
-  await db.query(`update sessions set revoked_at = now(), revoked_reason = $2 where id = $1 and revoked_at is null`, [id, reason]);
+/** Returns true only for the call that revoked the session, so callers can audit once. */
+export async function revokeSession(db: Queryable, id: string, reason: string): Promise<boolean> {
+  const r = await db.query(`update sessions set revoked_at = now(), revoked_reason = $2 where id = $1 and revoked_at is null`, [id, reason]);
+  return r.rowCount === 1;
 }
 
 export async function revokeUserSessions(db: Queryable, userId: string, reason: string): Promise<number> {

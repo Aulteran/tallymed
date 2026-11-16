@@ -390,7 +390,7 @@ export async function finishOidc(
       if (!user || user.status !== 'active') return { ok: false, code: 'sso_no_account', reason: 'account_disabled', user: user ?? undefined };
       await touchIdentity(tx, identityId);
       if (input.previousToken) {
-        const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds);
+        const prev = await findActiveSession(tx, digest(input.previousToken), config.sessionIdleSeconds, config.rememberSessionIdleSeconds);
         if (prev) await revokeSession(tx, prev.sessionId, 'rotated_at_login');
       }
       const sessionId = await insertSession(tx, { userId: user.id, householdId: user.householdId, tokenHash: digest(token), expiresAt });

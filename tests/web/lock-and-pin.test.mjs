@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as handlers from '../../apps/web/server/http.ts';
-import { authenticate } from '../../apps/web/server/services/auth.ts';
+import { authenticate, LOCK_SERVER_SLACK_SECONDS } from '../../apps/web/server/services/auth.ts';
 import { digest } from '../../apps/web/server/tokens.ts';
 import { safeReturnPath } from '../../apps/web/server/validation.ts';
 import { hashPassword, hashPin, verifyPin } from '../../apps/web/server/passwords.ts';
@@ -203,7 +203,10 @@ test('idle lock is decided on the server, persists, and a locked session is not 
     await t.setPin(me);
     await t.age(me, t.config.lockIdleSeconds - 60);
     assert.equal((await authenticate(t.db.pool, t.config, me.token)).locked, false);
-    await t.age(me, t.config.lockIdleSeconds + 30);
+    // The server waits a minute beyond the browser's timer, so it never locks someone the browser still counts as active.
+    await t.age(me, t.config.lockIdleSeconds + LOCK_SERVER_SLACK_SECONDS - 20);
+    assert.equal((await authenticate(t.db.pool, t.config, me.token)).locked, false);
+    await t.age(me, t.config.lockIdleSeconds + LOCK_SERVER_SLACK_SECONDS + 30);
     const before = (await t.sessionRow(me)).last_seen_at;
     const locked = await authenticate(t.db.pool, t.config, me.token);
     assert.equal(locked.locked, true);
@@ -279,6 +282,7 @@ test('a concurrent burst of guesses cannot try more PINs than the limit', { skip
     const codes = await Promise.all(results.map(code));
     assert.ok(codes.filter((c) => c === 'invalid_pin').length < 5, 'at most four guesses are ever checked and answered as wrong');
     assert.equal((await t.sessionRow(me)).revoked_reason, 'pin_attempts_exceeded');
+    assert.equal((await t.db.pool.query(`select 1 from audit_events where action = 'auth.pin_lockout'`)).rowCount, 1, 'one audit row however large the burst');
     // The count only ever goes up on this session: the right PIN, tried after the burst, is refused.
     assert.equal((await t.unlock(me, PIN)).status, 401);
   } finally { await t.db.drop(); }
@@ -322,8 +326,9 @@ test('setting and changing the PIN: first needs no proof, a change needs the PIN
     assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: '000000', newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 401);
     assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPassword: 'not the password at all', newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 403);
     assert.equal((await t.db.pool.query('select pin_hash from users')).rows[0].pin_hash, hash);
-    assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: PIN, currentPassword: PASSWORD, newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 400, 'both proofs at once is refused');
-    assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: PIN, newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 200);
+    // A password manager may fill the password beside a typed PIN: the PIN decides.
+    assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: '000000', currentPassword: PASSWORD, newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 401);
+    assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: PIN, currentPassword: 'a stray autofilled value', newPin: NEW_PIN, confirmPin: NEW_PIN }, me)).status, 200);
     assert.equal((await t.sessionRow(me)).pin_failures, 0);
     // A forgotten PIN is replaced with the account password.
     assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPassword: PASSWORD, newPin: PIN, confirmPin: PIN }, me)).status, 200);

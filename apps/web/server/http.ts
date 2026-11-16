@@ -28,6 +28,7 @@ import * as signin from './services/signin.ts';
 import { restoreFromSetup, startBackup } from './services/backup.ts';
 import { refreshRuntimeConfig } from './settings.ts';
 import { clearUndoSlot } from './repositories/undo.ts';
+import { touchSession } from './repositories/sessions.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, safeReturnPath, schemas } from './validation.ts';
 import { changePin, lockSession, unlockSession } from './services/pin.ts';
@@ -432,8 +433,10 @@ export const handleHeartbeat = route({
   keepsUndo: true,
   session: true,
   errorPath: () => '/',
-  async run({ body }) {
+  async run({ ctx, actor, body }) {
     parse(schemas.heartbeat, body);
+    // Always counts as activity (the pipeline only touches a session quiet for a minute), so the server's idle rule never trails the browser's.
+    await touchSession(ctx.pool, actor!.sessionId);
     return { json: { ok: true } };
   },
 });
