@@ -2,6 +2,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
+import * as handlers from '../../apps/web/server/http.ts';
+import { csrfFor } from '../../apps/web/server/tokens.ts';
+import { undo } from '../../apps/web/server/services/undo.ts';
 import { ledgerSummary, ledgerViolations } from '../../apps/web/server/backup/ledger.ts';
 import { listHsaFigures } from '../../apps/web/server/contracts.ts';
 import * as hsaRepo from '../../apps/web/server/repositories/hsa.ts';
@@ -10,7 +13,7 @@ import * as hsa from '../../apps/web/server/services/hsa.ts';
 import * as pm from '../../apps/web/server/services/payment-methods.ts';
 import * as pay from '../../apps/web/server/services/payments.ts';
 import { setup } from './money-helpers.mjs';
-import { skipDb } from './helpers.mjs';
+import { post, skipDb } from './helpers.mjs';
 
 const code = (c) => ({ code: c });
 const ids = async (t, paymentId) => (await t.payment(paymentId)).allocations.map((a) => a.allocationId);
@@ -151,8 +154,8 @@ test('the marker is refused on a payment paid directly from an HSA, in the servi
     const marked = await t.pay1({ amount: '30.00', hsaIneligible: 'yes' });
     await assert.rejects(inTx(t, (cl) => funding(cl, t, marked.id, a.id)), /marked ineligible/);
     const fresh1 = await t.pay1({ amount: '5.00' }); const fresh2 = await t.pay1({ amount: '5.00' });
-    await assert.rejects(inTx(t, async (cl) => { await marker(cl, t, fresh1.id); await funding(cl, t, fresh1.id, a.id); }), /HSA/);
-    await assert.rejects(inTx(t, async (cl) => { await funding(cl, t, fresh2.id, a.id); await marker(cl, t, fresh2.id); }), /HSA/);
+    await assert.rejects(inTx(t, async (cl) => { await marker(cl, t, fresh1.id); await funding(cl, t, fresh1.id, a.id); }), /marked ineligible for HSA cannot be paid directly|cannot also be marked ineligible/);
+    await assert.rejects(inTx(t, async (cl) => { await funding(cl, t, fresh2.id, a.id); await marker(cl, t, fresh2.id); }), /marked ineligible for HSA cannot be paid directly|cannot also be marked ineligible/);
     // Releasing a direct funding makes the payment ordinary, so a marker fits; reinstating it afterwards is then refused.
     const ev = (cl, pid, action) => cl.query(`insert into payment_hsa_funding_events (household_id, payment_id, action, created_by) values ($1, $2, $3, $4)`, [t.actor.householdId, pid, action, t.actor.userId]);
     await inTx(t, (cl) => ev(cl, direct.id, 'release'));
@@ -166,7 +169,7 @@ test('the marker is refused on a payment paid directly from an HSA, in the servi
   } finally { await t.db.drop(); }
 });
 
-test('a payment with the marker can still be removed and restored: the marker is not a decision', { skip: skipDb }, async () => {
+test('a payment with the marker can still be removed and the removal undone: the marker is not a decision', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
     const x = await t.paid('40.00', { hsaIneligible: 'yes' });
@@ -174,5 +177,23 @@ test('a payment with the marker can still be removed and restored: the marker is
     await pay.removePayment(t.db.pool, t.actor, { idempotencyKey: t.key(), paymentId: x.id, reason: 'Fabricated duplicate entry' }, 'r');
     assert.equal((await hsa.listHsaAllocations(t.db.pool, t.actor, { limit: '100' })).items.length, 0, 'a removed payment has no HSA row');
     assert.equal(await t.count('payment_hsa_ineligible'), 1, 'the marker row stays as history');
+    // Undo re-posts the allocation as a new one; the marker belongs to the payment, so the restored allocation still has a zero ceiling.
+    await undo(t.db.pool, t.actor, { idempotencyKey: t.key() }, 'r');
+    const live = (await Promise.all((await ids(t, x.id)).map((id) => figs(t, id)))).filter((f) => f.netCents !== '0');
+    assert.equal(live.length, 1);
+    const g = live[0];
+    assert.deepEqual([g.markedIneligible, g.ceilingCents, g.availableCents], [true, '0', '0']);
+  } finally { await t.db.drop(); }
+});
+
+test('the payment form accepts the checkbox (on or yes) and a JSON boolean; an unchecked form leaves no marker', { skip: skipDb }, async () => {
+  const t = await fixture();
+  try {
+    const token = t.cookie.split('=')[1];
+    const send = (extra) => handlers.handleExpenseAction(
+      post('/api/expenses/payments/create', { idempotencyKey: t.key(), paidOn: '2026-04-01', amount: '10.00', method: 'card', csrf: csrfFor(token), ...extra }, { cookie: t.cookie, html: true }), t.ctx, 'payments/create');
+    for (const extra of [{ hsaIneligible: 'on' }, { hsaIneligible: 'yes' }, {}]) assert.ok([200, 302, 303].includes((await send(extra)).status));
+    assert.equal(await t.count('payments'), 3);
+    assert.equal(await t.count('payment_hsa_ineligible'), 2);
   } finally { await t.db.drop(); }
 });

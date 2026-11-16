@@ -159,7 +159,7 @@ test('direct HSA funding: release, reinstate, payment_is_direct_hsa, the status 
     assert.equal(await direct(t, paid.id), false);
     // After the release the payment is ordinary: its allocation shows normal figures and takes a decision (so it can be claimed).
     const alloc = (await t.payment(paid.id)).allocations[0].allocationId;
-    assert.deepEqual(await status(t, paid.id), { a: '0', d: false, c: '0' });
+    assert.deepEqual(await status(t, paid.id), { a: '5000', d: false, c: '5000' }, 'ordinary again: eligible for its whole net cash by default');
     await hsa.recordDecision(t.db.pool, t.actor, { idempotencyKey: t.key(), allocationId: alloc, version: '0', status: 'eligible', eligibleAmount: '30.00', rationale: 'Qualified', evidenceType: 'receipt', evidenceNote: 'Receipt', decidedOn: '2026-04-05' }, 'r');
     assert.deepEqual(await status(t, paid.id), { a: '3000', d: false, c: '3000' });
     // With a decision on it the payment cannot be reinstated.
