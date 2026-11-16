@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import { can } from '../../../../server/authz.ts';
 import { formatCents } from '../../../../server/money.ts';
 import { pickPaymentMethods } from '../../../../server/services/payment-methods.ts';
 import { getPaymentDetail, pickPayableBills } from '../../../../server/services/payments.ts';
+import { ConfirmDialog } from '../../../components/ConfirmDialog.tsx';
 import {
   Banner, Csrf, dateOf, flatWithFlash, label, load, methodName, Money, NarrowForm, newKey, Options, q80, requireSession, todayUtc, Truncated, type SearchParams,
 } from '../../../components/ui.tsx';
@@ -21,10 +23,29 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
   const unapplied = BigInt(pm.unappliedCents);
   const key = (name: string) => <input type="hidden" name="idempotencyKey" value={newKey()} data-for={name} />;
   const base = (<><Csrf token={csrf} /><input type="hidden" name="paymentId" value={pm.id} /></>);
+  const admin = can(actor, 'records:remove');
+  // A payment paid directly from an HSA: administrators may also pick a card with no HSA link (which releases the funding); others keep same-account HSA cards.
+  const methodChoices = methods.items.filter((m) => m.id === pm.paidWithId || (pm.hsaAccountId ? (m.hsaAccountId === pm.hsaAccountId || (admin && !m.hsaAccountId)) : !m.hsaAccountId));
   const canVoid = live && BigInt(pm.appliedCents) === 0n && BigInt(pm.refundedCents) === 0n;
   return <main id="main" className="wide">
     <p className="crumb"><Link href="/payments">← Payments</Link></p>
-    <h1>Payment of <Money cents={pm.amountCents} /> on {pm.paidOn}</h1>
+    <div className="page-head">
+      <h1>Payment of <Money cents={pm.amountCents} /> on {pm.paidOn}</h1>
+      {admin && live && <ConfirmDialog id="delete-payment" label="Delete payment" title="Delete this payment?">
+        <form method="post" action="/api/expenses/payments/remove">
+          {base}{key('remove')}
+          <p>This deletes the payment of <Money cents={pm.amountCents} /> on {pm.paidOn}{pm.reference ? ` (${pm.reference})` : ''}. It disappears from the payment lists.</p>
+          <ul>
+            <li>Cash applied to bills is returned, so those bills&apos; balances go up.</li>
+            <li>Matches to payment plan installments are released. Undo does not restore them.</li>
+            <li>You can undo this for 3 minutes, or until your next action.</li>
+          </ul>
+          <p className="muted">A payment with refunds that have not been reversed, or with HSA claims, cannot be deleted.</p>
+          <label htmlFor="remove-why">Reason</label><input id="remove-why" name="reason" required maxLength={500} defaultValue={q.reason ?? 'Removed by administrator'} />
+          <div className="modal-actions"><button type="submit" className="danger">Delete payment</button></div>
+        </form>
+      </ConfirmDialog>}
+    </div>
     <p>{label(pm.method)}{pm.paidWithName ? ` · paid with ${methodName(pm.paidWithName, pm.paidWithLastFour)}${pm.paidWithArchived ? ' (archived)' : ''}` : ''}{pm.reference ? ` · ${pm.reference}` : ''} · recorded by {pm.createdByName ?? 'unknown'} {dateOf(pm.createdAt)} {pm.voided && <span className="pill warn">Voided</span>}</p>
     {pm.hsaAccountId && <div className="card" role="note"><strong>Paid directly from {pm.hsaAccountName}.</strong> This was paid with an HSA card at the point of service, so the HSA has already paid it. There is nothing to claim and no eligibility decision. A refund below returns cash to the HSA.</div>}
     {pm.note && <p>{pm.note}</p>}
@@ -40,9 +61,10 @@ export default async function PaymentPage({ params, searchParams }: { params: Pr
     {live && <form className="card" method="post" action="/api/expenses/payments/paid-with">
       {base}{key('paid-with')}
       <h2>Paid with</h2>
-      <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. A card linked to an HSA account can be chosen only when the payment is recorded; a payment paid directly from an HSA can only change to another card of the same account. <Link href="/payment-methods">Manage payment methods</Link></p>
+      <p className="muted">Which saved card or account paid this. It changes no amount or balance, and each change is kept in the history below. A card linked to an HSA account can be chosen only when the payment is recorded; a payment paid directly from an HSA can change to another card of the same account{admin ? ', or (administrators only) to a card with no HSA link' : ''}. <Link href="/payment-methods">Manage payment methods</Link></p>
       <label htmlFor="paidWithId">Payment method</label>
-      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methods.items.filter((m) => m.id === pm.paidWithId || (pm.hsaAccountId ? m.hsaAccountId === pm.hsaAccountId : !m.hsaAccountId)).map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank={pm.hsaAccountId ? undefined : 'Not recorded'} /></select>
+      <select id="paidWithId" name="paidWithId" defaultValue={pm.paidWithId ?? ''}><Options items={methodChoices.map((m) => ({ id: m.id, name: methodName(m.nickname, m.lastFour), archived: m.archivedAt !== null }))} blank={pm.hsaAccountId ? undefined : 'Not recorded'} /></select>
+      {pm.hsaAccountId && admin && <p className="muted" role="note">Choosing a card with no HSA link makes this an ordinary payment that can be claimed from an HSA like any other. You can undo that for 3 minutes, or until your next action.</p>}
       <button type="submit" className="secondary">Save</button>
     </form>}
     <div className="card"><h2>Applied to bills</h2>

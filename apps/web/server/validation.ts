@@ -207,6 +207,10 @@ export const paymentSchemas = {
   }),
   reverseRefund: z.strictObject({ idempotencyKey, paymentId: uuid.optional(), eventId: uuid, effectiveDate: isoDate, reason: text(500).min(1), ...csrf }),
   voidPayment: z.strictObject({ idempotencyKey, paymentId: uuid, voidedOn: isoDate, reason: text(500).min(1), ...csrf }),
+  // Removing a payment hides it and returns its cash; the reason is kept on the removal event, never in the audit row.
+  removePayment: z.strictObject({ idempotencyKey, paymentId: uuid, reason: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), text(500).min(1).default('Removed by administrator')), ...csrf }),
+  // The undo slot is the actor's own and holds what to reverse, so the request carries nothing but a key.
+  undo: z.strictObject({ idempotencyKey, ...csrf }),
   // An empty paidWithId clears the choice.
   setPaidWith: z.strictObject({ idempotencyKey, paymentId: uuid, paidWithId: optional(uuid), ...csrf }),
 // An HSA account can be linked only to an HSA/FSA card.
@@ -237,6 +241,8 @@ export const paymentSchemas = {
     ...csrf,
   }),
   cancelPlan: z.strictObject({ planId: uuid, version, reason: text(500).min(1), ...csrf }),
+  // An administrator hides a plan (matches of an active plan are released first); undo brings it back for a few minutes.
+  removePlan: z.strictObject({ idempotencyKey, planId: uuid, version, reason: z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), text(500).min(1).default('Removed by administrator')), ...csrf }),
   // A plan's name is a label, so it can change at any time, including after the plan is cancelled.
   renamePlan: z.strictObject({ planId: uuid, name: text(120).min(1), ...csrf }),
   matchInstallment: z.strictObject({ idempotencyKey, planId: uuid.optional(), installmentId: uuid, allocationId: uuid, amount: positiveUsd, ...csrf }),

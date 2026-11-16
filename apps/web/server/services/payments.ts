@@ -2,6 +2,7 @@
 // in one transaction. Lock order is always: payments (ascending id), then bills (ascending id), then plans (ascending id).
 // Money is bigint cents and every amount comes from posted rows read after the locks are held.
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import { authorize, type Actor } from '../authz.ts';
 import { withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
@@ -11,10 +12,11 @@ import * as hsaAccountRepo from '../repositories/hsa-accounts.ts';
 import * as methodRepo from '../repositories/payment-methods.ts';
 import * as repo from '../repositories/payments.ts';
 import * as plans from '../repositories/plans.ts';
+import { setUndoSlot } from '../repositories/undo.ts';
 import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
 import { requireActiveAccount } from './hsa-accounts.ts';
 import { requireActiveMethod } from './payment-methods.ts';
-import { idempotent, withRetry, type Detail } from './support.ts';
+import { idempotent, todayUtc, withRetry, type Detail } from './support.ts';
 
 const sum = (xs: bigint[]) => xs.reduce((a, b) => a + b, 0n);
 const cents = (v: bigint) => v.toString();
@@ -71,7 +73,7 @@ export async function billPaymentSummary(pool: Pool, actor: Actor, billId: strin
   const ledger = await repo.listBillLedger(pool, actor.householdId, id);
   const { rows: planRows } = await pool.query<{ id: string; name: string; status: string }>(
     `select p.id, p.name, p.status from payment_plan_bills pb join payment_plans p on p.household_id = pb.household_id and p.id = pb.plan_id
-     where pb.household_id = $1 and pb.bill_id = $2 order by p.created_at desc, p.id`, [actor.householdId, id]);
+     where pb.household_id = $1 and pb.bill_id = $2 and p.removed_at is null order by p.created_at desc, p.id`, [actor.householdId, id]);
   return { ledger, plans: planRows };
 }
 
@@ -109,18 +111,21 @@ async function applyAllocations(tx: Queryable, actor: Actor, paymentId: string, 
   return ids;
 }
 
+interface ReleasedMatch { planId: string; installmentId: string; cents: bigint }
+
 /**
  * After an allocation shrinks (reversal or refund), plan matches may no longer be backed by cash. Release the excess in the
  * same transaction, latest due date first, so a match never counts cash the household no longer holds. The caller holds the
  * payment lock; the plans lock after it (payments, then bills, then plans).
  */
-async function releaseMatchesToFit(tx: Queryable, actor: Actor, allocationId: string, remaining: bigint, requestId: string): Promise<void> {
+async function releaseMatchesToFit(tx: Queryable, actor: Actor, allocationId: string, remaining: bigint, requestId: string): Promise<ReleasedMatch[]> {
   // The caller already locked every plan that matches this allocation (lockPlansForAllocations), in ascending order. No
   // match can appear since: matching needs the payment lock the caller holds.
   const matches = await plans.currentMatchesOfAllocation(tx, actor.householdId, allocationId);
   const total = sum(matches.map((m) => m.cents));
   let excess = total - remaining;
-  if (excess <= 0n) return;
+  const released: ReleasedMatch[] = [];
+  if (excess <= 0n) return released;
   for (const m of matches) {
     if (excess <= 0n) break;
     const take = m.cents < excess ? m.cents : excess;
@@ -132,8 +137,10 @@ async function releaseMatchesToFit(tx: Queryable, actor: Actor, allocationId: st
       householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.match_released', entityType: 'payment_plan', entityId: m.planId, requestId,
       detail: { planId: m.planId, installmentId: m.installmentId, paymentId: m.paymentId, allocationId, amountCents: cents(take), matchedBeforeCents: cents(m.cents), matchedAfterCents: cents(m.cents - take) },
     });
+    released.push({ planId: m.planId, installmentId: m.installmentId, cents: take });
     excess -= take;
   }
+  return released;
 }
 
 /**
@@ -146,12 +153,46 @@ async function lockPlansForAllocations(tx: Queryable, actor: Actor, allocationId
   if (planIds.length > 0) await plans.lockPlans(tx, actor.householdId, planIds);
 }
 
-async function lockedPayment(tx: Queryable, actor: Actor, paymentId: string): Promise<repo.Payment> {
+/**
+ * Locks one payment and reads it. A removed payment is refused like a voided one (a conflict, not a "not found", because the caller
+ * reached it by id); only remove and restore pass `allowRemoved`.
+ */
+async function lockedPayment(tx: Queryable, actor: Actor, paymentId: string, o: { allowRemoved?: boolean } = {}): Promise<repo.Payment> {
   const locked = await repo.lockPayments(tx, actor.householdId, [paymentId]);
   if (locked.length === 0) throw new AppError('not_found');
-  const p = await repo.getPayment(tx, actor.householdId, paymentId);
+  const p = await repo.getPayment(tx, actor.householdId, paymentId, { includeRemoved: true });
   if (!p) throw new AppError('not_found');
+  if (p.removed && !o.allowRemoved) throw new AppError('conflict', 'That payment was removed');
   return p;
+}
+
+/**
+ * Posts one allocation reversal and releases the plan matches it no longer backs, inside the caller's transaction. The caller holds the
+ * payment, bill and plan locks (in that order) and has checked the amount against the allocation's net. Shared by "unapply" and by
+ * removing a payment, so both audit and release matches the same way. Returns the matches it released.
+ */
+async function postAllocationReversal(tx: Queryable, actor: Actor, o: {
+  allocation: repo.AllocationNet; amount: bigint; effectiveDate: string; reason: string; entryId: string; eventId: string; requestId: string;
+}): Promise<ReleasedMatch[]> {
+  const { allocation: alloc, amount, requestId } = o;
+  const remaining = BigInt(alloc.netCents);
+  const payment = await repo.getPayment(tx, actor.householdId, alloc.paymentId, { includeRemoved: true });
+  const bill = await expenseRepo.getBill(tx, actor.householdId, alloc.billId);
+  await repo.insertEntry(tx, {
+    id: o.entryId, householdId: actor.householdId, userId: actor.userId, paymentId: alloc.paymentId, eventId: o.eventId, kind: 'allocation_reversal', billId: alloc.billId,
+    allocationId: alloc.allocationId, amountCents: -amount, effectiveDate: o.effectiveDate, reason: o.reason,
+  });
+  const released = await releaseMatchesToFit(tx, actor, alloc.allocationId, remaining - amount, requestId);
+  const unapplied = BigInt(payment!.unappliedCents);
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.allocation_reversed', entityType: 'payment_allocation', entityId: alloc.allocationId, requestId,
+    detail: {
+      paymentId: alloc.paymentId, billId: alloc.billId, amountCents: cents(amount), allocationBeforeCents: cents(remaining), allocationAfterCents: cents(remaining - amount),
+      billBalanceBeforeCents: bill!.openBalanceCents, billBalanceAfterCents: cents(BigInt(bill!.openBalanceCents) + amount),
+      unappliedBeforeCents: cents(unapplied), unappliedAfterCents: cents(unapplied + amount),
+    },
+  });
+  return released;
 }
 
 // ---------- payments ----------
@@ -221,29 +262,15 @@ export async function reverseAllocation(pool: Pool, actor: Actor, input: unknown
     if (replayId) return { id: replayId, replayed: true };
     const found = await repo.getAllocation(tx, actor.householdId, d.allocationId);
     if (!found) throw new AppError('not_found');
-    const payment = await lockedPayment(tx, actor, found.paymentId);
+    await lockedPayment(tx, actor, found.paymentId);
     await expenseRepo.lockBills(tx, actor.householdId, [found.billId]);
     const alloc = await repo.getAllocation(tx, actor.householdId, d.allocationId);
     if (!alloc) throw new AppError('not_found');
     const remaining = BigInt(alloc.netCents);
     const amount = d.amount ?? remaining;
     if (amount <= 0n || amount > remaining) throw new AppError('conflict', 'That is more than the allocation still holds');
-    const bill = await expenseRepo.getBill(tx, actor.householdId, alloc.billId);
     await lockPlansForAllocations(tx, actor, [alloc.allocationId]);
-    await repo.insertEntry(tx, {
-      id, householdId: actor.householdId, userId: actor.userId, paymentId: payment.id, eventId: randomUUID(), kind: 'allocation_reversal', billId: alloc.billId,
-      allocationId: alloc.allocationId, amountCents: -amount, effectiveDate: d.effectiveDate, reason: d.reason,
-    });
-    await releaseMatchesToFit(tx, actor, alloc.allocationId, remaining - amount, requestId);
-    const unapplied = BigInt(payment.unappliedCents);
-    await recordAudit(tx, {
-      householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.allocation_reversed', entityType: 'payment_allocation', entityId: alloc.allocationId, requestId,
-      detail: {
-        paymentId: payment.id, billId: alloc.billId, amountCents: cents(amount), allocationBeforeCents: cents(remaining), allocationAfterCents: cents(remaining - amount),
-        billBalanceBeforeCents: bill!.openBalanceCents, billBalanceAfterCents: cents(BigInt(bill!.openBalanceCents) + amount),
-        unappliedBeforeCents: cents(unapplied), unappliedAfterCents: cents(unapplied + amount),
-      },
-    });
+    await postAllocationReversal(tx, actor, { allocation: alloc, amount, effectiveDate: d.effectiveDate, reason: d.reason, entryId: id, eventId: randomUUID(), requestId });
     return { id, replayed: false };
   }));
 }
@@ -387,6 +414,111 @@ export async function voidPayment(pool: Pool, actor: Actor, input: unknown, requ
     });
     return { id: d.paymentId, replayed: false };
   }));
+}
+
+// ---------- removal and restore ----------
+
+const removalPayload = z.object({
+  reversed: z.array(z.object({ billId: z.uuid(), amountCents: z.string().regex(/^[0-9]+$/), effectiveDate: z.string(), originalAllocationId: z.uuid() })),
+  releasedMatches: z.array(z.object({ installmentId: z.uuid(), cents: z.string().regex(/^[0-9]+$/) })),
+});
+export type RemovalPayload = z.infer<typeof removalPayload>;
+
+/**
+ * Hides a payment from an administrator's views and gives back everything it did to money, with linked, audited entries: nothing is
+ * deleted. Refused when the payment has refunds or HSA claims (resolve those first), is voided, or is already removed. Every allocation
+ * that still holds cash is reversed in full through the same path as "unapply" (so plan matches are released), then one `remove` event
+ * is appended; the payment then holds no applied or refunded cash, which the database re-checks at commit. Lock order: payment, bills
+ * (ascending id), plans (ascending id). The inverse is stored in the actor's undo slot in the same transaction.
+ *
+ * Audit detail is flat (ids, cents, counts): each reversed allocation and each released match has its own audit event carrying the
+ * payment id and the shared event id, and the full lists are in the undo slot until it expires. The reason is kept on the removal event
+ * only, never in the audit row.
+ */
+export async function removePayment(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'records:remove');
+  const { csrf: _csrf, idempotencyKey, paymentId, reason } = parse(paymentSchemas.removePayment, input);
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, 'payment.remove', idempotencyKey, { paymentId, reason }, paymentId);
+    if (replayId) return { id: replayId, replayed: true };
+    const payment = await lockedPayment(tx, actor, paymentId, { allowRemoved: true });
+    if (payment.removed) throw new AppError('conflict', 'That payment was already removed');
+    if (payment.voided) throw new AppError('conflict', 'That payment was voided');
+    const blockers = await repo.removalBlockers(tx, actor.householdId, paymentId);
+    if (blockers.refunds) throw new AppError('conflict', 'This payment has refunds that have not been reversed, so it cannot be removed. Reverse its refunds first.');
+    if (blockers.hsa) throw new AppError('conflict', 'This payment has HSA claims, receipts or eligibility decisions and cannot be removed. Resolve its HSA claims first.');
+    // The payment lock is held, so no allocation can appear or change from here on. Bills next (ascending id), then plans.
+    const allocations = (await repo.listAllocationsOfPayment(tx, actor.householdId, paymentId)).filter((a) => BigInt(a.netCents) > 0n);
+    if (allocations.length > 0) await expenseRepo.lockBills(tx, actor.householdId, allocations.map((a) => a.billId));
+    await lockPlansForAllocations(tx, actor, allocations.map((a) => a.allocationId));
+    const dates = await repo.allocationDates(tx, actor.householdId, allocations.map((a) => a.allocationId));
+    const effectiveDate = payment.paidOn > todayUtc() ? payment.paidOn : todayUtc();
+    const eventId = randomUUID();
+    const reversed: RemovalPayload['reversed'] = [];
+    const released: ReleasedMatch[] = [];
+    for (const a of allocations) {
+      released.push(...await postAllocationReversal(tx, actor, { allocation: a, amount: BigInt(a.netCents), effectiveDate, reason: 'Removed payment', entryId: randomUUID(), eventId, requestId }));
+      reversed.push({ billId: a.billId, amountCents: a.netCents, effectiveDate: dates.get(a.allocationId) ?? a.paidOn, originalAllocationId: a.allocationId });
+    }
+    await repo.insertRemovalEvent(tx, { householdId: actor.householdId, userId: actor.userId, paymentId, action: 'remove', reason });
+    const reversedCents = sum(reversed.map((r) => BigInt(r.amountCents)));
+    const releasedCents = sum(released.map((m) => m.cents));
+    await recordAudit(tx, {
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.removed', entityType: 'payment', entityId: paymentId, requestId,
+      detail: {
+        paymentId, amountCents: payment.amountCents, eventId, reversedAllocationCount: reversed.length, reversedCents: cents(reversedCents),
+        releasedMatchCount: released.length, releasedMatchCents: cents(releasedCents),
+        unappliedBeforeCents: payment.unappliedCents, unappliedAfterCents: '0', netCashBeforeCents: payment.netCashCents, netCashAfterCents: '0',
+      },
+    });
+    await setUndoSlot(tx, actor, {
+      kind: 'payment_remove', entityId: paymentId,
+      payload: { reversed, releasedMatches: released.map((m) => ({ installmentId: m.installmentId, cents: cents(m.cents) })) } satisfies RemovalPayload,
+    });
+    return { id: paymentId, replayed: false };
+  }));
+}
+
+/**
+ * The inverse of removePayment, used only by undo and called inside its transaction (the caller authorized `records:remove`). Appends a
+ * `restore` event and re-posts each reversed allocation as a NEW allocation entry (new ids, one new event id, original effective date)
+ * through the normal bill-room checks, so it refuses cleanly when a bill no longer has room. Plan matches are NOT re-created; the audit
+ * says so. Several allocations on one bill are re-posted as the sum of what they still held, in passes with one line per bill.
+ */
+export async function restorePayment(tx: Queryable, actor: Actor, paymentId: string, rawPayload: unknown, requestId: string): Promise<void> {
+  const parsed = removalPayload.safeParse(rawPayload);
+  if (!parsed.success) throw new AppError('conflict', 'Nothing to undo');
+  const payload = parsed.data;
+  const payment = await lockedPayment(tx, actor, paymentId, { allowRemoved: true });
+  if (!payment.removed) throw new AppError('conflict', 'That payment is no longer removed');
+  const billIds = [...new Set(payload.reversed.map((r) => r.billId))];
+  if (billIds.length > 0) await expenseRepo.lockBills(tx, actor.householdId, billIds);
+  await repo.insertRemovalEvent(tx, { householdId: actor.householdId, userId: actor.userId, paymentId, action: 'restore', reason: 'Restored by undo' });
+  const byDate = new Map<string, Map<string, bigint>>();
+  for (const r of payload.reversed) {
+    const perBill = byDate.get(r.effectiveDate) ?? new Map<string, bigint>();
+    perBill.set(r.billId, (perBill.get(r.billId) ?? 0n) + BigInt(r.amountCents));
+    byDate.set(r.effectiveDate, perBill);
+  }
+  const eventId = randomUUID();
+  let restored = 0n;
+  for (const [date, perBill] of [...byDate].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const requests = [...perBill].map(([billId, amount]) => ({ billId, amount }));
+    try {
+      await applyAllocations(tx, actor, paymentId, eventId, requests, date, requestId);
+    } catch (e) {
+      if (e instanceof AppError && e.code === 'conflict' && e.message.startsWith('That amount is more than the bill')) throw new AppError('conflict', 'A bill no longer has room for this payment');
+      throw e;
+    }
+    restored += sum(requests.map((r) => r.amount));
+  }
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.restored', entityType: 'payment', entityId: paymentId, requestId,
+    detail: {
+      paymentId, amountCents: payment.amountCents, eventId, restoredAllocationCount: payload.reversed.length, restoredCents: cents(restored),
+      planMatchesRestored: false, releasedMatchCount: payload.releasedMatches.length, releasedMatchCents: cents(sum(payload.releasedMatches.map((m) => BigInt(m.cents)))),
+    },
+  });
 }
 
 export type { Detail };

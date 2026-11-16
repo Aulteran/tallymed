@@ -227,3 +227,10 @@ For each active or accepted milestone, record the GitHub issue and PR, tested an
 - Checks run locally (Node 22.23, PostgreSQL 16 disposable): typecheck, `npm test`, `npm run build`, `npm run test:export`, `npm run test:app-browser`, `npm run test:restore`. Not run: Node 24, PostgreSQL 17, Docker/Compose, `test:proxy`, the dark-theme browser pass, a real screen reader.
 - Reviewer focus: the view change leaves every ordinary row identical; both guards are race-safe; no direct payment can ever be claimed, decided or reimbursed; paid-with cannot disagree with the funding; backup of older databases; no field holds a number that could move money.
 
+
+## Admin delete, payment method change and undo handoff (owner request, 2026-11-15)
+
+- Branch: `feature/admin-delete-payments-edit-method-undo` (PR against `dev`; head SHA and review are on the PR). Migration `0017_record_removal_and_undo.sql`. Independent financial review pending.
+- Changed: migration 0017 (removal events, plan removed columns, HSA funding events, undo slot, guards, `hsa_allocation_status` funding test); `services/payments.ts` (`removePayment`, `restorePayment`), `services/plans.ts` (`removePlan`, `restorePlan`), `services/payment-methods.ts` (HSA release in `setPaidWith`), `services/undo.ts`, the supersession hook in `http.ts`, `records:remove` in `authz.ts`; backup classification and ledger rules; UI dialogs, `UndoBanner`; tests `record-removal-schema`, `payment-removal`, `plan-removal` and a browser workflow.
+- Checks run locally (Node 22.23, PostgreSQL 16 disposable): typecheck, `node --test` (326 pass, 0 skipped), `npm run build`, `npm run test:export`, `npm run test:restore`, `npm run test:app-browser`. Not run: Node 24, Docker/Compose, `test:proxy`, a real screen reader.
+- Reviewer focus: reconciliation of cash, balances and HSA figures after delete and after undo; guard behaviour under concurrent writers (lock order payments, bills, plans, method); refusal of refunds and HSA claims; HSA release and the one-way rule; undo expiry and supersession; backup round trip with removed records; access boundaries.

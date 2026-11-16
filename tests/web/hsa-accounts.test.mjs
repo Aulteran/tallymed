@@ -177,13 +177,12 @@ test('paid with and direct HSA payment agree: the HSA funding is written only wh
     const ordinary = await t.pay1({ amount: '20.00' });
     await assert.rejects(set(ordinary.id, c1.id), /only be chosen when the payment is recorded/);
     await set(ordinary.id, plain.id);
-    // A direct payment keeps an HSA card of the same account and cannot be cleared or moved off HSA.
+    // A direct payment keeps an HSA card of the same account; moving it off HSA is an administrator's release of the funding (tested in
+    // payment-removal.test.mjs), and a card of another account is refused.
     const direct = await t.pay1({ amount: '20.00', paidWithId: c1.id });
     await set(direct.id, c2.id);
     assert.equal((await t.payment(direct.id)).payment.paidWithName, 'HSA Mastercard');
-    await assert.rejects(set(direct.id, plain.id), /paid directly from an HSA/);
     await assert.rejects(set(direct.id, other.id), /same HSA account/);
-    await assert.rejects(set(direct.id, null), /paid directly from an HSA/);
     assert.equal((await t.payment(direct.id)).payment.hsaAccountId, a.id);
     // An archived account makes the whole payment fail: it never falls back to an ordinary, claimable payment.
     const cur = await acc.getHsaAccount(t.db.pool, t.actor, b.id);

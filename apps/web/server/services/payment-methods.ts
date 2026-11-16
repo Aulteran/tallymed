@@ -10,6 +10,7 @@ import { recordAudit } from '../repositories/audit.ts';
 import * as hsaRepo from '../repositories/hsa-accounts.ts';
 import * as repo from '../repositories/payment-methods.ts';
 import * as payRepo from '../repositories/payments.ts';
+import { setUndoSlot } from '../repositories/undo.ts';
 import { paymentSchemas, parse, schemas } from '../validation.ts';
 import { requireActiveAccount } from './hsa-accounts.ts';
 import { idempotent, withRetry } from './support.ts';
@@ -129,7 +130,15 @@ export async function requireActiveMethod(tx: Queryable, actor: Actor, methodId:
 
 /**
  * Sets or clears which saved method paid an existing payment. Appends one history row and one audit event; nothing about the payment's
- * money changes. The payment is locked first (the global lock order), the method row last.
+ * money changes. The payment is locked first (the global lock order), the method row last. A removed payment is refused like a voided one.
+ *
+ * "Paid with" and direct HSA payment must agree:
+ *  - a payment paid directly from an HSA can move to another card of the SAME account (as before);
+ *  - to a card with no HSA link, or to no card, it RELEASES the funding: the payment becomes an ordinary, claimable payment. Only an
+ *    administrator may (`records:remove`); a `release` event is appended and the audit detail says so;
+ *  - to a card of ANOTHER HSA account it is refused;
+ *  - a payment not paid directly from an HSA can never take an HSA-linked card here (the funding is written only when it is recorded).
+ * Every change of method (not a no-op) sets the actor's undo slot with the previous method and whether funding was released.
  */
 export async function setPaidWith(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
@@ -139,22 +148,57 @@ export async function setPaidWith(pool: Pool, actor: Actor, input: unknown, requ
     if (replayId) return { id: replayId, replayed: true };
     const locked = await payRepo.lockPayments(tx, actor.householdId, [paymentId]);
     if (locked.length === 0) throw new AppError('not_found');
-    const payment = await payRepo.getPayment(tx, actor.householdId, paymentId);
+    const payment = await payRepo.getPayment(tx, actor.householdId, paymentId, { includeRemoved: true });
     if (!payment) throw new AppError('not_found');
+    if (payment.removed) throw new AppError('conflict', 'A removed payment cannot be changed');
     if (payment.voided) throw new AppError('conflict', 'A voided payment cannot be changed');
     const before = await repo.currentMethodId(tx, actor.householdId, paymentId);
     if (before === paidWithId) return { id: paymentId, replayed: false };
-    // "Paid with" and direct HSA payment must agree. A payment paid directly from an HSA keeps an HSA card of that account, and a card
-    // linked to an HSA account can be chosen only when the payment is recorded (the HSA funding is written then, never afterwards).
     const fundedBy = await hsaRepo.fundingOfPayment(tx, actor.householdId, paymentId);
     const chosen = paidWithId ? await requireActiveMethod(tx, actor, paidWithId) : null;
-    if (fundedBy && chosen?.hsaAccountId !== fundedBy) throw new AppError('conflict', 'This payment was paid directly from an HSA. It can only be changed to another card of the same HSA account.');
+    let released = false;
+    if (fundedBy && chosen?.hsaAccountId !== fundedBy) {
+      if (chosen?.hsaAccountId) throw new AppError('conflict', 'This payment was paid directly from an HSA. It can only be changed to another card of the same HSA account, or (administrators only) to a card with no HSA link to release the funding.');
+      authorize(actor, 'records:remove');
+      released = true;
+    }
     if (!fundedBy && chosen?.hsaAccountId) throw new AppError('conflict', 'A card linked to an HSA account can only be chosen when the payment is recorded, because that is what marks it as paid directly from the HSA.');
     await repo.insertAssignment(tx, { id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId, methodId: paidWithId });
+    // The HSA account comes last in the lock order; the event's own guard takes its share lock after the payment row.
+    if (released) await hsaRepo.insertFundingEvent(tx, { householdId: actor.householdId, userId: actor.userId, paymentId, action: 'release' });
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.paid_with_changed', entityType: 'payment', entityId: paymentId, requestId,
-      detail: { paymentId, fromPaymentMethodId: before, toPaymentMethodId: paidWithId },
+      detail: { paymentId, fromPaymentMethodId: before, toPaymentMethodId: paidWithId, hsaFundingReleased: released, ...(released ? { fromHsaAccountId: fundedBy } : {}) },
     });
+    await setUndoSlot(tx, actor, { kind: 'method_change', entityId: paymentId, payload: { previousMethodId: before, toMethodId: paidWithId, fundingReleased: released } });
     return { id: paymentId, replayed: false };
   }));
+}
+
+/**
+ * The inverse of a method change, used only by undo inside its transaction (the caller authorized `records:remove`): reassigns the previous
+ * method and, when the change released an HSA funding, appends a `reinstate` event. Refuses when the payment was removed or its method
+ * changed again since (another user's change), when the previous method is archived, and (by the database guard) when the payment has
+ * HSA claims or decisions by now.
+ */
+export async function undoMethodChange(tx: Queryable, actor: Actor, paymentId: string, rawPayload: unknown): Promise<void> {
+  const parsed = z.object({ previousMethodId: z.uuid().nullable(), toMethodId: z.uuid().nullable(), fundingReleased: z.boolean() }).safeParse(rawPayload);
+  if (!parsed.success) throw new AppError('conflict', 'Nothing to undo');
+  const { previousMethodId, toMethodId, fundingReleased } = parsed.data;
+  const locked = await payRepo.lockPayments(tx, actor.householdId, [paymentId]);
+  if (locked.length === 0) throw new AppError('not_found');
+  const payment = await payRepo.getPayment(tx, actor.householdId, paymentId, { includeRemoved: true });
+  if (!payment) throw new AppError('not_found');
+  if (payment.removed || payment.voided) throw new AppError('conflict', 'That payment can no longer be changed');
+  if ((await repo.currentMethodId(tx, actor.householdId, paymentId)) !== toMethodId) throw new AppError('conflict', 'That payment was changed since. There is nothing to undo.');
+  if (previousMethodId) await requireActiveMethod(tx, actor, previousMethodId);
+  await repo.insertAssignment(tx, { id: randomUUID(), householdId: actor.householdId, userId: actor.userId, paymentId, methodId: previousMethodId });
+  if (fundingReleased) {
+    try {
+      await hsaRepo.insertFundingEvent(tx, { householdId: actor.householdId, userId: actor.userId, paymentId, action: 'reinstate' });
+    } catch (e) {
+      if ((e as { code?: string }).code === '23514') throw new AppError('conflict', 'The HSA funding cannot be reinstated because the payment has HSA claims or the account is archived');
+      throw e;
+    }
+  }
 }

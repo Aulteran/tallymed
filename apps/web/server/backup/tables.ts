@@ -42,6 +42,9 @@ export const BACKUP_TABLES: readonly TableSpec[] = [
   { name: 'payment_method_assignments', orderBy: 'seq', since: '0015' },
   { name: 'payment_hsa_funding', orderBy: 'payment_id', since: '0016' },
   { name: 'payment_voids', orderBy: 'payment_id' },
+  // Who removed or restored a payment and who released or reinstated a direct HSA funding, in the order it happened. Ids and a reason only.
+  { name: 'payment_removal_events', orderBy: 'seq', since: '0017' },
+  { name: 'payment_hsa_funding_events', orderBy: 'seq', since: '0017' },
   { name: 'payment_entries', orderBy: `(kind <> 'allocation'), seq` },
   { name: 'payment_plans', orderBy: 'id' },
   { name: 'payment_plan_bills', orderBy: 'plan_id, bill_id' },
@@ -73,6 +76,7 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
   password_resets: 'Temporary passwords. An account that was waiting to choose a new password needs a new reset from an administrator.',
   password_reset_requests: 'Forgot-password request counters.',
   login_attempts: 'Sign-in throttle counters.',
+  undo_actions: 'The one-slot undo of each person\'s last removal or method change. It expires within minutes and is not a ledger.',
   schema_migrations: 'Recorded in the backup manifest instead, and recreated by the migration command.',
 };
 

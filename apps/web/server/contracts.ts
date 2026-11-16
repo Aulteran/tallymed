@@ -7,6 +7,9 @@ import * as hsaRepo from './repositories/hsa.ts';
 import * as paymentRepo from './repositories/payments.ts';
 import { hsaFilterSchemas, parse, schemas } from './validation.ts';
 
+/** How long, by the database clock, an administrator can undo their last removal or payment-method change (migration 0017, table undo_actions). */
+export const UNDO_WINDOW_SECONDS = 180;
+
 /** Every entity ID is a server-generated, canonical lower-case UUID that never changes and is never reused. */
 export const ENTITY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 

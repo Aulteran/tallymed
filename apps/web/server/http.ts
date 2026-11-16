@@ -20,12 +20,14 @@ import * as hsaAccounts from './services/hsa-accounts.ts';
 import * as paymentMethods from './services/payment-methods.ts';
 import * as payments from './services/payments.ts';
 import * as plans from './services/plans.ts';
+import * as undoService from './services/undo.ts';
 import { completeSetup } from './services/bootstrap.ts';
 import { acceptInvitation, inviteOperator, revokeInvitation, updateOperator } from './services/operators.ts';
 import * as settingsService from './services/settings.ts';
 import * as signin from './services/signin.ts';
 import { restoreFromSetup, startBackup } from './services/backup.ts';
 import { refreshRuntimeConfig } from './settings.ts';
+import { clearUndoSlot } from './repositories/undo.ts';
 import { csrfFor, safeEqual } from './tokens.ts';
 import { parse, schemas } from './validation.ts';
 
@@ -262,6 +264,11 @@ function route(opts: {
    * `password_change_required`, so the gate cannot be forgotten by a new route: the default is closed.
    */
   allowPendingPasswordChange?: boolean;
+  /**
+   * Every authenticated POST is a mutation by its actor, and a mutation supersedes that actor's undo slot (see the hook in the pipeline
+   * below). Set false only for the `undo` action itself and for session, password and download routes that change no record.
+   */
+  keepsUndo?: boolean;
   run: (input: RouteInput) => Promise<RouteResult>;
 }) {
   return async (req: Request, ctx: AppContext): Promise<Response> => {
@@ -289,6 +296,13 @@ function route(opts: {
         if (!opts.authBeforeBody) await signIn();
         const presented = (req.headers.get('x-csrf-token') ?? (typeof body.csrf === 'string' ? body.csrf : '')) as string;
         if (!presented || !safeEqual(presented, csrfFor(sessionToken!))) throw new AppError('csrf_failed');
+        // Undo slot supersession. This is the one place every authenticated POST action passes before its service runs, so it is the hook.
+        // It comes after the session and CSRF checks (a forged or unauthenticated request must not clear anyone's slot) and before the
+        // service. It runs even when the service then fails or replays: the actor attempted another mutation, so their last one can no
+        // longer be undone ("until your next mutation"). Reads (GET pages) never reach this pipeline. Routes without a session (login,
+        // forgot-password) have no actor to clear; logout, password changes and the backup download opt out with `keepsUndo`, as does
+        // `undo`, whose own transaction deletes the slot it consumes.
+        if (opts.keepsUndo !== true) await clearUndoSlot(ctx.pool, actor!);
       }
       const result = await opts.run({ req, ctx, body, actor, sessionToken, client, requestId });
       if ('response' in result) return result.response;
@@ -421,6 +435,7 @@ export const handleForgotPassword = route({
 
 export const handleLogout = route({
   name: 'logout',
+  keepsUndo: true,
   session: true,
   allowPendingPasswordChange: true,
   errorPath: () => '/',
@@ -456,6 +471,7 @@ export const handleInvite = route({
 /** Administrator-issued temporary password. The secret is shown once on a never-cached page and is not stored, logged or audited. */
 export const handleResetPassword = route({
   name: 'reset-password',
+  keepsUndo: true,
   session: true,
   errorPath: () => '/users',
   async run({ ctx, actor, body, requestId, req }) {
@@ -479,6 +495,7 @@ export const handleResetPassword = route({
 /** Change password for the signed-in account: a normal change (current password required) or the forced change after a temporary password. */
 export const handleChangePassword = route({
   name: 'change-password',
+  keepsUndo: true,
   session: true,
   allowPendingPasswordChange: true,
   errorPath: (body) => (body.page === 'required' ? '/password/change' : '/account/password'),
@@ -653,7 +670,7 @@ const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
 const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
-  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string) => string; keep?: string[];
+  service: ExpenseService; error: (b: Record<string, unknown>) => string; ok: (b: Record<string, unknown>, id: string, result?: { target?: string }) => string; keep?: string[];
 }> = {
   'payments/create': { service: payments.recordPayment, error: () => '/payments', keep: PAYMENT_FIELDS, ok: (_b, id) => `/payments/${id}` },
   'payments/allocate': { service: payments.allocatePayment, error: paymentOf, keep: ['billId', 'allocateAmount'], ok: paymentPath },
@@ -667,10 +684,14 @@ const MONEY_ACTIONS: Record<string, {
   'hsa-accounts/create': { service: hsaAccounts.createHsaAccount, error: () => '/hsa-accounts', keep: ['name', 'administrator', 'lastFour'], ok: entity('/hsa-accounts') },
   'hsa-accounts/update': { service: hsaAccounts.updateHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
   'hsa-accounts/archive': { service: hsaAccounts.archiveHsaAccount, error: (b) => `/hsa-accounts/${str(b.id)}`, ok: entity('/hsa-accounts') },
+  'payments/remove': { service: payments.removePayment, error: paymentOf, keep: ['reason'], ok: () => '/payments' },
+  // The undo action's service consumes the slot itself; the pipeline must not delete it first (keepsUndo below). It runs only for an administrator.
+  'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
   'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
+  'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },
   'plans/match': { service: plans.matchInstallment, error: planOf, keep: ['installmentId', 'allocationId', 'amount'], ok: planPath },
   'plans/match-existing': { service: plans.matchExistingPayments, error: planOf, ok: planPath },
@@ -697,9 +718,10 @@ const expenseRoutes = new Map(Object.entries({ ...EXPENSE_ACTIONS, ...MONEY_ACTI
   session: true,
   errorPath: a.error,
   keepFields: a.keep,
+  keepsUndo: name === 'undo',
   async run({ ctx, actor, body, requestId, req }) {
     const result = await a.service(ctx.pool, actor!, body, requestId);
-    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id)) };
+    if (wantsHtml(req)) return { response: redirect(ctx.config, a.ok(body, result.id, result as { target?: string })) };
     return { json: { ok: true, ...result }, status: name.endsWith('/create') || name === 'hsa/claim' || name.endsWith('receipt') ? 201 : 200 };
   },
 })]));
@@ -1011,6 +1033,7 @@ const SETTINGS_ROUTES = new Map<string, (req: Request, ctx: AppContext) => Promi
   // Server-wide backup: answers with the archive itself, streamed as it is produced. The service re-checks the role and the password.
   ['backup', route({
     name: 'settings.backup',
+    keepsUndo: true,
     session: true,
     errorPath: () => '/settings/backup',
     async run({ ctx, actor, body, requestId }) {
