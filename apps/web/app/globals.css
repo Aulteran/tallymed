@@ -175,13 +175,17 @@ a.settings-item:hover, button.settings-item:hover { background: var(--surface-2)
 .segmented svg { width: 1rem; height: 1rem; }
 
 @media (min-width: 64rem) {
-  body:has(> header.shell) { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); grid-template-rows: 1fr auto; }
-  header.shell { grid-row: 1 / span 2; position: sticky; top: 0; height: 100vh; overflow-y: auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+  body:has(> header.shell) { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); grid-template-rows: auto 1fr auto; }
+  header.shell { grid-row: 1 / span 3; position: sticky; top: 0; height: 100vh; overflow-y: auto; flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
   .shell-bar { flex: none; padding: var(--space-4) var(--space-4) var(--space-1); }
   .menu-toggle { display: none; }
   .shell-menu, .shell-menu[data-open] { display: flex; flex-direction: column; flex: 1; padding-bottom: var(--space-3); }
   .account { margin-top: auto; }
-  body:has(> header.shell) > main, body:has(> header.shell) > footer.notice { grid-column: 2; }
+  /* Three rows beside the sidebar: the optional undo bar (collapses to nothing when absent), the page, the footer. Each child is placed
+     explicitly; left to auto-placement the bar took the 1fr row and pushed the page half way down the screen. */
+  body:has(> header.shell) > .undo-bar { grid-column: 2; grid-row: 1; }
+  body:has(> header.shell) > main { grid-column: 2; grid-row: 2; }
+  body:has(> header.shell) > footer.notice { grid-column: 2; grid-row: 3; }
 }
 
 /* ---------- Page ---------- */
