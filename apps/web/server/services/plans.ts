@@ -11,7 +11,7 @@ import { recordAudit } from '../repositories/audit.ts';
 import * as expenseRepo from '../repositories/expenses.ts';
 import * as payments from '../repositories/payments.ts';
 import * as repo from '../repositories/plans.ts';
-import { createPlanPreviewSchema, paymentFilterSchemas, parse, paymentSchemas, schedulePreviewSchema, schemas } from '../validation.ts';
+import { createPlanInProgressPreviewSchema, createPlanPreviewSchema, paymentFilterSchemas, parse, paymentSchemas, schedulePreviewSchema, schemas } from '../validation.ts';
 import { setUndoSlot } from '../repositories/undo.ts';
 import { requireActive } from './expenses.ts';
 import { idempotent, RetryTransaction, todayUtc, withRetry } from './support.ts';
@@ -361,6 +361,105 @@ export async function previewPlanRevision(pool: Pool, actor: Actor, planId: stri
   return previewOf(schedule, restSchedule, warnings, []);
 }
 
+// ---------- a plan already in progress (one guided form, one save) ----------
+
+/** A restructure of an in-progress plan: the rest is scheduled again from `restartOn`, `amountCents` per installment, at `cadence`. */
+export interface InProgressRestructure { restartOn: string; amountCents: bigint; cadence: 'weekly' | 'biweekly' | 'monthly' }
+
+export interface InProgressComposition {
+  original: Schedule;
+  /** The existing cash the original schedule would take (slot ids are line indexes), and what each original line would hold. */
+  fill: FillMatch[]; lineMatched: bigint[]; matchedCents: bigint;
+  /** The fully paid original lines a restructure keeps (ids are line indexes; empty without a restructure). */
+  kept: KeptInstallment[];
+  /** The generated schedule for the unpaid rest (null without a restructure), and the plan as it would stand after the save. */
+  rest: Schedule | null; final: Schedule; warnings: PlanWarning[];
+  /** Matched cash on lines that are not fully paid: it would move onto the new schedule in date order. */
+  looseMatchedCents: bigint;
+}
+
+/**
+ * Pure. Everything "Add a plan that's already in progress" decides, from the original schedule, the cash already applied to the bills
+ * (from the start date on) and the optional restructure: which installments the cash fills, which are then fully paid and kept, the
+ * total still to schedule (original total minus the kept installments, never typed), the new rest, the plan as saved and its warnings.
+ * The preview and the save both call this, so what the preview shows is what the save writes. The refusals are `conflict`, since they
+ * depend on the cash: nothing fully paid to keep, everything already paid, a restart date before the last kept installment, and
+ * the caps `composeRevision` checks.
+ */
+export function composeInProgress(d: { original: Schedule; sources: FillSource[]; restructure: InProgressRestructure | null; openBalanceCents: bigint | null }): InProgressComposition {
+  const { original } = d;
+  const fill = fillLines(d.sources, original.lines);
+  const lineMatched = original.lines.map(() => 0n);
+  for (const f of fill) lineMatched[Number(f.installmentId)]! += f.amount;
+  const matchedCents = sum(lineMatched);
+  const whole = { original, fill, lineMatched, matchedCents };
+  const originalWarnings = planWarnings({ schedule: original, openBalanceCents: d.openBalanceCents, matchedCents });
+  if (!d.restructure) return { ...whole, kept: [], rest: null, final: original, warnings: originalWarnings, looseMatchedCents: 0n };
+  const kept = keptInstallments(original.lines.map((l, i) => ({ id: String(i), dueDate: l.dueDate, amountCents: l.amountCents.toString(), unpaidCents: (l.amountCents - lineMatched[i]!).toString() })));
+  if (kept.length === 0) throw new AppError('conflict', 'No installment is fully paid after matching your payments, so there is nothing to keep. Check the start date and that the payments are applied to these bills, or enter the plan with its new terms instead');
+  if (kept.length === original.lines.length) throw new AppError('conflict', 'Every installment is already paid, so there is nothing left to restart');
+  const lastKeptDue = kept.reduce((a, k) => (k.dueDate > a ? k.dueDate : a), '');
+  if (d.restructure.restartOn < lastKeptDue) throw new AppError('conflict', `The restart date cannot be before the last kept installment's due date (${lastKeptDue})`);
+  const keptCents = sum(kept.map((k) => k.amountCents));
+  const rest = buildSchedule({
+    cadence: d.restructure.cadence, totalAmount: original.totalCents - keptCents, installmentCount: null, firstDueDate: d.restructure.restartOn,
+    inputMode: 'per_installment', installmentAmount: d.restructure.amountCents,
+  });
+  const final = composeRevision({ restSchedule: rest, kept, reviseMode: 'keep_paid', currentCount: original.lines.length, matchedCents });
+  // What was typed for the original (a total that did not agree, rounding) plus the whole plan's comparison with the bills.
+  const warnings = [...originalWarnings.filter((w) => w.code !== 'bill_balance_mismatch'), ...revisionWarnings({ restSchedule: rest, schedule: final, billsOpenCents: d.openBalanceCents, matchedCents })];
+  return { ...whole, kept, rest, final, warnings, looseMatchedCents: matchedCents - keptCents };
+}
+
+/** What the "already in progress" form would save: the original schedule with what existing cash fills, and the plan as it would stand. Nothing is written. */
+export interface ProgressPreview {
+  original: { rows: Array<{ dueDate: string; amountCents: string; matchedCents: string; state: 'paid' | 'partial' | 'unpaid' }>; totalCents: string; matchedCents: string };
+  restructured: boolean;
+  /** The total still to schedule after the kept installments (null without a restructure). */
+  stillToScheduleCents: string | null;
+  plan: PlanPreview;
+}
+
+/** The restructure of an in-progress form, or null when "No" is chosen (the restart fields are then ignored). A missing field is the sentence to show. */
+function progressRestructure(d: { restructured?: boolean; restartOn: string | null; restartAmount: bigint | null; restartCadence: 'weekly' | 'biweekly' | 'monthly'; reason: string }): InProgressRestructure | null {
+  if (!d.restructured) return null;
+  if (d.restartOn === null || d.restartAmount === null) throw new AppError('invalid_input', 'Give the restart date and the amount per installment, or choose "No" for the restructure');
+  if (d.reason === '') throw new AppError('invalid_input', 'Give the reason the plan was restructured');
+  return { restartOn: d.restartOn, amountCents: d.restartAmount, cadence: d.restartCadence };
+}
+
+/**
+ * The plan "Add a plan already in progress" would save, from the same form fields (a `bill_<id>` tick per bill), worked out by
+ * `composeInProgress` with the same read of unmatched cash as the save (read only here: no lock, no write, no audit). An invalid
+ * form throws the same AppError the save would.
+ */
+export async function previewPlanInProgress(pool: Pool, actor: Actor, raw: unknown): Promise<ProgressPreview> {
+  authorize(actor, 'expenses:write');
+  const d = parse(createPlanInProgressPreviewSchema, raw);
+  const { billIds = [] } = (withBillChecks(raw) ?? {}) as { billIds?: string[] };
+  const original = buildSchedule(d);
+  if (d.startedOn === null) throw new AppError('invalid_input', 'Enter the date the plan started');
+  if (d.startedOn > todayUtc()) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
+  const restructure = progressRestructure(d);
+  const notes: string[] = [];
+  const bills = billIds.length > 0 ? await expenseRepo.getBills(pool, actor.householdId, billIds) : [];
+  const known = billIds.length > 0 && bills.length === billIds.length;
+  if (!known) notes.push('Tick the bills the plan covers to match your payments and to compare the plan with what they owe.');
+  const sources = known && d.matchExisting ? await unmatchedCash(pool, actor, billIds, null, d.startedOn) : [];
+  const c = composeInProgress({ original, sources, restructure, openBalanceCents: known ? sum(bills.map((b) => BigInt(b.openBalanceCents))) : null });
+  if (c.matchedCents > 0n) notes.push(`${formatCents(c.matchedCents)} of payments already applied to these bills would be matched to the earliest installments of the original schedule.`);
+  if (c.looseMatchedCents > 0n) notes.push(`${formatCents(c.looseMatchedCents)} of payments only partly fill an installment, so they would move onto the new schedule in date order.`);
+  const rows = original.lines.map((l, i) => ({
+    dueDate: l.dueDate, amountCents: cents(l.amountCents), matchedCents: cents(c.lineMatched[i]!),
+    state: c.lineMatched[i]! >= l.amountCents ? 'paid' as const : c.lineMatched[i]! > 0n ? 'partial' as const : 'unpaid' as const,
+  }));
+  return {
+    original: { rows, totalCents: cents(original.totalCents), matchedCents: cents(c.matchedCents) }, restructured: restructure !== null,
+    stillToScheduleCents: c.rest === null ? null : cents(c.rest.totalCents),
+    plan: previewOf(c.final, c.rest ?? c.final, c.warnings, notes),
+  };
+}
+
 // ---------- writes ----------
 
 /**
@@ -465,6 +564,59 @@ function withBillChecks(input: unknown): unknown {
   return rest;
 }
 
+/** Pure. Pairs unmatched cash with the lines of a schedule not yet saved; a slot id is the line's index, spelled as text. */
+const fillLines = (sources: FillSource[], lines: ScheduleLine[]): FillMatch[] => fillInstallments(sources, lines.map((l, i) => ({ id: String(i), left: l.amountCents })));
+
+/** The bills a new plan covers, locked and checked (payments first when existing cash is matched, then the bills): the first half of every plan creation. */
+interface CreateScope { lockedPayments: Set<string>; locks: Awaited<ReturnType<typeof expenseRepo.lockBills>>; providerIds: string[]; openBalanceCents: bigint }
+
+async function lockCreateScope(tx: Queryable, actor: Actor, billIds: string[], matchExisting: boolean): Promise<CreateScope> {
+  const lockedPayments = matchExisting ? await lockBillPayments(tx, actor, billIds) : new Set<string>();
+  const locks = await expenseRepo.lockBills(tx, actor.householdId, billIds);
+  if (locks.length !== billIds.length) throw new AppError('not_found');
+  // The bills may come from several providers (a hospital often bills one visit under different names). A plan has no provider
+  // of its own; every provider behind the bills must still be active.
+  const providerIds = [...new Set(locks.map((b) => b.providerId))].sort();
+  for (const pid of providerIds) await requireActive(tx, 'providers', actor.householdId, pid);
+  for (const b of locks) {
+    if (b.amountStatus !== 'confirmed') throw new AppError('conflict', 'A plan can only cover bills with confirmed amounts');
+  }
+  return { lockedPayments, locks, providerIds, openBalanceCents: sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents)) };
+}
+
+/**
+ * The second half of every plan creation, inside the caller's transaction and under the locks of `lockCreateScope`: the plan, its bills,
+ * revision 1, the matches of `fill` (slot ids are line indexes) and the `plan.created` audit event. `createPlan` and
+ * `createPlanInProgress` both call it, so a plan entered in one step is recorded exactly like a plan entered in several.
+ */
+async function writeNewPlan(tx: Queryable, actor: Actor, requestId: string, c: {
+  id: string; name: string; billIds: string[]; startedOn: string; schedule: Schedule; remainder: Remainder | undefined; matchExisting: boolean; scope: CreateScope; fill: FillMatch[];
+}): Promise<{ revisionId: string; installments: Array<ScheduleLine & { id: string }> }> {
+  const { id, schedule, scope, fill } = c;
+  await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, name: c.name, startedOn: c.startedOn });
+  for (const b of [...c.billIds].sort()) await repo.insertPlanBill(tx, actor.householdId, id, b);
+  const revisionId = randomUUID();
+  const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
+  await repo.insertRevision(tx, {
+    id: revisionId, householdId: actor.householdId, userId: actor.userId, planId: id, revisionNo: 1, totalCents: schedule.totalCents, cadence: schedule.cadence,
+    reason: 'Initial schedule', installments,
+  });
+  // Optionally reference cash that was already applied to these bills. Nothing is created or moved: only match rows are added.
+  await insertFill(tx, actor, id, revisionId, fill.map((f) => ({ ...f, installmentId: installments[Number(f.installmentId)]!.id })), 'Matched an existing payment when the plan was created');
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created', entityType: 'payment_plan', entityId: id, requestId,
+    detail: {
+      planId: id, providerIds: scope.providerIds.join(','), providerCount: scope.providerIds.length, billCount: c.billIds.length, totalCents: cents(schedule.totalCents), cadence: schedule.cadence,
+      installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
+      scopeOpenBalanceCents: cents(scope.openBalanceCents),
+      startedOn: c.startedOn, matchExisting: c.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
+      inputMode: schedule.inputMode, remainder: remainderUsed(schedule.inputMode, c.remainder), expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
+      warningCodes: planWarnings({ schedule, matchedCents: sum(fill.map((f) => f.amount)), openBalanceCents: scope.openBalanceCents }).map((w) => w.code).join(','),
+    },
+  });
+  return { revisionId, installments };
+}
+
 export async function createPlan(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
   authorize(actor, 'expenses:write');
   const { csrf: _csrf, idempotencyKey, ...d } = parse(paymentSchemas.createPlan, withBillChecks(input));
@@ -476,45 +628,55 @@ export async function createPlan(pool: Pool, actor: Actor, input: unknown, reque
   return withRetry(() => withTransaction(pool, async (tx) => {
     const replayId = await idempotent(tx, actor, 'plan.create', idempotencyKey, { ...d, lines: schedule.lines, idempotencyKey: undefined }, id);
     if (replayId) return { id: replayId, replayed: true };
-    const lockedPayments = d.matchExisting ? await lockBillPayments(tx, actor, d.billIds) : new Set<string>();
-    const locks = await expenseRepo.lockBills(tx, actor.householdId, d.billIds);
-    if (locks.length !== d.billIds.length) throw new AppError('not_found');
-    // The bills may come from several providers (a hospital often bills one visit under different names). A plan has no provider
-    // of its own; every provider behind the bills must still be active.
-    const providerIds = [...new Set(locks.map((b) => b.providerId))].sort();
-    for (const pid of providerIds) await requireActive(tx, 'providers', actor.householdId, pid);
-    for (const b of locks) {
-      if (b.amountStatus !== 'confirmed') throw new AppError('conflict', 'A plan can only cover bills with confirmed amounts');
-    }
-    await repo.insertPlan(tx, { id, householdId: actor.householdId, userId: actor.userId, name: d.name, startedOn });
-    for (const b of [...d.billIds].sort()) await repo.insertPlanBill(tx, actor.householdId, id, b);
-    const revisionId = randomUUID();
-    const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
-    await repo.insertRevision(tx, {
-      id: revisionId, householdId: actor.householdId, userId: actor.userId, planId: id, revisionNo: 1, totalCents: schedule.totalCents, cadence: schedule.cadence,
-      reason: 'Initial schedule', installments,
-    });
-    // Optionally reference cash that was already applied to these bills. Nothing is created or moved: only match rows are added.
-    const fill = d.matchExisting
-      ? fillInstallments(await unmatchedCash(tx, actor, d.billIds, lockedPayments, startedOn), installments.map((i) => ({ id: i.id, left: i.amountCents })))
-      : [];
-    await insertFill(tx, actor, id, revisionId, fill, 'Matched an existing payment when the plan was created');
-    await recordAudit(tx, {
-      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created', entityType: 'payment_plan', entityId: id, requestId,
-      detail: {
-        planId: id, providerIds: providerIds.join(','), providerCount: providerIds.length, billCount: d.billIds.length, totalCents: cents(schedule.totalCents), cadence: schedule.cadence,
-        installmentCount: schedule.lines.length, firstDueDate: schedule.lines[0]!.dueDate, lastDueDate: schedule.lines[schedule.lines.length - 1]!.dueDate,
-        scopeOpenBalanceCents: cents(sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents))),
-        startedOn, matchExisting: !!d.matchExisting, matchedExistingCents: cents(sum(fill.map((f) => f.amount))), matchedExistingAllocations: new Set(fill.map((f) => f.source.allocationId)).size,
-        inputMode: schedule.inputMode, remainder: remainderUsed(schedule.inputMode, d.remainder), expectedTotalCents: schedule.expectedTotalCents === null ? null : cents(schedule.expectedTotalCents), computedTotalCents: cents(schedule.totalCents),
-        warningCodes: planWarnings({
-          schedule, matchedCents: sum(fill.map((f) => f.amount)),
-          openBalanceCents: sum(locks.map((b) => b.baseResponsibilityCents + b.adjustmentsCents - b.appliedCents)),
-        }).map((w) => w.code).join(','),
-      },
-    });
+    const scope = await lockCreateScope(tx, actor, d.billIds, !!d.matchExisting);
+    const fill = d.matchExisting ? fillLines(await unmatchedCash(tx, actor, d.billIds, scope.lockedPayments, startedOn), schedule.lines) : [];
+    await writeNewPlan(tx, actor, requestId, { id, name: d.name, billIds: d.billIds, startedOn, schedule, remainder: d.remainder, matchExisting: !!d.matchExisting, scope, fill });
     return { id, replayed: false };
   }));
+}
+
+/**
+ * The write half of every revision, inside the caller's transaction with the plan locked: the new immutable revision, the matches carried
+ * onto it and the `plan.revised` audit event. `kept` and `restSchedule` are decided by the caller (`revisePlan` reads the kept installments
+ * under its plan lock; `createPlanInProgress` composes them before it writes anything), so the revision is saved the same way for both.
+ */
+async function writeRevision(tx: Queryable, actor: Actor, requestId: string, c: {
+  planId: string; revisionId: string; reason: string; reviseMode: 'replace' | 'keep_paid'; restSchedule: Schedule; remainder: Remainder | undefined; kept: KeptInstallment[]; currentCount: number;
+}): Promise<void> {
+  const { planId, revisionId, reason, reviseMode, restSchedule, kept } = c;
+  const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
+  const before = await repo.getPlan(tx, actor.householdId, planId, todayUtc());
+  const pairs = await repo.currentMatchPairs(tx, actor.householdId, planId);
+  const matched = sum(pairs.map((p) => p.cents));
+  const schedule = composeRevision({ restSchedule, kept, reviseMode, currentCount: c.currentCount, matchedCents: matched });
+  const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
+  const carried = carryMatches(pairs, installments);
+  const keptCents = sum(kept.map((k) => k.amountCents));
+  const planBills = await expenseRepo.getBills(tx, actor.householdId, await repo.planBillIds(tx, actor.householdId, planId));
+  const revisionWarningList = revisionWarnings({ restSchedule, schedule, billsOpenCents: sum(planBills.map((b) => BigInt(b.openBalanceCents))), matchedCents: matched });
+  const revisionNo = cur.revisionNo + 1;
+  await repo.insertRevision(tx, {
+    id: revisionId, householdId: actor.householdId, userId: actor.userId, planId, revisionNo, totalCents: schedule.totalCents, cadence: schedule.cadence, reason, installments,
+  });
+  for (const m of carried) {
+    await repo.insertMatch(tx, {
+      id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId, installmentId: installments[m.installmentIndex]!.id,
+      paymentId: m.pair.paymentId, allocationId: m.pair.allocationId, billId: m.pair.billId, kind: 'match', amountCents: m.amount, carried: true,
+      reason: m.keptFrom ? `Kept from revision ${cur.revisionNo}` : `Carried forward from revision ${cur.revisionNo}`,
+    });
+  }
+  await repo.touchPlan(tx, actor.householdId, planId);
+  await recordAudit(tx, {
+    householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.revised', entityType: 'payment_plan', entityId: planId, requestId,
+    detail: {
+      planId, fromRevisionNo: cur.revisionNo, toRevisionNo: revisionNo, fromTotalCents: cents(cur.totalCents), toTotalCents: cents(schedule.totalCents),
+      fromInstallmentCount: before!.installmentCount, toInstallmentCount: installments.length, fromCadence: cur.cadence, toCadence: schedule.cadence,
+      carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
+      reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
+      inputMode: restSchedule.inputMode, remainder: remainderUsed(restSchedule.inputMode, c.remainder), expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
+      warningCodes: revisionWarningList.map((w) => w.code).join(','),
+    },
+  });
 }
 
 /**
@@ -538,9 +700,6 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
     if (lock.version !== version) throw new AppError('stale_version');
     if (lock.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
     const cur = (await repo.currentRevision(tx, actor.householdId, planId))!;
-    const before = await repo.getPlan(tx, actor.householdId, planId, todayUtc());
-    const pairs = await repo.currentMatchPairs(tx, actor.householdId, planId);
-    const matched = sum(pairs.map((p) => p.cents));
     // Fully paid installments are read under the lock, so what is kept is exactly what is paid when the revision is written.
     let kept: KeptInstallment[] = [];
     let currentCount = 0;
@@ -549,36 +708,58 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
       currentCount = current.length;
       kept = keptInstallments(current);
     }
-    const schedule = composeRevision({ restSchedule, kept, reviseMode, currentCount, matchedCents: matched });
-    const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
-    const carried = carryMatches(pairs, installments);
-    const keptCents = sum(kept.map((k) => k.amountCents));
-    const planBills = await expenseRepo.getBills(tx, actor.householdId, await repo.planBillIds(tx, actor.householdId, planId));
-    const revisionWarningList = revisionWarnings({ restSchedule, schedule, billsOpenCents: sum(planBills.map((b) => BigInt(b.openBalanceCents))), matchedCents: matched });
-    const revisionNo = cur.revisionNo + 1;
-    await repo.insertRevision(tx, {
-      id: revisionId, householdId: actor.householdId, userId: actor.userId, planId, revisionNo, totalCents: schedule.totalCents, cadence: schedule.cadence, reason, installments,
-    });
-    for (const c of carried) {
-      await repo.insertMatch(tx, {
-        id: randomUUID(), householdId: actor.householdId, userId: actor.userId, planId, revisionId, installmentId: installments[c.installmentIndex]!.id,
-        paymentId: c.pair.paymentId, allocationId: c.pair.allocationId, billId: c.pair.billId, kind: 'match', amountCents: c.amount, carried: true,
-        reason: c.keptFrom ? `Kept from revision ${cur.revisionNo}` : `Carried forward from revision ${cur.revisionNo}`,
-      });
+    await writeRevision(tx, actor, requestId, { planId, revisionId, reason, reviseMode, restSchedule, remainder: rest.remainder, kept, currentCount });
+    return { id: planId, replayed: false };
+  }));
+}
+
+/**
+ * "Add a plan that's already in progress": one guided form, one save. Creates the plan with its original agreement (revision 1), matches
+ * the payments already applied to its bills and, when the plan was restructured, saves revision 2 (the fully paid installments kept as
+ * they are, the rest scheduled again from the restart date) in ONE transaction under ONE idempotency key. Locks run in the global order,
+ * payments (those on the ticked bills, when matching), then bills; the plan row is new, so no plan lock is waited for. Everything is decided
+ * by `composeInProgress` before the first write, so a refusal writes nothing, and the writes are the ones `createPlan` and `revisePlan`
+ * make (`writeNewPlan`, `writeRevision`): the audit trail holds `plan.created` and `plan.revised` as the separate steps would
+ * record them, then one `plan.created_in_progress` summary (ids, counts and cents, no free text). The reason is stored only on the revision.
+ */
+export async function createPlanInProgress(pool: Pool, actor: Actor, input: unknown, requestId: string): Promise<{ id: string; replayed: boolean }> {
+  authorize(actor, 'expenses:write');
+  const { csrf: _csrf, idempotencyKey, ...d } = parse(paymentSchemas.createPlanInProgress, withBillChecks(input));
+  const original = buildSchedule(d);
+  if (d.startedOn > todayUtc()) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
+  const restructure = progressRestructure(d);
+  const reason = restructure ? d.reason : '';
+  const id = randomUUID();
+  const revisionId = randomUUID();
+  // The logical input only (never anything read from the database), so a replay after the cash changed is still a replay.
+  const fingerprint = {
+    name: d.name, billIds: [...d.billIds].sort(), startedOn: d.startedOn, matchExisting: !!d.matchExisting, lines: original.lines, cadence: original.cadence,
+    expectedTotalCents: original.expectedTotalCents === null ? null : cents(original.expectedTotalCents), restructure, reason,
+  };
+  return withRetry(() => withTransaction(pool, async (tx) => {
+    const replayId = await idempotent(tx, actor, 'plan.create_in_progress', idempotencyKey, fingerprint, id);
+    if (replayId) return { id: replayId, replayed: true };
+    const scope = await lockCreateScope(tx, actor, d.billIds, !!d.matchExisting);
+    const sources = d.matchExisting ? await unmatchedCash(tx, actor, d.billIds, scope.lockedPayments, d.startedOn) : [];
+    const c = composeInProgress({ original, sources, restructure, openBalanceCents: scope.openBalanceCents });
+    const created = await writeNewPlan(tx, actor, requestId, { id, name: d.name, billIds: d.billIds, startedOn: d.startedOn, schedule: original, remainder: d.remainder, matchExisting: !!d.matchExisting, scope, fill: c.fill });
+    if (c.rest) {
+      // The database checks every new match at commit ("only the current schedule of an active plan"). Revision 2 makes revision 1 stale, so the
+      // matches just written are checked now, while revision 1 is still the current one; revision 2's carried matches are then checked as they are written.
+      await tx.query('set constraints installment_matches_guard immediate');
+      const kept = c.kept.map((k) => ({ ...k, id: created.installments[Number(k.id)]!.id }));
+      await writeRevision(tx, actor, requestId, { planId: id, revisionId, reason, reviseMode: 'keep_paid', restSchedule: c.rest, remainder: undefined, kept, currentCount: original.lines.length });
     }
-    await repo.touchPlan(tx, actor.householdId, planId);
     await recordAudit(tx, {
-      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.revised', entityType: 'payment_plan', entityId: planId, requestId,
+      householdId: actor.householdId, actorUserId: actor.userId, action: 'plan.created_in_progress', entityType: 'payment_plan', entityId: id, requestId,
       detail: {
-        planId, fromRevisionNo: cur.revisionNo, toRevisionNo: revisionNo, fromTotalCents: cents(cur.totalCents), toTotalCents: cents(schedule.totalCents),
-        fromInstallmentCount: before!.installmentCount, toInstallmentCount: installments.length, fromCadence: cur.cadence, toCadence: schedule.cadence,
-        carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
-        reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
-        inputMode: restSchedule.inputMode, remainder: remainderUsed(restSchedule.inputMode, rest.remainder), expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
-        warningCodes: revisionWarningList.map((w) => w.code).join(','),
+        planId: id, billCount: d.billIds.length, startedOn: d.startedOn, matchExisting: !!d.matchExisting, matchedCents: cents(c.matchedCents), matchedAllocations: new Set(c.fill.map((f) => f.source.allocationId)).size,
+        originalTotalCents: cents(original.totalCents), originalInstallmentCount: original.lines.length, restructured: restructure !== null,
+        keptInstallmentCount: c.kept.length, keptCents: cents(sum(c.kept.map((k) => k.amountCents))), restCents: c.rest ? cents(c.rest.totalCents) : null, restInstallmentCount: c.rest ? c.rest.lines.length : null,
+        restartOn: restructure ? restructure.restartOn : null, finalTotalCents: cents(c.final.totalCents), finalInstallmentCount: c.final.lines.length,
       },
     });
-    return { id: planId, replayed: false };
+    return { id, replayed: false };
   }));
 }
 

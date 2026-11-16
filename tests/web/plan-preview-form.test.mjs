@@ -36,3 +36,12 @@ test('a preview marker with no kept schedule fields shows no preview', () => {
   assert.equal(hasPreviewValues({ preview: 'create' }), false);
   assert.equal(hasPreviewValues({ preview: 'create', firstDueDate: '2026-09-01' }), true);
 });
+
+test('the "already in progress" preview returns to the plan list and keeps its own restructure fields', () => {
+  assert.equal(previewKind({ preview: 'progress' }), 'progress');
+  assert.equal(previewPage('progress', { planId: 'ignored' }), '/plans');
+  const body = { preview: 'progress', name: 'Imaging plan', startedOn: '2026-01-01', matchExisting: 'on', restructured: 'yes', restartOn: '2026-05-01', restartAmount: '45.00', restartCadence: 'weekly', reason: 'Restructured', dialog: 'progress', totalAmount: '720.00', csrf: 'secret', idempotencyKey: 'abcdefgh12' };
+  const flash = readFlash(flashSetCookie({ secureCookies: false }, '/plans', withBillSlots({ ...body, [`bill_${A}`]: 'on' }), PREVIEW_KEEP).split(';')[0].split('=')[1], '/plans');
+  assert.deepEqual([flash.restructured, flash.restartOn, flash.restartAmount, flash.restartCadence, flash.dialog, flash['bill.0']], ['yes', '2026-05-01', '45.00', 'weekly', 'progress', A]);
+  assert.ok(!('csrf' in flash) && !('idempotencyKey' in flash));
+});

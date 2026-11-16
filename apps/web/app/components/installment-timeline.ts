@@ -40,7 +40,13 @@ export function parseIso(s: string): Ymd | null {
   if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) return null;
   return { y, m: mo, d };
 }
-export const daysInMonth = (y: number, m: number): number => new Date(Date.UTC(y, m, 0)).getUTCDate();
+/** A UTC time for a calendar date. `Date.UTC` reads the years 0 to 99 as 1900 to 1999, so the year is set separately. */
+const utcMs = (y: number, m: number, d: number): number => { const t = new Date(0); t.setUTCFullYear(y, m - 1, d); return t.getTime(); };
+export const daysInMonth = (y: number, m: number): number => new Date(utcMs(y, m + 1, 0)).getUTCDate();
+/** The dates the server accepts (its schemas refuse anything outside 1900-01-01 to 2100-01-01). A move that would leave this range is refused, never clamped. */
+export const MIN_DATE = '1900-01-01';
+export const MAX_DATE = '2100-01-01';
+export const inRange = (iso: string): boolean => iso >= MIN_DATE && iso <= MAX_DATE;
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 export const toIso = ({ y, m, d }: Ymd): string => `${pad(y, 4)}-${pad(m)}-${pad(d)}`;
 /** "YYYY-MM" of a date, or null. */
@@ -58,21 +64,27 @@ export function monthLabel(ym: string): string {
   return i === null ? ym : `${MONTHS[i % 12]} ${Math.floor(i / 12)}`;
 }
 
-/** The date `n` months from `iso` (n may be negative): the day of month is kept, or `day` when given, and clamped to the target month's last day (Jan 31 + 1 is Feb 28, or 29 in a leap year). */
+/** The date `n` months from `iso` (n may be negative): the day of month is kept, or `day` when given, and clamped to the target month's last day (Jan 31 + 1 is Feb 28, or 29 in a leap year). Null when `iso` is not a real date or the result is outside 1900 to 2100. */
 export function addMonths(iso: string, n: number, day?: number): string | null {
   const p = parseIso(iso);
   if (!p) return null;
   const idx = p.y * 12 + (p.m - 1) + n;
   const y = Math.floor(idx / 12);
   const m = (idx % 12) + 1;
-  return toIso({ y, m, d: Math.min(day ?? p.d, daysInMonth(y, m)) });
+  const out = toIso({ y, m, d: Math.min(day ?? p.d, daysInMonth(y, m)) });
+  return inRange(out) ? out : null;
 }
-/** The date `n` days from `iso` (n may be negative). */
-export function addDays(iso: string, n: number): string | null {
+/** The calendar date `n` days from `iso` (n may be negative), whatever the year (the years 0 to 99 included); null when `iso` is not a real date. `addDays` adds the range check. */
+export function shiftDays(iso: string, n: number): string | null {
   const p = parseIso(iso);
   if (!p) return null;
-  const t = new Date(Date.UTC(p.y, p.m - 1, p.d) + n * DAY_MS);
+  const t = new Date(utcMs(p.y, p.m, p.d) + n * DAY_MS);
   return toIso({ y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() });
+}
+/** The date `n` days from `iso` (n may be negative). Null when `iso` is not a real date or the result is outside 1900 to 2100. */
+export function addDays(iso: string, n: number): string | null {
+  const out = shiftDays(iso, n);
+  return out !== null && inRange(out) ? out : null;
 }
 /** One cadence step after `iso`: weekly 7 days, biweekly 14 days, anything else (monthly, the default) the next month keeping `anchorDay` (default: the date's own day), clamped. */
 export function addCadence(iso: string, cadence: Cadence, anchorDay?: number): string | null {
@@ -109,8 +121,8 @@ export function moveToMonth<T extends TimelineRow>(rows: readonly T[], index: nu
   const from = row ? monthOf(row.dueDate) : null;
   const a = from === null ? null : monthIndex(from);
   const b = monthIndex(ym);
-  if (!row || a === null || b === null) return null;
-  return { rows: replaceAt(rows, index, withDate(row, addMonths(row.dueDate, b - a)!)), selected: index };
+  const date = row && a !== null && b !== null ? addMonths(row.dueDate, b - a) : null;
+  return row && date ? { rows: replaceAt(rows, index, withDate(row, date)), selected: index } : null;
 }
 /** Moves a chip by whole months (keyboard Left and Right). */
 export function moveByMonths<T extends TimelineRow>(rows: readonly T[], index: number, n: number): TimelineEdit<T> | null {
@@ -128,8 +140,25 @@ export function moveByDays<T extends TimelineRow>(rows: readonly T[], index: num
 export function setDay<T extends TimelineRow>(rows: readonly T[], index: number, day: number): TimelineEdit<T> | null {
   const row = rows[index];
   const p = row ? parseIso(row.dueDate) : null;
-  if (!row || !p || !Number.isInteger(day) || day < 1) return null;
+  if (!row || !p || !Number.isInteger(day) || day < 1 || day > 31) return null;
   return { rows: replaceAt(rows, index, withDate(row, toIso({ ...p, d: Math.min(day, daysInMonth(p.y, p.m)) }))), selected: index };
+}
+/**
+ * The day a typed value of the "Day of month" field already settles, or null while it may still grow: two digits from 10 to 31, or one digit from 4 to 9
+ * (no valid day starts with them as a longer number). "1", "2" and "3" wait (they could become 10 to 31), and so does anything blank or out of range,
+ * so a keystroke on the way to a day never rewrites the date. The field applies a waiting value when it loses focus (`typedDay`).
+ */
+export function completeDay(text: string): number | null {
+  const t = text.trim();
+  if (!/^\d{1,2}$/.test(t)) return null;
+  const d = Number(t);
+  return (t.length === 2 && d >= 10 && d <= 31) || (t.length === 1 && d >= 4) ? d : null;
+}
+/** The day a typed value means once the person is done (on blur): a whole number from 1 to 31, else null. */
+export function typedDay(text: string): number | null {
+  const t = text.trim();
+  const d = /^\d{1,2}$/.test(t) ? Number(t) : NaN;
+  return d >= 1 && d <= 31 ? d : null;
 }
 
 /**
@@ -180,5 +209,8 @@ export function restartFrom<T extends TimelineRow>(rows: readonly T[], index: nu
   if (a === null || b === null) return null;
   const order = chipOrder(rows);
   const later = new Set(order.slice(order.indexOf(index)));
-  return { rows: rows.map((r, i) => (later.has(i) ? withDate(r, addMonths(r.dueDate, b - a)!) : r)), selected: index };
+  const moved = rows.map((r, i) => (later.has(i) ? addMonths(r.dueDate, b - a) : r.dueDate));
+  // One chip that would leave 1900 to 2100 refuses the whole restart: no chip is left behind while the rest move.
+  if (moved.some((d) => d === null)) return null;
+  return { rows: rows.map((r, i) => (later.has(i) ? withDate(r, moved[i]!) : r)), selected: index };
 }
