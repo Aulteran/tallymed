@@ -45,12 +45,12 @@ export async function resolveAttachmentTarget(pool: Pool | Queryable, actor: Act
     return { type, id: v.id, label: `${v.memberName} visit on ${v.serviceDate}` };
   }
   if (type === 'hsa_receipt') {
-    const { rows } = await pool.query<{ received_on: string }>(`select received_on::text from hsa_receipts where household_id = $1 and id = $2`, [actor.householdId, entityId]);
+    const { rows } = await pool.query<{ received_on: string }>(`select received_on::text from hsa_receipts where household_id = $1 and id = $2 and not hsa_record_removed('receipt', id)`, [actor.householdId, entityId]);
     if (!rows[0]) throw new AppError('not_found');
     return { type, id: entityId, label: `HSA reimbursement received ${rows[0].received_on}` };
   }
   if (type === 'hsa_eligibility_decision') {
-    const { rows } = await pool.query<{ decided_on: string }>(`select decided_on::text from hsa_eligibility_decisions where household_id = $1 and id = $2`, [actor.householdId, entityId]);
+    const { rows } = await pool.query<{ decided_on: string }>(`select decided_on::text from hsa_live_decisions where household_id = $1 and id = $2`, [actor.householdId, entityId]);
     if (!rows[0]) throw new AppError('not_found');
     return { type, id: entityId, label: `HSA eligibility decision of ${rows[0].decided_on}` };
   }

@@ -20,16 +20,16 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
     // From 0017 a funding can be released, after which the payment is an ordinary one that may be claimed.
     sql: `select f.payment_id from payment_hsa_funding f
            where payment_is_direct_hsa(f.payment_id)
-             and (exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
-              or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id))`,
+             and (exists (select 1 from @E@ e where e.payment_id = f.payment_id)
+              or exists (select 1 from @D@ d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id))`,
   },
   {
     rule: 'a payment paid directly from an HSA has no HSA claim, reimbursement or eligibility decision',
     table: 'payment_hsa_funding',
     unlessTable: 'payment_hsa_funding_events',
     sql: `select f.payment_id from payment_hsa_funding f
-           where exists (select 1 from hsa_entries e where e.payment_id = f.payment_id)
-              or exists (select 1 from hsa_eligibility_decisions d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id)`,
+           where exists (select 1 from @E@ e where e.payment_id = f.payment_id)
+              or exists (select 1 from @D@ d join payment_entries a on a.id = d.allocation_id where a.payment_id = f.payment_id)`,
   },
   {
     rule: 'bill responsibility is between zero and the supported maximum',
@@ -136,13 +136,13 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
   },
   {
     rule: 'pending and received reimbursement per allocation are never negative',
-    sql: `select e.allocation_id from hsa_entries e group by e.allocation_id
+    sql: `select e.allocation_id from @E@ e group by e.allocation_id
           having coalesce(sum(e.amount_cents) filter (where e.kind = 'reserve'), 0) - coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'reject', 'cancel')), 0) < 0
               or coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'external_receipt')), 0) - coalesce(sum(e.amount_cents) filter (where e.kind = 'receipt_reversal'), 0) < 0`,
   },
   {
     rule: 'a claim line is never paid or released beyond its reservation',
-    sql: `select e.line_id from hsa_entries e where e.line_id is not null group by e.line_id
+    sql: `select e.line_id from @E@ e where e.line_id is not null group by e.line_id
           having sum(case e.kind when 'reserve' then e.amount_cents when 'receipt' then -e.amount_cents when 'reject' then -e.amount_cents
                                  when 'cancel' then -e.amount_cents else 0 end) < 0`,
   },
@@ -159,8 +159,8 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
              select coalesce(sum(e.amount_cents) filter (where e.kind in ('receipt', 'external_receipt')), 0) as allocated,
                     count(*) filter (where e.kind in ('receipt', 'external_receipt')) as entries,
                     count(*) filter (where e.kind = 'receipt_reversal') as reversals
-               from hsa_entries e where e.receipt_id = r.id) s on true
-           where s.allocated <> r.amount_cents or s.reversals not in (0, s.entries)`,
+               from @E@ e where e.receipt_id = r.id) s on true
+           where (s.allocated <> r.amount_cents or s.reversals not in (0, s.entries)) @RLIVE@`,
   },
   {
     rule: 'a receipt entry matches the origin of its receipt and a receipt reversal exactly offsets one receipt entry',
@@ -171,6 +171,34 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
            where e.kind = 'receipt_reversal'
              and (t.id is null or t.kind not in ('receipt', 'external_receipt') or t.allocation_id <> e.allocation_id or t.amount_cents <> e.amount_cents
                   or t.receipt_id <> e.receipt_id or t.claim_id is distinct from e.claim_id or t.line_id is distinct from e.line_id)`,
+  },
+  {
+    rule: 'HSA removal events alternate, starting with a removal, and name a record of their household',
+    table: 'hsa_removal_events',
+    sql: `select x.id from (
+            select e.id, e.action, lag(e.action) over (partition by e.kind, e.record_id order by e.seq) as previous from hsa_removal_events e) x
+           where (x.previous is null and x.action <> 'remove') or x.previous = x.action
+          union all
+          select e.id from hsa_removal_events e
+           where not exists (select 1 from hsa_eligibility_decisions d where e.kind = 'decision' and d.id = e.record_id and d.household_id = e.household_id)
+             and not exists (select 1 from hsa_claims c where e.kind = 'claim' and c.id = e.record_id and c.household_id = e.household_id)
+             and not exists (select 1 from hsa_receipts r where e.kind = 'receipt' and r.id = e.record_id and r.household_id = e.household_id)`,
+  },
+  {
+    rule: 'no two live HSA claims of a household share a reference',
+    table: 'hsa_removal_events',
+    // From 0019 the unique index is replaced by this rule over live claims, so a removed claim's reference can be entered again.
+    sql: `select c.id from hsa_claims c
+           where c.reference is not null and not hsa_record_removed('claim', c.id)
+             and exists (select 1 from hsa_claims o where o.household_id = c.household_id and lower(o.reference) = lower(c.reference) and o.id <> c.id
+                          and not hsa_record_removed('claim', o.id))`,
+  },
+  {
+    rule: 'a live HSA receipt never has entries on a removed claim',
+    table: 'hsa_removal_events',
+    sql: `select e.id from hsa_entries e
+           where e.receipt_id is not null and e.claim_id is not null
+             and not hsa_record_removed('receipt', e.receipt_id) and hsa_record_removed('claim', e.claim_id)`,
   },
   {
     rule: 'a removed document has no active attachment and an attachment points at a version of its own document',
@@ -184,10 +212,16 @@ const CHECKS: ReadonlyArray<{ rule: string; sql: string; table?: string; unlessT
 /** Names of the rules a database breaks. Empty for a consistent ledger. Never returns record content, only the rule and a count. */
 export async function ledgerViolations(db: Queryable): Promise<string[]> {
   const broken: string[] = [];
+  // From 0019 the HSA money rules judge live records only (a removed decision, claim or receipt counts as nothing); an older database has no such views.
+  const live = (await db.query<{ present: boolean }>(`select to_regclass('public.hsa_live_entries') is not null as present`)).rows[0]!.present;
+  const forDatabase = (sql: string) => sql
+    .replaceAll('@E@', live ? 'hsa_live_entries' : 'hsa_entries')
+    .replaceAll('@D@', live ? 'hsa_live_decisions' : 'hsa_eligibility_decisions')
+    .replaceAll('@RLIVE@', live ? `and not hsa_record_removed('receipt', r.id)` : '');
   for (const check of CHECKS) {
     if (check.table && !(await db.query(`select to_regclass($1) is not null as present`, [`public.${check.table}`])).rows[0]!.present) continue;
     if (check.unlessTable && (await db.query(`select to_regclass($1) is not null as present`, [`public.${check.unlessTable}`])).rows[0]!.present) continue;
-    const r = await db.query<{ n: string }>(`select count(*) as n from (${check.sql}) v`);
+    const r = await db.query<{ n: string }>(`select count(*) as n from (${forDatabase(check.sql)}) v`);
     const n = Number(r.rows[0]!.n);
     if (n > 0) broken.push(`${check.rule} (${n} record${n === 1 ? '' : 's'})`);
   }
@@ -231,6 +265,11 @@ export async function ledgerSummary(db: Queryable): Promise<Record<string, strin
   // Plans carry removal in columns (0017). An older database has no such column and reports no total.
   if ((await db.query<{ present: boolean }>(`select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'payment_plans' and column_name = 'removed_at') as present`)).rows[0]!.present) {
     s.removedPlans = (await db.query<{ n: string }>(`select count(*)::text as n from payment_plans where removed_at is not null`)).rows[0]!.n;
+  }
+  // Only a database at migration 0019 or later knows about removed HSA decisions, claims and receipts.
+  if ((await db.query<{ present: boolean }>(`select to_regclass('public.hsa_removal_events') is not null as present`)).rows[0]!.present) {
+    s.removedHsaRecords = (await db.query<{ n: string }>(
+      `select count(*)::text as n from (select distinct on (kind, record_id) action from hsa_removal_events order by kind, record_id, seq desc) x where x.action = 'remove'`)).rows[0]!.n;
   }
   // Open balance is derived, not stored: responsibility (base plus signed adjustments) minus net applied payments.
   s.openBalanceCents = (BigInt(s.baseResponsibilityCents!) + BigInt(s.adjustmentCents!) - BigInt(s.netAppliedCents!)).toString();
