@@ -681,6 +681,7 @@ const paymentPath = (b: Record<string, unknown>, id: string) => `/payments/${str
 const planPath = (b: Record<string, unknown>, id: string) => `/plans/${str(b.planId) ?? id}`;
 const paymentOf = (b: Record<string, unknown>) => `/payments/${str(b.paymentId)}`;
 const planOf = (b: Record<string, unknown>) => `/plans/${str(b.planId)}`;
+const withoutFormMarker = (b: Record<string, unknown>) => { const { dialog: _dialog, ...rest } = b; return rest; };
 const SCHEDULE_FIELDS = ['totalAmount', 'installmentCount', 'firstDueDate', 'cadence', 'inputMode', 'installmentAmount', 'remainder', 'reviseMode'];
 // Payments, refunds and plans use the same pipeline and the same fixed allow-list as the expense actions.
 const MONEY_ACTIONS: Record<string, {
@@ -705,7 +706,8 @@ const MONEY_ACTIONS: Record<string, {
   'undo': { service: undoService.undo, error: () => '/', ok: (_b, id, r) => (r?.target === 'plan' ? `/plans/${id}` : `/payments/${id}`) },
   'payments/void': { service: payments.voidPayment, error: paymentOf, keep: ['voidedOn', 'reason'], ok: paymentPath },
   'plans/create': { service: plans.createPlan, error: () => '/plans', keep: ['name', 'providerId', 'startedOn', 'matchExisting', ...SCHEDULE_FIELDS], ok: (_b, id) => `/plans/${id}` },
-  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', ...SCHEDULE_FIELDS], ok: planPath },
+  // `dialog` marks a post from the "Plan was restructured" dialog so an error reopens that dialog; it is not part of the service input.
+  'plans/revise': { service: plans.revisePlan, error: planOf, keep: ['reason', 'dialog', ...SCHEDULE_FIELDS], prepare: withoutFormMarker, ok: planPath },
   'plans/cancel': { service: plans.cancelPlan, error: planOf, keep: ['reason'], ok: planPath },
   'plans/remove': { service: plans.removePlan, error: planOf, keep: ['reason'], ok: () => '/plans' },
   'plans/rename': { service: plans.renamePlan, error: planOf, keep: ['name'], ok: planPath },

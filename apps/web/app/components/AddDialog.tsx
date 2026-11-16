@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type MouseEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons.tsx';
 
 /** Closes a modal dialog when the click lands on its backdrop (the dialog element itself), not on its content. */
@@ -14,8 +14,10 @@ export const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => { if (e.tar
  * dialog reopens with the message and the typed values in view. The button is a GET form that adds `add=1`, so it still opens
  * the form without JavaScript; with JavaScript the click opens the dialog in place.
  */
-export function AddDialog({ label, title = label, open = false, keep = {}, icon = 'plus', secondary = false, requiredNote = true, children }: {
+export function AddDialog({ label, title = label, open = false, keep = {}, icon = 'plus', secondary = false, requiredNote = true, marker = '1', children }: {
   label: string; title?: string; open?: boolean;
+  /** The `add` value the opening button carries. A page with two dialogs gives each its own, so only the one asked for opens without JavaScript. */
+  marker?: string;
   /** Icon on the opening button (null for none), whether it is a secondary button, and whether the dialog shows the "* required" note. */
   icon?: IconName | null; secondary?: boolean; requiredNote?: boolean;
   /** Current query values (filters) to keep in the address when the button is used without JavaScript. */
@@ -23,6 +25,7 @@ export function AddDialog({ label, title = label, open = false, keep = {}, icon 
   children: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   const opener = useRef<HTMLButtonElement>(null);
   const show = () => {
     const d = dialog.current;
@@ -35,9 +38,10 @@ export function AddDialog({ label, title = label, open = false, keep = {}, icon 
   const onClose = () => {
     // Opened by the address: drop the marker and the error code so a reload does not reopen the dialog.
     const url = new URL(window.location.href);
-    if (url.searchParams.has('add') || url.searchParams.has('error')) {
+    if (url.searchParams.has('add') || url.searchParams.has('error') || url.searchParams.has('preview')) {
       url.searchParams.delete('add');
       url.searchParams.delete('error');
+      url.searchParams.delete('preview');
       window.history.replaceState(window.history.state, '', url);
     }
     if (!dialog.current?.open && (!document.activeElement || document.activeElement === document.body)) opener.current?.focus();
@@ -45,12 +49,12 @@ export function AddDialog({ label, title = label, open = false, keep = {}, icon 
   return <>
     <form method="get" className="page-action">
       {Object.entries(keep).map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
-      <input type="hidden" name="add" value="1" />
+      <input type="hidden" name="add" value={marker} />
       <button ref={opener} type="submit" className={secondary ? 'secondary' : undefined} aria-haspopup="dialog" onClick={(e) => { e.preventDefault(); show(); }}>{icon && <Icon name={icon} />}{label}</button>
     </form>
-    <dialog ref={dialog} className="modal form-modal" open={open} aria-labelledby="add-dialog-title" onClick={closeOnBackdrop} onClose={onClose}>
+    <dialog ref={dialog} className="modal form-modal" open={open} aria-labelledby={titleId} onClick={closeOnBackdrop} onClose={onClose}>
       <div className="modal-head">
-        <h2 id="add-dialog-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button type="button" className="icon-button" aria-label="Close" title="Close" onClick={() => dialog.current?.close()}><Icon name="close" /></button>
       </div>
       <div className="modal-body">

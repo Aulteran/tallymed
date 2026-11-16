@@ -177,6 +177,15 @@ const scheduleInput = {
   remainder: z.preprocess(blank, z.enum(['earliest', 'last_extra', 'last_short']).default('earliest')),
 };
 
+/** The schedule fields alone (a form preview reads them from the address). Same field rules as creating and revising a plan; no list of installments. */
+const { installments: _installments, ...generatedScheduleInput } = scheduleInput;
+export const schedulePreviewSchema = z.object({
+  ...generatedScheduleInput, reviseMode: z.preprocess(blank, z.enum(['replace', 'keep_paid']).default('replace')),
+});
+
+/** Creating a plan adds a start date and whether existing payments are matched; the bills come from `bill_<id>` ticks. */
+export const createPlanPreviewSchema = schedulePreviewSchema.extend({ startedOn: optional(isoDate), matchExisting: checkbox.optional() });
+
 export const paymentSchemas = {
   createPayment: z.strictObject({
     idempotencyKey, paidOn: isoDate, amount: positiveUsd, method: paymentMethod, paidWithId: optional(uuid), reference: optional(text(80).min(1)), note: optionalText(500),

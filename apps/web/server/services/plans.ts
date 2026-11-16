@@ -6,12 +6,12 @@ import { z } from 'zod';
 import { authorize, type Actor } from '../authz.ts';
 import { withTransaction, type Pool, type Queryable } from '../db.ts';
 import { AppError } from '../errors.ts';
-import { MAX_CENTS } from '../money.ts';
+import { formatCents, MAX_CENTS } from '../money.ts';
 import { recordAudit } from '../repositories/audit.ts';
 import * as expenseRepo from '../repositories/expenses.ts';
 import * as payments from '../repositories/payments.ts';
 import * as repo from '../repositories/plans.ts';
-import { paymentFilterSchemas, parse, paymentSchemas, schemas } from '../validation.ts';
+import { createPlanPreviewSchema, paymentFilterSchemas, parse, paymentSchemas, schedulePreviewSchema, schemas } from '../validation.ts';
 import { setUndoSlot } from '../repositories/undo.ts';
 import { requireActive } from './expenses.ts';
 import { idempotent, RetryTransaction, todayUtc, withRetry } from './support.ts';
@@ -208,6 +208,35 @@ export function planWarnings(d: { schedule: Schedule; openBalanceCents: bigint |
   return out;
 }
 
+/** A fully paid installment of the current schedule: what a keep_paid revision holds on to. */
+export interface KeptInstallment { id: string; dueDate: string; amountCents: bigint }
+
+/** Pure. The fully paid installments of a schedule (nothing still owed), in schedule order. */
+export function keptInstallments(current: Array<{ id: string; dueDate: string; amountCents: string; unpaidCents: string }>): KeptInstallment[] {
+  return current.filter((i) => BigInt(i.unpaidCents) === 0n).map((i) => ({ id: i.id, dueDate: i.dueDate, amountCents: BigInt(i.amountCents) }));
+}
+
+/**
+ * Pure. The schedule a revision would save, and the refusals that go with it: with keep_paid the fully paid installments are
+ * kept ahead of the new rest, nothing may be left already paid, the plan cannot exceed the installment cap, and the total
+ * cannot fall below what is already matched. The service and the form preview both call this, so what the preview shows is what is saved.
+ */
+export function composeRevision(d: { restSchedule: Schedule; kept: KeptInstallment[]; reviseMode: 'replace' | 'keep_paid'; currentCount: number; matchedCents: bigint }): Schedule {
+  if (d.reviseMode === 'keep_paid' && d.kept.length === d.currentCount) throw new AppError('conflict', 'Every installment is already paid, so there is nothing left to restart');
+  const schedule = d.kept.length > 0 ? keepPaidSchedule(d.kept, d.restSchedule) : d.restSchedule;
+  if (schedule.lines.length > MAX_INSTALLMENTS) throw new AppError('invalid_input', `A plan can have at most ${MAX_INSTALLMENTS} installments; kept and new installments together come to ${schedule.lines.length}`);
+  if (d.matchedCents > schedule.totalCents) throw new AppError('conflict', 'The new schedule total is less than what is already matched');
+  return schedule;
+}
+
+/** Pure. Advisory: the entered-total and rounding checks describe what was typed (the new rest); the balance check compares the whole plan with the bills. */
+export function revisionWarnings(d: { restSchedule: Schedule; schedule: Schedule; billsOpenCents: bigint | null; matchedCents: bigint }): PlanWarning[] {
+  return [
+    ...planWarnings({ schedule: d.restSchedule, openBalanceCents: null, matchedCents: 0n }),
+    ...planWarnings({ schedule: d.schedule, openBalanceCents: d.billsOpenCents, matchedCents: d.matchedCents }).filter((w) => w.code === 'bill_balance_mismatch'),
+  ];
+}
+
 // ---------- reads ----------
 
 const asOfDate = (v?: string) => {
@@ -254,6 +283,79 @@ export async function getPlanDetail(pool: Pool, actor: Actor, id: string, o: { a
     payments.listMatchableAllocations(pool, actor.householdId, billIds, current, MATCH_PICK_LIMIT + 1),
   ]);
   return { plan, bills, revisions, installments, matches, history, allocations: allocations.slice(0, MATCH_PICK_LIMIT), allocationsTruncated: allocations.length > MATCH_PICK_LIMIT, asOf };
+}
+
+// ---------- previews (read only) ----------
+
+/** What a form would save, worked out with the same pure functions as the write. Nothing is written, locked or audited. */
+export interface PlanPreview {
+  rows: Array<{ dueDate: string; amountCents: string; kept: boolean }>;
+  totalCents: string; count: number; keptCount: number; newCount: number; newCents: string;
+  warnings: PlanWarning[]; notes: string[];
+}
+
+function previewOf(schedule: Schedule, restSchedule: Schedule, warnings: PlanWarning[], notes: string[]): PlanPreview {
+  const fresh = schedule.lines.filter((l) => !l.keepFrom);
+  return {
+    rows: schedule.lines.map((l) => ({ dueDate: l.dueDate, amountCents: cents(l.amountCents), kept: l.keepFrom !== undefined })),
+    totalCents: cents(schedule.totalCents), count: schedule.lines.length, keptCount: schedule.lines.length - fresh.length, newCount: fresh.length,
+    newCents: cents(restSchedule.totalCents), warnings, notes,
+  };
+}
+
+/**
+ * The schedule creating a plan would save, from the same form fields (a `bill_<id>` tick per bill). An invalid schedule throws the
+ * same AppError the save would. Cash that would be matched on save is worked out read-only with the same fill, so the warnings agree.
+ */
+export async function previewNewPlan(pool: Pool, actor: Actor, raw: unknown): Promise<PlanPreview> {
+  authorize(actor, 'expenses:write');
+  const d = parse(createPlanPreviewSchema, raw);
+  const { billIds = [] } = (withBillChecks(raw) ?? {}) as { billIds?: string[] };
+  const schedule = buildSchedule(d);
+  const startedOn = d.startedOn ?? todayUtc();
+  if (startedOn > todayUtc()) throw new AppError('invalid_input', 'The plan start date cannot be in the future');
+  const notes: string[] = [];
+  let openBalanceCents: bigint | null = null;
+  let matchedCents = 0n;
+  const bills = billIds.length > 0 ? await expenseRepo.getBills(pool, actor.householdId, billIds) : [];
+  if (billIds.length === 0 || bills.length !== billIds.length) notes.push('Tick the bills the plan covers to compare the plan with what they owe.');
+  else {
+    openBalanceCents = sum(bills.map((b) => BigInt(b.openBalanceCents)));
+    if (d.matchExisting) {
+      const sources = (await payments.listUnmatchedAllocations(pool, actor.householdId, billIds)).filter((r) => r.paidOn >= startedOn)
+        .map((r) => ({ allocationId: r.allocationId, paymentId: r.paymentId, billId: r.billId, free: BigInt(r.netCents) - BigInt(r.matchedCents) }));
+      matchedCents = sum(fillInstallments(sources, schedule.lines.map((l, i) => ({ id: String(i), left: l.amountCents }))).map((f) => f.amount));
+      if (matchedCents > 0n) notes.push(`${formatCents(matchedCents)} of payments already applied to these bills would be matched to the earliest installments when the plan is created.`);
+    }
+  }
+  return previewOf(schedule, schedule, planWarnings({ schedule, matchedCents, openBalanceCents }), notes);
+}
+
+/**
+ * The schedule a revision would save for this plan, including kept paid installments (shown first, marked kept) and the refusals the
+ * save would make (total below what is matched, nothing left to restart, too many installments). Nothing is written.
+ */
+export async function previewPlanRevision(pool: Pool, actor: Actor, planId: string, raw: unknown): Promise<PlanPreview> {
+  authorize(actor, 'expenses:write');
+  const { reviseMode, ...rest } = parse(schedulePreviewSchema, raw);
+  const restSchedule = buildSchedule(rest);
+  const id = parse(schemas.id, planId);
+  const plan = await repo.getPlan(pool, actor.householdId, id, todayUtc());
+  if (!plan) throw new AppError('not_found');
+  if (plan.status !== 'active') throw new AppError('conflict', 'That plan was cancelled');
+  const cur = (await repo.currentRevision(pool, actor.householdId, id))!;
+  const matched = sum((await repo.currentMatchPairs(pool, actor.householdId, id)).map((p) => p.cents));
+  let kept: KeptInstallment[] = [];
+  let currentCount = 0;
+  if (reviseMode === 'keep_paid') {
+    const current = await repo.listInstallments(pool, actor.householdId, cur.id, todayUtc());
+    currentCount = current.length;
+    kept = keptInstallments(current);
+  }
+  const schedule = composeRevision({ restSchedule, kept, reviseMode, currentCount, matchedCents: matched });
+  const bills = await expenseRepo.getBills(pool, actor.householdId, await repo.planBillIds(pool, actor.householdId, id));
+  const warnings = revisionWarnings({ restSchedule, schedule, billsOpenCents: sum(bills.map((b) => BigInt(b.openBalanceCents))), matchedCents: matched });
+  return previewOf(schedule, restSchedule, warnings, []);
 }
 
 // ---------- writes ----------
@@ -415,25 +517,19 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
     const pairs = await repo.currentMatchPairs(tx, actor.householdId, planId);
     const matched = sum(pairs.map((p) => p.cents));
     // Fully paid installments are read under the lock, so what is kept is exactly what is paid when the revision is written.
-    let kept: Array<{ id: string; dueDate: string; amountCents: bigint }> = [];
+    let kept: KeptInstallment[] = [];
+    let currentCount = 0;
     if (reviseMode === 'keep_paid') {
       const current = await repo.listInstallments(tx, actor.householdId, cur.id, todayUtc());
-      kept = current.filter((i) => BigInt(i.unpaidCents) === 0n).map((i) => ({ id: i.id, dueDate: i.dueDate, amountCents: BigInt(i.amountCents) }));
-      if (kept.length === current.length) throw new AppError('conflict', 'Every installment is already paid, so there is nothing left to restart');
+      currentCount = current.length;
+      kept = keptInstallments(current);
     }
-    const schedule = kept.length > 0 ? keepPaidSchedule(kept, restSchedule) : restSchedule;
-    if (schedule.lines.length > MAX_INSTALLMENTS) throw new AppError('invalid_input', `A plan can have at most ${MAX_INSTALLMENTS} installments; kept and new installments together come to ${schedule.lines.length}`);
-    if (matched > schedule.totalCents) throw new AppError('conflict', 'The new schedule total is less than what is already matched');
+    const schedule = composeRevision({ restSchedule, kept, reviseMode, currentCount, matchedCents: matched });
     const installments = schedule.lines.map((l) => ({ id: randomUUID(), ...l }));
     const carried = carryMatches(pairs, installments);
     const keptCents = sum(kept.map((k) => k.amountCents));
-    // Advisory: the entered-total and rounding checks describe what was typed (the new rest); the balance check compares the whole plan with the bills.
     const planBills = await expenseRepo.getBills(tx, actor.householdId, await repo.planBillIds(tx, actor.householdId, planId));
-    const billsOpen = sum(planBills.map((b) => BigInt(b.openBalanceCents)));
-    const revisionWarnings = [
-      ...planWarnings({ schedule: restSchedule, openBalanceCents: null, matchedCents: 0n }),
-      ...planWarnings({ schedule, openBalanceCents: billsOpen, matchedCents: matched }).filter((w) => w.code === 'bill_balance_mismatch'),
-    ];
+    const revisionWarningList = revisionWarnings({ restSchedule, schedule, billsOpenCents: sum(planBills.map((b) => BigInt(b.openBalanceCents))), matchedCents: matched });
     const revisionNo = cur.revisionNo + 1;
     await repo.insertRevision(tx, {
       id: revisionId, householdId: actor.householdId, userId: actor.userId, planId, revisionNo, totalCents: schedule.totalCents, cadence: schedule.cadence, reason, installments,
@@ -454,7 +550,7 @@ export async function revisePlan(pool: Pool, actor: Actor, input: unknown, reque
         carriedMatchedCents: cents(matched), firstDueDate: installments[0]!.dueDate, lastDueDate: installments[installments.length - 1]!.dueDate,
         reviseMode, keptInstallmentCount: kept.length, keptCents: cents(keptCents), rescheduledCount: restSchedule.lines.length, rescheduledCents: cents(restSchedule.totalCents),
         inputMode: rest.inputMode, remainder: rest.remainder, expectedTotalCents: restSchedule.expectedTotalCents === null ? null : cents(restSchedule.expectedTotalCents), computedTotalCents: cents(restSchedule.totalCents),
-        warningCodes: revisionWarnings.map((w) => w.code).join(','),
+        warningCodes: revisionWarningList.map((w) => w.code).join(','),
       },
     });
     return { id: planId, replayed: false };
