@@ -878,6 +878,19 @@ try {
   assert.equal(await undoBanner.count(), 1);
   assert.match(await undoBanner.innerText(), /Payment removed/);
   await a11y('payments list with the undo banner');
+  // Layout regression: beside the sidebar the banner must sit directly above the page. Left to auto-placement in the body grid it took the
+  // 1fr row and pushed every page half way down the screen. Check several pages at desktop width.
+  for (const path of ['/payments', '/bills', '/visits', '/plans', '/payment-methods']) {
+    await page.goto(`${origin}${path}`);
+    const geometry = await page.evaluate(() => {
+      const banner = document.querySelector('aside.undo-bar').getBoundingClientRect();
+      const main = document.querySelector('main').getBoundingClientRect();
+      return { bannerBottom: banner.bottom, bannerHeight: banner.height, mainTop: main.top, viewport: window.innerHeight };
+    });
+    assert.ok(geometry.bannerHeight < 160, `undo banner is a slim bar on ${path}: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.mainTop >= geometry.bannerBottom - 1 && geometry.mainTop - geometry.bannerBottom < 80, `the page sits right under the undo banner on ${path}: ${JSON.stringify(geometry)}`);
+  }
+  await page.goto(`${origin}/payments`);
   assert.doesNotMatch(await text(), /UNDO-TEST-1/);
   assert.equal((await page.goto(undoPaymentUrl)).status(), 404, 'a removed payment is not found');
   await page.goto(`${origin}/payments`);
