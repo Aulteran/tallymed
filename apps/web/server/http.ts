@@ -971,6 +971,7 @@ export async function handleDocumentDownload(req: Request, ctx: AppContext, id: 
 // ---------- optional assistant: client credentials and proposal review ----------
 
 const proposalPage = (b: Record<string, unknown>) => (str(b.proposalId) ? `/proposals/${str(b.proposalId)}` : '/proposals');
+const planProposalPage = (b: Record<string, unknown>) => (str(b.proposalId) ? `/proposals/plans/${str(b.proposalId)}` : '/proposals');
 
 const createAssistantClient = route({
   name: 'assistant.clients.create',
@@ -1022,6 +1023,28 @@ const ASSISTANT_ROUTES = new Map<string, ReturnType<typeof route>>([
     async run({ ctx, actor, body, requestId, req }) {
       const r = await assistant.rejectProposal(ctx.pool, actor!, body, requestId);
       if (wantsHtml(req)) return { response: redirect(ctx.config, proposalPage(body)) };
+      return { json: { ok: true, ...r } };
+    },
+  })],
+  // A payment plan proposal is applied only here, by a signed-in person: the approval creates the plan and lands on its page.
+  ['proposals/plan-approve', route({
+    name: 'assistant.proposals.plan_approve',
+    session: true,
+    errorPath: planProposalPage,
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.approvePlanProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, `/plans/${r.planId}`) };
+      return { json: { ok: true, ...r }, status: r.replayed ? 200 : 201 };
+    },
+  })],
+  ['proposals/plan-reject', route({
+    name: 'assistant.proposals.plan_reject',
+    session: true,
+    errorPath: planProposalPage,
+    keepFields: ['reason'],
+    async run({ ctx, actor, body, requestId, req }) {
+      const r = await assistant.rejectPlanProposal(ctx.pool, actor!, body, requestId);
+      if (wantsHtml(req)) return { response: redirect(ctx.config, planProposalPage(body)) };
       return { json: { ok: true, ...r } };
     },
   })],

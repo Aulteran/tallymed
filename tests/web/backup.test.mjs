@@ -175,6 +175,14 @@ async function richFixture() {
     `insert into document_match_proposals (id, household_id, client_id, document_id, document_version_id, document_version_no, target_type, bill_id, target_version, rationale, confidence)
      values ($1, $2, $3, $4, $5, 2, 'bill', $6, 1, 'Same provider and statement date.', 'high')`,
     [randomUUID(), actor.householdId, client.id, doc.id, version, b.id]);
+  // A payment plan proposal that is still pending and one that was approved (it names the plan it created).
+  const planPayload = JSON.stringify({ name: 'Proposed plan', billIds: [a.id], startedOn: '2026-01-01', matchExisting: true, schedule: { mode: 'total', totalAmount: '300.00', installmentCount: 3, firstDueDate: '2026-06-01', cadence: 'monthly', remainder: 'earliest' } });
+  for (const id of [randomUUID(), randomUUID()]) {
+    await pool.query(`insert into plan_proposals (id, household_id, client_id, payload, bill_versions, note) values ($1, $2, $3, $4::jsonb, $5::jsonb, 'Three monthly installments.')`, [id, actor.householdId, client.id, planPayload, JSON.stringify({ [a.id]: 1 })]);
+    if (id !== undefined && (await pool.query(`select count(*)::int n from plan_proposals`)).rows[0].n === 2) {
+      await pool.query(`update plan_proposals set status = 'approved', decided_by = $2, decided_at = now(), plan_id = $3 where id = $1`, [id, actor.userId, plan.id]);
+    }
+  }
   await pool.query(`insert into server_settings (group_key, value, updated_by) values ('general', '{"sessionIdleSeconds": 1800}', $1), ('documents', '{"documentMaxMb": 12}', $1)`, [actor.userId]);
   await pool.query(`insert into server_settings (group_key, value, secret_ciphertext, updated_by) values ('email', '{"host": "smtp.example.test", "port": 587, "username": "mailer", "fromAddress": "tallymed@example.test"}', $2, $1)`, [actor.userId, SMTP_CIPHERTEXT]);
   await pool.query(`insert into server_settings (group_key, value, updated_by) values ('proxy', '{"trustedProxies": ["10.9.8.7"]}', $1)`, [actor.userId]);
@@ -331,7 +339,7 @@ test('a backup restores into an empty installation with every figure, document a
       const expected = t.name === 'server_settings' ? 2 : liveCounts[t.name];
       assert.equal(t.rows, expected, t.name);
     }
-    for (const name of ['payment_entries', 'payment_voids', 'installment_matches', 'plan_revisions', 'hsa_entries', 'hsa_eligibility_decisions', 'document_attachments', 'document_match_proposals', 'mcp_clients', 'bill_adjustments', 'idempotency_records']) {
+    for (const name of ['payment_entries', 'payment_voids', 'installment_matches', 'plan_revisions', 'hsa_entries', 'hsa_eligibility_decisions', 'document_attachments', 'document_match_proposals', 'plan_proposals', 'mcp_clients', 'bill_adjustments', 'idempotency_records']) {
       assert.ok(m.tables.find((t) => t.name === name).rows > 0, `${name} is exercised by the fixture`);
     }
     assert.equal(m.ledger.openBalanceCents, live.summary.openBalanceCents);

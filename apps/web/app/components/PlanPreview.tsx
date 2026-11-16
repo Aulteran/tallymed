@@ -66,7 +66,7 @@ const STATE_TEXT = { paid: 'paid by your payments', partial: 'partly paid', unpa
  * pay), and, when the plan was restructured, the kept installments, the total still to schedule, the new rest and the final plan total.
  * Nothing has been written when this is on screen.
  */
-export function ProgressPreviewPanel({ result }: { result: ProgressPreviewResult }) {
+export function ProgressPreviewPanel({ result, hint }: { result: ProgressPreviewResult; hint?: string }) {
   if ('error' in result) return <section className="card preview" aria-label="Preview of the plan"><h3>Preview</h3>
     <div className="error" role="alert"><p>This would not be saved: {result.error}</p>{result.lines && <ul>{result.lines.map((t) => <li key={t}>{t}</li>)}</ul>}</div></section>;
   const p = result.progress;
@@ -86,7 +86,7 @@ export function ProgressPreviewPanel({ result }: { result: ProgressPreviewResult
     </>}
     {!p.restructured && <p>Final plan total: <strong>{formatCents(p.plan.totalCents)}</strong>.</p>}
     {(p.plan.warnings.length > 0 || p.plan.notes.length > 0) && <ul>{[...p.plan.warnings.map(warningText), ...p.plan.notes].map((t) => <li key={t}>{t}</li>)}</ul>}
-    <p className="muted">Check it, then use the save button. Changing a field and pressing Preview again shows the new result.</p>
+    <p className="muted">{hint ?? 'Check it, then use the save button. Changing a field and pressing Preview again shows the new result.'}</p>
   </section>;
 }
 
