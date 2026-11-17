@@ -202,7 +202,8 @@ main.wide { max-width: 76rem; }
 @media (min-width: 64rem) { main { padding: var(--space-6) var(--space-6) var(--space-7); } }
 main > h1, main > .page-head { margin-bottom: var(--space-2); }
 /* A page header with its main action (for example "Add provider") at the top right. */
-.page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2) var(--space-4); }
+.page-head > h1 { margin-right: auto; }
 .page-action { margin: 0; }
 .page-action button, a.page-action { margin-top: 0; white-space: nowrap; }
 .page-action svg { width: 1.125rem; height: 1.125rem; flex: none; }
@@ -256,7 +257,7 @@ ul.rows li > a:first-child { flex: 1 1 12rem; font-weight: 500; }
 .metrics .muted { font-size: var(--text-xs); line-height: 1.4; }
 .metrics .card.accent { border-color: var(--line-strong); }
 .metrics .card.warn { border-color: var(--warn-line); }
-.metrics .card[role="note"] { border-color: var(--warn-line); }
+.metrics .card[role="note"] { border-left-width: 1px; border-color: var(--warn-line); }
 
 /* ---------- Overview ---------- */
 /* Three key figures, then the action list (only when something needs a person), then smaller secondary figures. */
@@ -288,7 +289,8 @@ ul.rows li > a:first-child { flex: 1 1 12rem; font-weight: 500; }
 .attention li > a { grid-column: 1; font-weight: 600; }
 .attention li > p { grid-column: 1; margin: 0; font-size: var(--text-sm); color: var(--fg-muted); }
 .attention li > .level { grid-column: 2; grid-row: 1 / span 2; }
-.attention-more { margin: 0; padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); font-size: var(--text-sm); }
+.attention ul.attention-more { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); font-size: var(--text-sm); }
+.attention .attention-more li { display: block; padding: 0; border: 0; }
 .level { display: inline-flex; align-items: center; gap: .4rem; padding: .1rem .6rem; border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 700; line-height: 1.6; white-space: nowrap; }
 .level::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
 .level-critical { background: var(--danger-soft); color: var(--danger-fg); }

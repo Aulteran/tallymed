@@ -60,8 +60,10 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <Link href={filter({ status: 'confirmed' })} className="key-figure primary">
           <span className="key-label">Confirmed open balance</span>
           <strong><Money cents={t.confirmedOpenBalanceCents} /></strong>
-          <span className="progress" aria-hidden="true"><span style={{ width: `${paidPct}%` }} /></span>
-          <span className="key-note">{paidPct}% paid of <Money cents={t.confirmedResponsibilityCents} /> confirmed responsibility</span>
+          {BigInt(t.confirmedResponsibilityCents) > 0n
+            ? <><span className="progress" aria-hidden="true"><span style={{ width: `${paidPct}%` }} /></span>
+              <span className="key-note">{paidPct}% paid of <Money cents={t.confirmedResponsibilityCents} /> confirmed responsibility</span></>
+            : <span className="key-note">No confirmed responsibility yet</span>}
         </Link>
         <Link href="/plans?state=upcoming" className="key-figure">
           <span className="key-label">Upcoming installments</span>
@@ -77,6 +79,10 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
       <NeedsAttention sources={{
         overdue: overdue.items, needsReview: hsaQueue.needsReview, unmatched,
         awaitingVisit: data!.awaitingVisit, estimates: data!.estimates, duplicates: data!.possibleDuplicates,
+      }} more={{
+        overdue: '/plans?state=overdue', needsReview: { href: hsaLink('needs_review'), total: Number(hsaTotals.needsReviewCount) },
+        unmatched: '/documents?unmatched=yes', awaitingVisit: { href: filter({ awaitingVisit: 'yes' }), total: Number(t.awaitingVisitCount) },
+        estimates: filter({ status: 'estimate' }), duplicates: filter({ duplicates: 'yes' }),
       }} />
       <div className="secondary-grid">
         <section className="card compact" aria-labelledby="sec-hsa">
