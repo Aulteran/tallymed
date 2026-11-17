@@ -38,7 +38,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
       <input id="sessionIdleMinutes" name="sessionIdleMinutes" type="number" min={5} max={10080} defaultValue={q.sessionIdleMinutes ?? m(g.sessionIdleSeconds)} placeholder={m(def.sessionIdleSeconds)} />
       <label htmlFor="invitationMinutes">Invitation links expire after (minutes)</label>
       <input id="invitationMinutes" name="invitationMinutes" type="number" min={5} max={20160} defaultValue={q.invitationMinutes ?? m(g.invitationSeconds)} placeholder={m(def.invitationSeconds)} />
-      <p className="muted">Current: sessions {m(c.sessionAbsoluteSeconds)} minutes at most, {m(c.sessionIdleSeconds)} minutes idle; invitations {m(c.invitationSeconds)} minutes. Existing sessions keep the length they were issued with; the inactivity limit applies at once.</p>
+      <p className="muted">Current: sessions {m(c.sessionAbsoluteSeconds)} minutes at most, {m(c.sessionIdleSeconds)} minutes idle; invitations {m(c.invitationSeconds)} minutes. Existing sessions keep the length they were issued with; the inactivity limit applies at once. Sessions started with Keep me signed in follow the server environment limits instead (30 days, 14 idle days by default; set <code>TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS=0</code> to turn the option off), and are not shortened by these two values.</p>
       <ConfirmPassword id="general-pw" />
       <button type="submit">Save general settings</button>
     </form>

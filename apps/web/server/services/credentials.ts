@@ -163,7 +163,7 @@ export async function changePassword(
   const passwordHash = await hashPassword(data.newPassword);
   const token = newToken();
   // A session that was kept signed in stays so after a normal change; the restricted session of a temporary password never was.
-  const remember = actor.remember && !forced;
+  const remember = actor.remember && !forced && config.rememberSessionAbsoluteSeconds > 0;
   const expiresAt = new Date(Date.now() + (remember ? config.rememberSessionAbsoluteSeconds : config.sessionAbsoluteSeconds) * 1000);
   return withTransaction(pool, async (tx) => {
     const locked = await findUserInHousehold(tx, actor.householdId, actor.userId, true);

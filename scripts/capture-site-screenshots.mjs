@@ -148,23 +148,16 @@ try {
     await page.waitForURL(planUrl);
   }
 
-  // HSA: decide eligibility on three payments, claim one, and record a partial reimbursement.
+  // HSA: claim one payment, and record a partial reimbursement.
   await page.goto(`${origin}/hsa`);
   const hrefs = await page.locator('a[href^="/hsa/allocations/"]').evaluateAll((els) => [...new Set(els.map((e) => e.getAttribute('href')))]);
   assert.ok(hrefs.length >= 3, `expected HSA payments, found ${hrefs.length}`);
   let claimed = false;
   for (const href of hrefs) {
     await page.goto(`${origin}/hsa`);
-    // The first money cell of the payment's row is its net cash; the whole amount is decided eligible.
+    // The first money cell of the payment's row is its net cash; payments are eligible by default, so the whole amount can be claimed.
     const netCash = (await page.locator(`tr:has(a[href="${href}"]) td`).nth(2).innerText()).replace(/[$,]/g, '').trim();
     await page.goto(`${origin}${href}`);
-    await page.selectOption('#status', 'eligible');
-    await page.fill('#eligibleAmount', netCash);
-    await page.fill('#rationale', 'Qualified medical expense');
-    await page.selectOption('#evidenceType', 'receipt');
-    await page.fill('#evidenceNote', 'Receipt on file');
-    await page.click('form[action="/api/expenses/hsa/decide"] button[type=submit]');
-    await page.waitForURL(`${origin}${href}`);
     if (!claimed) {
       claimed = true;
       await page.fill('form[action="/api/expenses/hsa/claim"] #amount', netCash);

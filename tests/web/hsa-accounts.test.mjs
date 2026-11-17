@@ -153,11 +153,11 @@ test('paying with an HSA card records a direct payment: nothing to claim, decide
     assert.deepEqual([ordFigs.directHsa, ordFigs.availableCents], [false, '1000']);
 
     const totals = await hsa.hsaSummary(t.db.pool, t.actor, {});
-    assert.deepEqual([totals.directCount, totals.paidDirectlyCents, totals.undecidedCount, totals.availableCents, totals.eligibleCents], [1, '10000', 0, '1000', '1000']);
+    assert.deepEqual([totals.directCount, totals.paidDirectlyCents, totals.availableCents, totals.eligibleCents], [1, '10000', '1000', '1000']);
     const contract = (await listHsaFigures(t.db.pool, t.actor)).items.find((x) => x.allocationId === da);
     assert.deepEqual([contract.directHsa, contract.availableCents], [true, '0']);
-    // The undecided queue never asks for a decision on a direct payment.
-    assert.equal((await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'undecided' })).items.length, 0);
+    // A direct payment is never eligible: its ceiling stays zero although a payment with no decision is eligible by default.
+    assert.ok(!(await hsa.listHsaAllocations(t.db.pool, t.actor, { state: 'eligible' })).items.some((r) => r.allocationId === da));
 
     // A refund of a direct payment returns cash to the HSA: net cash falls, and the account figures follow the cash summary.
     await t.refund(direct.id, { allocationId: da, amount: '25.00' });
@@ -293,7 +293,12 @@ test('existing HSA figures are unchanged for ordinary payments: the new view equ
     const cols = 'allocation_id, net_cents, decision_status, ceiling_cents, pending_cents, received_cents, available_cents, needs_review_cents';
     const oldRows = (await t.db.pool.query(OLD)).rows.filter((r) => r.allocation_id !== dAl);
     const newRows = (await t.db.pool.query(`select ${cols} from hsa_allocation_status where not direct_hsa order by allocation_id`)).rows;
-    assert.deepEqual(newRows, oldRows, 'every ordinary allocation reads exactly as before');
+    // By design (0022) an allocation with no decision is eligible for its whole net cash instead of zero; every allocation that has a decision reads exactly as before.
+    const decided = (r) => r.decision_status !== null;
+    assert.deepEqual(newRows.filter(decided), oldRows.filter(decided), 'every decided ordinary allocation reads exactly as before');
+    const undecidedRows = newRows.filter((r) => !decided(r));
+    assert.ok(undecidedRows.length >= 1);
+    for (const r of undecidedRows) assert.deepEqual([r.ceiling_cents, r.available_cents], [r.net_cents, r.net_cents], 'no decision: eligible for the whole net cash');
     assert.ok(newRows.some((r) => BigInt(r.needs_review_cents) > 0n), 'the fixture includes a needs-review case');
     const d = (await t.db.pool.query(`select net_cents, available_cents, needs_review_cents, ceiling_cents from hsa_allocation_status where allocation_id = $1`, [dAl])).rows[0];
     assert.deepEqual(d, { net_cents: '2500', available_cents: '0', needs_review_cents: '0', ceiling_cents: '0' });
@@ -385,10 +390,11 @@ test('a partly applied direct payment: the HSA card counts what was applied, the
     assert.deepEqual([totals.directCount, totals.paidDirectlyCents], [1, '6000'], 'the HSA page counts cash applied to bills');
     assert.equal((await acc.listHsaAccounts(t.db.pool, t.actor)).items[0].netCashCents, '10000', 'the account counts the whole payment');
     assert.equal((await t.payment(direct.id)).payment.unappliedCents, '4000');
-    // The export marks the row instead of calling it undecided.
+    // The export marks the row as paid directly.
     const out = await hsa.exportHsa(t.db.pool, t.actor, { kind: 'allocations' }, 'r');
     assert.match(out.csv, /paid_directly_from_hsa/);
     assert.doesNotMatch(out.csv, /,unknown,/);
+    assert.match(out.csv.split('\n')[0], /payment_marked_ineligible/);
     // Dotted or slashed account-number-like labels are refused too (best effort; another separator would pass).
     for (const name of ['1234.5678.9012', '1234/5678/9012', '1234_5678_9012']) await assert.rejects(account(t, { name }), code('invalid_input'));
   } finally { await t.db.drop(); }

@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'HSA · TallyMed' };
 
 const STATES: Array<[string, string]> = [
-  ['', 'All payments'], ['undecided', 'Not decided yet'], ['eligible', 'Eligible'], ['available', 'Available to claim'], ['pending', 'Has pending claims'], ['received', 'Has reimbursements received'],
+  ['', 'All payments'], ['eligible', 'Eligible'], ['available', 'Available to claim'], ['pending', 'Has pending claims'], ['received', 'Has reimbursements received'],
   ['needs_review', 'Needs review'], ['ineligible', 'Ineligible'],
 ];
 
@@ -72,7 +72,7 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
       <p className="muted">Paid directly and net cash count whole payments made with this account's cards, whether or not they are applied to bills, and ignore the filters below; the "Paid directly from HSA" total further down counts only cash applied to bills in the filtered view. Net cash follows the cash summary: refunds are subtracted and voided payments count zero. <Link href={archivedToggle}>{showArchived ? 'Hide archived accounts' : 'Show archived accounts'}</Link></p>
     </section>
     <h2>Reimbursements</h2>
-    <p className="muted">Eligibility is your decision, with a reason and evidence. Claims reserve amounts and receipts reconcile to specific payments. Received reimbursements are not household cash and never change a provider balance. TallyMed does not submit claims to an administrator or decide tax treatment.</p>
+    <p className="muted">Payments are eligible for HSA reimbursement unless marked ineligible when the payment is recorded. Claims reserve amounts and receipts reconcile to specific payments. Received reimbursements are not household cash and never change a provider balance. TallyMed does not submit claims to an administrator or decide tax treatment.</p>
     <form method="get" className="card row" role="search" aria-label="Filters">
       <div><label htmlFor="memberId">Family member</label><select id="memberId" name="memberId" defaultValue={p.memberId ?? ''}><Options items={opt(members)} blank="Everyone" /></select></div>
       <div><label htmlFor="providerId">Provider</label><select id="providerId" name="providerId" defaultValue={p.providerId ?? ''}><Options items={opt(providers)} blank="All providers" /></select></div>
@@ -82,19 +82,18 @@ export default async function HsaPage({ searchParams }: { searchParams: SearchPa
       <div>{showArchived && <input type="hidden" name="accountsArchived" value="yes" />}<button type="submit">Filter</button> <Link href="/hsa">Clear</Link></div>
     </form>
     {t && <section className="metrics" aria-label="HSA totals">
-      <Link href={link('eligible')}><div className="card"><span>Eligible</span><strong><Money cents={t.eligibleCents} /></strong><span className="muted">Confirmed eligible net cash, {t.allocationCount} payments</span></div></Link>
+      <Link href={link('eligible')}><div className="card"><span>Eligible</span><strong><Money cents={t.eligibleCents} /></strong><span className="muted">Eligible net cash, {t.allocationCount} payments</span></div></Link>
       <Link href={link('available')}><div className="card accent"><span>Available</span><strong><Money cents={t.availableCents} /></strong><span className="muted">Eligible less pending and received</span></div></Link>
       <Link href={link('pending')}><div className="card"><span>Pending</span><strong><Money cents={t.pendingCents} /></strong><span className="muted">Reserved by claims not yet paid</span></div></Link>
       <Link href={link('received')}><div className="card"><span>Received</span><strong><Money cents={t.receivedCents} /></strong><span className="muted">Reimbursements, less reversals</span></div></Link>
       <Link href={link('needs_review')}><div className={BigInt(t.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>Needs review</span><strong><Money cents={t.needsReviewCents} /></strong><span className="muted">{t.needsReviewCount} {Number(t.needsReviewCount) === 1 ? 'payment above its ceiling' : 'payments above their ceiling'}</span></div></Link>
       {t.directCount > 0 && <div className="card"><span>Paid directly from HSA</span><strong><Money cents={t.paidDirectlyCents} /></strong><span className="muted">Applied to bills, {t.directCount} {t.directCount === 1 ? 'allocation' : 'allocations'}; made with an HSA card, nothing to claim</span></div>}
-      <Link href={link('undecided')}><div className="card"><span>Not decided yet</span><strong>{t.undecidedCount}</strong><span className="muted">Payments with no eligibility decision</span></div></Link>
     </section>}
-    {list.data.items.length === 0 ? <Empty>No payments match. Record a payment and apply it to a bill first, then decide its eligibility here.</Empty> : <table className="stack">
-      <caption className="muted">One row per payment allocation. Open a row to decide eligibility, claim or record a reimbursement.</caption>
-      <thead><tr><th>Payment</th><th>Decision</th><th className="num">Net cash</th><th className="num">Ceiling</th><th className="num">Pending</th><th className="num">Received</th><th className="num">Available</th><th className="num">Needs review</th></tr></thead>
+    {list.data.items.length === 0 ? <Empty>No payments match. Record a payment and apply it to a bill first.</Empty> : <table className="stack">
+      <caption className="muted">One row per payment allocation. Open a row to claim or record a reimbursement.</caption>
+      <thead><tr><th>Payment</th><th>Status</th><th className="num">Net cash</th><th className="num">Ceiling</th><th className="num">Pending</th><th className="num">Received</th><th className="num">Available</th><th className="num">Needs review</th></tr></thead>
       <tbody>{list.data.items.map((a) => <tr key={a.allocationId}>
-        <td data-label="Payment"><AllocationLink a={a} /></td><td data-label="Decision"><DecisionPill a={a} /></td>
+        <td data-label="Payment"><AllocationLink a={a} /></td><td data-label="Status"><DecisionPill a={a} /></td>
         <td data-label="Net cash" className="num"><Money cents={a.netCents} /></td><td data-label="Ceiling" className="num"><Money cents={a.ceilingCents} /></td>
         <td data-label="Pending" className="num"><Money cents={a.pendingCents} /></td><td data-label="Received" className="num"><Money cents={a.receivedCents} /></td>
         <td data-label="Available" className="num"><Money cents={a.availableCents} /></td><td data-label="Needs review" className="num"><Money cents={a.needsReviewCents} /></td>

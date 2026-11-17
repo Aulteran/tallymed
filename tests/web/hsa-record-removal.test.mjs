@@ -24,7 +24,6 @@ const code = (c) => ({ code: c });
 const REASON = 'Fabricated entry made twice';
 const NOTE = 'Fabricated pharmacy receipt note';
 const RATIONALE = 'Fabricated rationale about a prescription';
-const MSG_DECISION = 'Deleting this decision would leave more reimbursement than it supports; delete or release the claims first';
 
 /** Fixture: a member, a provider and helpers that build allocations, decisions, claims and receipts, plus the removal actions. */
 async function fixture() {
@@ -117,8 +116,8 @@ test('the full flow: receipt, claim, decision in that order, then the payment; u
     assert.deepEqual(figsOf(await t.figs(id)), ['6000', '3000', '2000', '1000', '0']);
     const full = await snap(t);
 
-    // Out of order: the decision supports pending cash, the claim has a live reimbursement. Nothing is written by a refusal.
-    await assert.rejects(rm(t, 'decision', d.id), (e) => e.code === 'conflict' && e.message === MSG_DECISION);
+    // Out of order: the claim has a live reimbursement. Nothing is written by a refusal. (A decision never supports cash since default-eligible:
+    // without it the whole net cash is eligible, so deleting one is always allowed.)
     await assert.rejects(rm(t, 'claim', c.id), (e) => e.code === 'conflict' && /^Delete its reimbursements first/.test(e.message));
     await assert.rejects(pay.removePayment(t.db.pool, t.actor, { idempotencyKey: randomUUID(), paymentId: a.paymentId, reason: REASON }, 'r'), /HSA claims/);
     assert.equal(await t.count('hsa_removal_events'), 0);
@@ -126,10 +125,10 @@ test('the full flow: receipt, claim, decision in that order, then the payment; u
 
     // The deletable helpers (the UI shows the reason instead of failing) agree with those refusals; operators get null.
     const detail = await hsa.getHsaAllocationDetail(t.db.pool, t.actor, id);
-    assert.deepEqual(detail.decisions[0].deletable, { deletable: false, reason: MSG_DECISION });
+    assert.deepEqual(detail.decisions[0].deletable, { deletable: true, reason: null });
     assert.deepEqual((await hsa.getHsaClaimDetail(t.db.pool, t.actor, c.id)).deletable, { deletable: false, reason: 'Delete its reimbursements first' });
     assert.deepEqual((await hsa.getHsaReceiptDetail(t.db.pool, t.actor, r.id)).deletable, { deletable: true, reason: null });
-    assert.deepEqual(await hsa.hsaRecordDeletable(t.db.pool, t.actor, 'decision', d.id), { deletable: false, reason: MSG_DECISION });
+    assert.deepEqual(await hsa.hsaRecordDeletable(t.db.pool, t.actor, 'decision', d.id), { deletable: true, reason: null });
     assert.deepEqual(await hsa.hsaRecordDeletable(t.db.pool, t.actor, 'claim', c.id), { deletable: false, reason: 'Delete its reimbursements first' });
     const { operator } = await people(t);
     assert.equal((await hsa.getHsaAllocationDetail(t.db.pool, operator, id)).decisions[0].deletable, null);
@@ -171,7 +170,7 @@ test('the full flow: receipt, claim, decision in that order, then the payment; u
     await rm(t, 'claim', c.id);
     assert.deepEqual(await hsa.hsaRecordDeletable(t.db.pool, t.actor, 'decision', d.id), { deletable: true, reason: null });
     await rm(t, 'decision', d.id);
-    assert.deepEqual(figsOf(await t.figs(id)), ['0', '0', '0', '0', '0']);
+    assert.deepEqual(figsOf(await t.figs(id)), ['7500', '0', '0', '7500', '0'], 'with no live decision the whole net cash (75.00) is eligible');
     const s3 = await snap(t);
     assert.equal((await hsa.getHsaAllocationDetail(t.db.pool, t.actor, id)).decisions.length, 0);
     assert.equal((await t.figs(id)).decisionStatus, null);
@@ -355,7 +354,7 @@ test('a stale slot payload or a record that is no longer removed is "Nothing to 
   } finally { await t.db.drop(); }
 });
 
-test('the not-worse-than-before rule from the service side: on an allocation that needs review, deleting a claim that reduces the excess works, deleting the decision is refused', { skip: skipDb }, async () => {
+test('the not-worse-than-before rule from the service side: on an allocation that needs review, deleting a claim that reduces the excess works, deleting the decision keeps the excess but its undo is refused', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
     const a = await t.alloc();
@@ -367,10 +366,20 @@ test('the not-worse-than-before rule from the service side: on an allocation tha
     const [al] = (await t.payment(a.paymentId)).allocations;
     await t.refund(a.paymentId, { allocationId: al.allocationId, amount: '40.00' });
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '5000', '0', '0', '1500']);
+    // The decision does not set the ceiling here (the net cash, 35.00, is lower than its 60.00), and without it the ceiling is that same net cash,
+    // so deleting it keeps the excess at 15.00 and is allowed.
     const decisionRow = (await hsa.getHsaAllocationDetail(t.db.pool, t.actor, a.allocationId)).decisions[0];
-    assert.deepEqual(decisionRow.deletable, { deletable: false, reason: MSG_DECISION });
+    assert.deepEqual(decisionRow.deletable, { deletable: true, reason: null });
     assert.equal((await hsa.getHsaClaimDetail(t.db.pool, t.actor, c2.id)).deletable.deletable, true);
-    await assert.rejects(rm(t, 'decision', d.id), (e) => e.code === 'conflict' && e.message === MSG_DECISION);
+    await rm(t, 'decision', d.id);
+    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '5000', '0', '0', '1500']);
+    await rm(t, 'decision', d.id).then(() => assert.fail('already deleted'), (e) => assert.equal(e.code, 'conflict'));
+    // A restore stays strict: it may not leave an excess, and 50.00 pending is above the 35.00 the decision would allow.
+    await undoIt(t).then(() => assert.fail('restoring would leave the excess'), (e) => {
+      assert.equal(e.code, 'conflict');
+      assert.match(e.message, /^Undoing this deletion would put pending plus received reimbursement above what the payment.s eligible amount supports, so this deletion cannot be undone\. Enter the record again instead/);
+    });
+    assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '5000', '0', '0', '1500'], 'the refused undo changed nothing');
     // Deleting the $20 claim reduces the excess to zero: allowed, and the undo is refused until the ceiling can carry it again.
     await rm(t, 'claim', c2.id);
     assert.deepEqual(figsOf(await t.figs(a.allocationId)), ['3500', '3000', '0', '500', '0']);
@@ -447,10 +456,12 @@ test('concurrency: a removal races a new receipt, claim or decision on the same 
         results = settled(await Promise.allSettled([rm(t, 'claim', c.id), t.receipt([{ lineId: line.lineId, amount: '10.00' }])]));
         assert.ok(!(results[0] === 'fulfilled' && results[1] === 'fulfilled'), 'a claim cannot be deleted with a live reimbursement');
       } else if (i % 3 === 1) {
-        // Removing the decision vs a new claim: both cannot succeed (the decision supports the new claim; the removal needs no pending).
+        // Removing the decision vs a new claim of 70.00 (above the decision's 60.00, within the 75.00 net cash): the removal always works (a decision never
+        // supports cash under the default-eligible rule); the claim fits only when the removal commits first, and never leaves an excess either way.
         await hsa.releaseClaimLine(t.db.pool, t.actor, { idempotencyKey: randomUUID(), lineId: line.lineId, kind: 'cancel', effectiveDate: '2026-04-25', reason: 'Fabricated cancel' }, 'r');
-        results = settled(await Promise.allSettled([rm(t, 'decision', d.id), t.claim([{ allocationId: a.allocationId, amount: '10.00' }], { reference: `RACE-B-${i}` })]));
-        assert.ok(!(results[0] === 'fulfilled' && results[1] === 'fulfilled'), 'a removed decision cannot also back a new claim');
+        results = settled(await Promise.allSettled([rm(t, 'decision', d.id), t.claim([{ allocationId: a.allocationId, amount: '70.00' }], { reference: `RACE-B-${i}` })]));
+        assert.equal(results[0], 'fulfilled', 'removing a decision is never refused');
+        assert.equal((await t.figs(a.allocationId)).pendingCents, results[1] === 'fulfilled' ? '7000' : '0');
       } else {
         // Removing a claim vs recording a newer decision: unrelated writers do not exclude each other.
         const cur = await t.figs(a.allocationId);

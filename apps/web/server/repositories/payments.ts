@@ -13,6 +13,8 @@ export interface Payment {
   paidWithId: string | null; paidWithName: string | null; paidWithLastFour: string | null; paidWithArchived: boolean;
   /** Set when the payment was paid directly from an HSA at the point of service (see docs/contracts.md). */
   hsaAccountId: string | null; hsaAccountName: string | null;
+  /** Recorded as ineligible for HSA when the payment was created (payment_hsa_ineligible). Nothing on it can be claimed; it is never changed afterwards. */
+  hsaIneligible: boolean;
   /** Net cash applied to bills (allocations less reversals and net refunds). */
   appliedCents: string;
   /** Cash returned to the household (refunds less refund reversals). */
@@ -44,7 +46,8 @@ export const PAYMENT_FROM = `${PAYMENT_FROM_ANY}
 const PAYMENT_COLS = `p.id, p.paid_on::text as "paidOn", p.amount_cents::text as "amountCents", p.method, p.reference, p.note,
   u.display_name as "createdByName", p.created_at as "createdAt", (v.payment_id is not null) as voided, payment_is_removed(p.id) as removed, v.reason as "voidReason",
   v.voided_on::text as "voidedOn", cur.method_id as "paidWithId", pm.nickname as "paidWithName", pm.last_four as "paidWithLastFour",
-  (pm.archived_at is not null) as "paidWithArchived", hf.hsa_account_id as "hsaAccountId", ha.name as "hsaAccountName", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
+  (pm.archived_at is not null) as "paidWithArchived", hf.hsa_account_id as "hsaAccountId", ha.name as "hsaAccountName",
+  exists (select 1 from payment_hsa_ineligible hi where hi.household_id = p.household_id and hi.payment_id = p.id) as "hsaIneligible", c.applied::text as "appliedCents", c.refunded::text as "refundedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded - c.applied else 0 end)::text as "unappliedCents",
   (case when v.payment_id is null then p.amount_cents - c.refunded else 0 end)::text as "netCashCents"`;
 
@@ -302,4 +305,9 @@ export async function listPayableBills(db: Queryable, householdId: string, o: { 
      where x.is_current or (x."openBalanceCents"::bigint > 0 and ${search})
      order by x.is_current desc, x."statementDate" desc, x.id desc limit $${params.push(o.limit)}`, params);
   return rows.map(({ id, label, statementDate, openBalanceCents, providerId, provider_name }) => ({ id, label, statementDate, openBalanceCents, providerId, providerName: provider_name }));
+}
+
+/** Marks a payment ineligible for HSA. Only the service that creates the payment calls this, in the same transaction; the row is never changed. */
+export async function insertHsaIneligible(db: Queryable, v: { householdId: string; userId: string; paymentId: string }): Promise<void> {
+  await db.query(`insert into payment_hsa_ineligible (payment_id, household_id, created_by) values ($1, $2, $3)`, [v.paymentId, v.householdId, v.userId]);
 }

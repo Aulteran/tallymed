@@ -37,8 +37,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             <input id="email" name="email" type="email" autoComplete="username" required maxLength={254} />
             <label htmlFor="password">Password</label>
             <input id="password" name="password" type="password" autoComplete="current-password" required maxLength={128} />
-            <label><input type="checkbox" name="remember" value="on" /> Keep me signed in</label>
-            <p className="muted">Stays signed in on this browser for up to {Math.round(ctx.config.rememberSessionAbsoluteSeconds / 86400)} days. Do not use it on a shared computer. If you have set a PIN, the screen still locks when you step away.</p>
+            {ctx.config.rememberSessionAbsoluteSeconds > 0 && <>
+              <label><input type="checkbox" name="remember" value="on" /> Keep me signed in</label>
+              <p className="muted">Stays signed in on this browser for up to {Math.max(1, Math.round(ctx.config.rememberSessionAbsoluteSeconds / 86400))} days. Do not use it on a shared computer. If you have set a PIN, the screen still locks when you step away.</p>
+            </>}
             <button type="submit" className={signin.oidcLabel ? 'secondary' : undefined}>Sign in</button>
             <p className="muted">Forgot your password?</p>
             <a className="button secondary" href="/password/forgot">Reset password</a>

@@ -160,7 +160,7 @@ test('upgrade: a database populated at 0018 (decisions, a claim, a partial and a
     assert.equal(before.status.filter((r) => r.direct_hsa).length, 1);
     assert.deepEqual(before.counts, { hsa_eligibility_decisions: 3, hsa_claims: 2, hsa_receipts: 3, hsa_entries: 5 });
 
-    assert.deepEqual(await migrate(db.pool), ['0019', '0020', '0021']);
+    assert.deepEqual(await migrate(db.pool, { upTo: '0020' }), ['0019', '0020']);
     const after = { status: await allStatus(db.pool), ledger: await ledgerSummary(db.pool) };
     assert.equal(after.ledger.removedHsaRecords, '0');
     delete after.ledger.removedHsaRecords;
@@ -185,6 +185,13 @@ test('upgrade: a database populated at 0018 (decisions, a claim, a partial and a
     // Removal events are empty and the old payment-removal blockers are unchanged (HSA records block removing a payment).
     assert.equal(await eventCount({ db }), 0);
     assert.deepEqual(await payRepo.removalBlockers(db.pool, x.h, x.p1), { refunds: true, hsa: true });
+    // Then 0022 (default-eligible, built on this migration): every allocation here has a decision or is paid directly, so no figure moves;
+    // the only difference is the trailing marked_ineligible column, false everywhere.
+    assert.deepEqual(await migrate(db.pool), ['0021', '0022']);
+    const last = await allStatus(db.pool);
+    assert.deepEqual(last.map(({ marked_ineligible, ...r }) => r), before.status);
+    assert.ok(last.every((r) => r.marked_ineligible === false));
+    assert.deepEqual(await ledgerViolations(db.pool), []);
   } finally { await db.drop(); }
 });
 
@@ -197,7 +204,11 @@ test('removal events are immutable, alternate per record, name a record of their
     const d = await t.decide(a.allocationId, 'eligible', '60.00');
     const c = await t.claim([{ allocationId: a.allocationId, amount: '20.00' }]);
     assert.equal((await one(t.db.pool, `select hsa_record_removed('decision', $1) as v`, [d.id])).v, false);
-    await remove(t, 'decision', d.id).then(() => assert.fail('a decision supporting pending cash must not be removable'), (e) => assert.match(e.message, /increase the excess above the eligible ceiling/));
+    // Default-eligible (0022): a removed decision falls back to the whole net cash, so removing one never lowers the ceiling and is allowed; the restore returns the decision's own (lower) ceiling.
+    await remove(t, 'decision', d.id);
+    assert.deepEqual(figs(await status(t, a.allocationId)), ['10000', '2000', '0', '8000', '0']);
+    await restore(t, 'decision', d.id);
+    assert.deepEqual(figs(await status(t, a.allocationId)), ['6000', '2000', '0', '4000', '0']);
     // Alternation: a restore of a live record and a second removal are refused, and nothing is left behind.
     await assert.rejects(restore(t, 'claim', c.id), /is not removed/);
     await remove(t, 'claim', c.id);
@@ -210,7 +221,7 @@ test('removal events are immutable, alternate per record, name a record of their
     await assert.rejects(inTx(t.db.pool, (cl) => event(t, cl, 'claim', c.id, 'restore', t.actor.userId, other)), /unknown HSA record/);
     await restore(t, 'claim', c.id);
     assert.deepEqual((await t.db.pool.query(`select action from hsa_removal_events where record_id = $1 order by seq`, [c.id])).rows.map((r) => r.action), ['remove', 'restore']);
-    assert.equal(await eventCount(t), 2);
+    assert.equal(await eventCount(t), 4);
     for (const sql of [`update hsa_removal_events set reason = 'x'`, `delete from hsa_removal_events`, `truncate hsa_removal_events`]) {
       await assert.rejects(t.db.pool.query(sql), /append-only|immutable|cannot/i, sql);
     }
@@ -283,7 +294,7 @@ test('leaf-first: a claim with a live receipt cannot be removed; receipt, then c
 
     await assert.rejects(remove(t, 'claim', c.id), /live reimbursement cannot be removed/);
     assert.equal(await eventCount(t), 0, 'a refused removal leaves no event');
-    await assert.rejects(remove(t, 'decision', d.id), /increase the excess above the eligible ceiling/);
+    // A decision never supports cash any more (the default ceiling is the whole net cash), so the leaf-first rule applies to claims and receipts only.
 
     await remove(t, 'receipt', r.id);
     await remove(t, 'claim', c.id);
@@ -293,7 +304,7 @@ test('leaf-first: a claim with a live receipt cannot be removed; receipt, then c
     assert.deepEqual(await hsaRepo.linesOfAllocation(t.db.pool, t.actor.householdId, a.allocationId), []);
     assert.equal((await one(t.db.pool, `select count(*)::int n from hsa_live_entries`)).n, 0);
     await remove(t, 'decision', d.id);
-    assert.deepEqual(figs(await status(t, a.allocationId)), ['0', '0', '0', '0', '0']);
+    assert.deepEqual(figs(await status(t, a.allocationId)), ['10000', '0', '0', '10000', '0'], 'with no live decision the whole net cash is eligible (the default)');
     assert.equal((await status(t, a.allocationId)).decision_count, 0);
     assert.equal((await status(t, a.allocationId)).decision_id, null);
     assert.deepEqual(await hsaRepo.listDecisions(t.db.pool, t.actor.householdId, a.allocationId), []);
@@ -302,19 +313,18 @@ test('leaf-first: a claim with a live receipt cannot be removed; receipt, then c
     // With every HSA record removed the allocation has no HSA history, and the payment can be removed.
     assert.deepEqual(await payRepo.removalBlockers(t.db.pool, t.actor.householdId, a.paymentId), { refunds: false, hsa: false });
 
-    // Restoring: the receipt cannot come back before its claim, and the claim needs a live decision to stay under the ceiling.
+    // Restoring: the receipt cannot come back before its claim; the claim fits under the default ceiling without any decision.
     await assert.rejects(restore(t, 'receipt', r.id), /while its claim is removed/);
-    await assert.rejects(restore(t, 'claim', c.id), /exceed the eligible ceiling/);
-    await restore(t, 'decision', d.id);
     await restore(t, 'claim', c.id);
     await restore(t, 'receipt', r.id);
+    await restore(t, 'decision', d.id);
     assert.deepEqual(await status(t, a.allocationId), before, 'exact inverse after all three restores');
     assert.equal((await ledgerSummary(t.db.pool)).removedHsaRecords, '0');
     assert.deepEqual(await ledgerViolations(t.db.pool), []);
   } finally { await t.db.drop(); }
 });
 
-test('removing a decision that supports cash is refused, and restoring a decision above what is pending is refused (ceiling)', { skip: skipDb }, async () => {
+test('removing a decision never lowers the ceiling, and restoring a decision above what is pending is refused (ceiling)', { skip: skipDb }, async () => {
   const t = await fixture();
   try {
     const a = await t.alloc();
@@ -328,11 +338,14 @@ test('removing a decision that supports cash is refused, and restoring a decisio
     const c = await t.claim([{ allocationId: a.allocationId, amount: '90.00' }]);
     // The restore would put the ceiling at 80.00 below the 90.00 pending.
     await assert.rejects(restore(t, 'decision', d2.id), /exceed the eligible ceiling \(allocation [0-9a-f-]+, ceiling 8000, pending 9000, received 0\)/);
-    // Removing the only decision that supports the pending cash is refused as well.
-    await assert.rejects(remove(t, 'decision', d1.id), /increase the excess above the eligible ceiling \(allocation [0-9a-f-]+, ceiling 0, pending 9000/);
+    // Removing the only live decision is allowed: with none the whole net cash (100.00) is eligible, so the 90.00 pending stays supported.
+    await remove(t, 'decision', d1.id);
+    assert.deepEqual(figs(await status(t, a.allocationId)), ['10000', '9000', '0', '1000', '0']);
     await remove(t, 'claim', c.id);
     await restore(t, 'decision', d2.id);
     assert.deepEqual(figs(await status(t, a.allocationId)), ['8000', '0', '0', '8000', '0']);
+    await restore(t, 'decision', d1.id);
+    assert.equal((await status(t, a.allocationId)).decision_id, d2.id, 'the older decision comes back below the newer one');
     // A removed decision is not the current one even when it is the newest by time; a removed older decision leaves the newer one current.
     await remove(t, 'decision', d1.id);
     assert.equal((await status(t, a.allocationId)).decision_id, d2.id);
@@ -607,12 +620,16 @@ test('backup: a backup made before 0020 restores, and the upgrade then leaves ev
     await restoreArchive(target.pool, null, file, { via: 'cli' });
     assert.deepEqual(await allStatus(target.pool), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
-    assert.deepEqual(await migrate(target.pool), ['0019', '0020', '0021']);
+    assert.deepEqual(await migrate(target.pool, { upTo: '0020' }), ['0019', '0020']);
     const after = await ledgerSummary(target.pool);
     assert.equal(after.removedHsaRecords, '0');
     delete after.removedHsaRecords;
     assert.deepEqual(after, { ...before.ledger, auditEvents: after.auditEvents });
     assert.deepEqual(await allStatus(target.pool), before.status);
+    assert.deepEqual(await ledgerViolations(target.pool), []);
+    // 0022 afterwards: the same figures, plus the trailing marked_ineligible column (false everywhere).
+    assert.deepEqual(await migrate(target.pool), ['0021', '0022']);
+    assert.deepEqual((await allStatus(target.pool)).map(({ marked_ineligible, ...r }) => r), before.status);
     assert.deepEqual(await ledgerViolations(target.pool), []);
   } finally { ts.cleanup(); await target.drop(); await old.drop(); }
 });
@@ -649,8 +666,8 @@ test('on an allocation that already needs review a removal may reduce or keep th
     // An unrelated (older) decision: the excess is unchanged, so the removal is allowed.
     await remove(t, 'decision', d0.id);
     assert.equal(await excess(), '5000');
-    // The decision that sets the ceiling: removing it would enlarge the excess, so it is refused.
-    await assert.rejects(remove(t, 'decision', d1.id), /increase the excess above the eligible ceiling/);
+    // The decision that sets the ceiling: with none the net cash (50.00 after the refund) is the ceiling, which is the same figure, so the excess is unchanged and the removal is allowed.
+    await remove(t, 'decision', d1.id);
     assert.equal(await excess(), '5000');
     // A claim receipt returns its cash to pending: the excess stays the same, allowed.
     await remove(t, 'receipt', r1.id);

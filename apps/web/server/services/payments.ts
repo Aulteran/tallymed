@@ -223,9 +223,15 @@ export async function recordPayment(pool: Pool, actor: Actor, input: unknown, re
         await hsaAccountRepo.insertFunding(tx, { householdId: actor.householdId, userId: actor.userId, paymentId: id, accountId: hsaAccountId });
       }
     }
+    // The ineligible marker is written only here, in the payment's own transaction, and never afterwards. A payment paid directly from an
+    // HSA is already settled by the HSA, so the two cannot be combined (the database refuses the pair too, in either order).
+    if (fields.hsaIneligible) {
+      if (hsaAccountId) throw new AppError('invalid_input', 'A payment paid directly from an HSA cannot also be marked ineligible for HSA.');
+      await repo.insertHsaIneligible(tx, { householdId: actor.householdId, userId: actor.userId, paymentId: id });
+    }
     await recordAudit(tx, {
       householdId: actor.householdId, actorUserId: actor.userId, action: 'payment.recorded', entityType: 'payment', entityId: id, requestId,
-      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paymentMethodId: fields.paidWithId, paidDirectlyFromHsa: hsaAccountId !== null, hsaAccountId, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
+      detail: { paymentId: id, amountCents: cents(fields.amount), method: fields.method, paymentMethodId: fields.paidWithId, paidDirectlyFromHsa: hsaAccountId !== null, hsaAccountId, hsaIneligible: fields.hsaIneligible, paidOn: fields.paidOn, allocatedCents: cents(applied), unappliedCents: cents(fields.amount - applied), billCount: allocations.length },
     });
     return { id, replayed: false };
   }));

@@ -338,7 +338,13 @@ function route(opts: {
       }
       // A browser form post from a locked session lands on the PIN screen, and the unlock returns the person to the page they were on.
       if (error instanceof AppError && error.code === 'locked' && wantsHtml(req)) {
-        return redirect(ctx.config, '/locked', BASE_HEADERS);
+        // The page the form was on comes from Referer (same origin only, and only a plain application path), so unlocking returns there.
+        let next = '/';
+        try {
+          const from = new URL(req.headers.get('referer') ?? '');
+          if (from.origin === new URL(ctx.config.canonicalOrigin).origin) next = safeReturnPath(`${from.pathname}${from.search}`);
+        } catch { /* no usable Referer: the overview */ }
+        return redirect(ctx.config, next === '/' ? '/locked' : `/locked?next=${encodeURIComponent(next)}`, BASE_HEADERS);
       }
       return errorResponse(req, ctx, error, errorPath, flash, opts.redirectAllErrors);
     }
@@ -771,7 +777,7 @@ const EXPENSE_ACTIONS: Record<string, {
 const ALLOC_ROWS = { prefix: 'alloc', into: 'allocations', fields: ['billId', 'amount'], max: 25 } as const;
 export const ALLOC_FORM_ROWS = 10;
 const ALLOC_KEEP = Array.from({ length: ALLOC_FORM_ROWS }, (_, i) => [`alloc.${i}.billId`, `alloc.${i}.amount`]).flat();
-const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
+const PAYMENT_FIELDS = ['paidOn', 'amount', 'method', 'paidWithId', 'hsaIneligible', 'reference', 'note', 'billId', 'allocateAmount', ...ALLOC_KEEP];
 const allocRows = (b: Record<string, unknown>) => withFormRows(b, ALLOC_ROWS);
 /** A recorded payment with exactly one bill row and no amount applies the whole payment to it, as the single-bill form always did. */
 const createRows = (b: Record<string, unknown>) => {

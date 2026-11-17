@@ -5,7 +5,7 @@ import * as handlers from '../../apps/web/server/http.ts';
 import { authenticate, LOCK_SERVER_SLACK_SECONDS } from '../../apps/web/server/services/auth.ts';
 import { digest } from '../../apps/web/server/tokens.ts';
 import { safeReturnPath } from '../../apps/web/server/validation.ts';
-import { hashPassword, hashPin, verifyPin } from '../../apps/web/server/passwords.ts';
+import { hashPassword, hashPin, isTrivialPin, verifyPin } from '../../apps/web/server/passwords.ts';
 import { insertUser } from '../../apps/web/server/repositories/users.ts';
 import { freshDatabase, loginJson, ORIGIN, PASSWORD, post, seedHousehold, skipDb, testConfig } from './helpers.mjs';
 
@@ -405,5 +405,75 @@ test('a locked session is refused by every gated action and read; only lock, unl
     // The same account on another, unlocked session is unaffected.
     const other = await t.session();
     assert.notEqual((await handlers.handleHsaExport(new Request('http://app.internal:3000/api/hsa/export', { headers: { cookie: other.cookie } }), t.ctx)).status, 423);
+  } finally { await t.db.drop(); }
+});
+
+test('trivial PINs are refused when chosen and accepted when only checked', async () => {
+  for (const bad of ['000000', '111111', '999999', '123456', '234567', '654321', '987654', '012345', '121212', '123123', '112233', '556677']) {
+    assert.equal(isTrivialPin(bad), true, bad);
+    await assert.rejects(hashPin(bad), (e) => e.code === 'weak_pin', bad);
+  }
+  for (const good of ['135790', '246802', '482916', '735190', '112358', '100200', '123789', '121213']) assert.equal(isTrivialPin(good), false, good);
+  assert.equal(await verifyPin(await hashPin('135790'), '000000'), false, 'checking a trivial PIN is just a wrong guess');
+});
+
+test('a trivial PIN is refused on the set and change forms and at account creation', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const me = await t.session();
+    const weak = await t.api(handlers.handleChangePin, '/api/auth/change-pin', { newPin: '123456', confirmPin: '123456' }, me);
+    assert.equal(weak.status, 400);
+    assert.equal(await code(weak), 'weak_pin');
+    assert.equal((await t.db.pool.query('select pin_hash from users')).rows[0].pin_hash, null);
+    assert.equal((await t.setPin(me)).status, 200);
+    assert.equal((await t.api(handlers.handleChangePin, '/api/auth/change-pin', { currentPin: PIN, newPin: '000000', confirmPin: '000000' }, me)).status, 400);
+    const inv = await t.api(handlers.handleInvite, '/api/operators/invite', { email: 'weak@example.test', role: 'operator' }, me);
+    const token = (await inv.json()).link.split('/').pop();
+    const created = await handlers.handleAcceptInvitation(post('/api/invitations/accept', { token, displayName: 'Weak', password: PASSWORD, pin: '111111', confirmPin: '111111' }, { type: 'json' }), t.ctx);
+    assert.equal(created.status, 400);
+    assert.equal((await t.db.pool.query(`select 1 from users where email = 'weak@example.test'`)).rowCount, 0);
+  } finally { await t.db.drop(); }
+});
+
+test('an administrator reset clears the PIN, so one planted on a stolen session does not survive recovery', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const admin = await t.session();
+    const opId = await insertUser(t.db.pool, { householdId: t.householdId, email: 'op@example.test', displayName: 'Op', role: 'operator', passwordHash: await hashPassword(PASSWORD), pinHash: await hashPin(PIN) });
+    assert.ok((await t.db.pool.query('select pin_hash from users where id = $1', [opId])).rows[0].pin_hash);
+    const version = (await t.db.pool.query('select version from users where id = $1', [opId])).rows[0].version;
+    assert.equal((await t.api(handlers.handleResetPassword, '/api/operators/reset-password', { userId: opId, version }, admin)).status, 201);
+    const after = (await t.db.pool.query('select pin_hash, pin_changed_at from users where id = $1', [opId])).rows[0];
+    assert.equal(after.pin_hash, null);
+    assert.equal(after.pin_changed_at, null);
+    // The administrator's own PIN is untouched.
+    assert.equal((await t.setPin(admin)).status, 200);
+  } finally { await t.db.drop(); }
+});
+
+test('Keep me signed in can be turned off with a zero lifetime', { skip: skipDb }, async () => {
+  const t = await setup({ TALLYMED_REMEMBER_SESSION_ABSOLUTE_SECONDS: '0' });
+  try {
+    assert.equal(t.config.rememberSessionAbsoluteSeconds, 0);
+    const me = await t.session({ remember: 'on' });
+    assert.ok(Math.abs(me.maxAge - t.config.sessionAbsoluteSeconds) <= 2, 'a ticked box is ignored');
+    assert.equal((await t.sessionRow(me)).remember, false);
+  } finally { await t.db.drop(); }
+});
+
+test('a form post refused because the session is locked returns to the page it came from after unlocking', { skip: skipDb }, async () => {
+  const t = await setup();
+  try {
+    const me = await t.session();
+    await t.setPin(me);
+    await t.lock(me);
+    const refused = (referer) => handlers.handleExpenseAction(
+      post('/api/expenses/members/create', { name: 'X', csrf: me.csrf }, { cookie: me.cookie, html: true, headers: referer ? { referer } : {} }), t.ctx, 'members/create');
+    const to = async (referer) => { const l = (await refused(referer)).headers.get('location'); return new URL(l).pathname + new URL(l).search; };
+    assert.equal(await to(`${ORIGIN}/bills/abc?page=2`), `/locked?next=${encodeURIComponent('/bills/abc?page=2')}`);
+    assert.equal(await to(`${ORIGIN}/`), '/locked');
+    assert.equal(await to(), '/locked', 'no Referer');
+    assert.equal(await to('https://evil.test/bills'), '/locked', 'another origin is ignored');
+    assert.equal(await to(`${ORIGIN}/api/auth/logout`), '/locked', 'an API address is never a return target');
   } finally { await t.db.drop(); }
 });

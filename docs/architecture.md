@@ -29,7 +29,8 @@ The private app has `pg` (node-postgres, no ORM), plain-SQL migrations in `apps/
 | Payment, payment allocation | Positive cash event with one or more allocations to bills. Allocate at most the event total and keep any unapplied amount explicit. |
 | Refund, refund allocation | Link to original payment allocations and cap cumulative refunds at their remaining paid amounts. |
 | Plan, plan bill, installment, installment match | Plan scope and schedule version. Matching uses the existing payment allocation and cannot exceed the applicable schedule or payment. |
-| Eligibility decision | Per payment allocation, with eligible amount, reason, decision state, evidence and effective date. |
+| Eligibility decision | Optional, per payment allocation, with eligible amount, reason, decision state, evidence and effective date. Without one an allocation is eligible for its full net cash. |
+| HSA ineligible marker | Per payment, append-only, written when the payment is recorded with "This payment is ineligible for HSA."; sets the ceiling to zero. |
 | Claim, claim line, receipt, receipt allocation | Claim lines reserve eligible amounts by payment allocation. Receipts record cash and map to claim lines or directly to eligible allocations for externally initiated claims. Keep transitions and reversals. |
 | Document, attachment, proposal | Opaque document ID, server-generated storage key, checksum, MIME, size and state. Use typed relationship tables or enforce foreign keys across any link design. Proposals bind evidence and target versions. |
 | Audit event, idempotency record | Actor, scope, request identity, timestamp, entity and action. Store stable result references and payload fingerprints for mutation replay. |

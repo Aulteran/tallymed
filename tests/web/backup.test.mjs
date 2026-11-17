@@ -133,6 +133,8 @@ async function richFixture() {
   await pay.reverseRefund(pool, actor, { idempotencyKey: t.key(), eventId: refund2.id, effectiveDate: '2026-05-02', reason: 'Entered in error' }, 'r');
   const allocC = (await t.payment(p2.id)).allocations[0].allocationId;
   await pay.reverseAllocation(pool, actor, { idempotencyKey: t.key(), allocationId: allocC, amount: '5.00', effectiveDate: '2026-05-03', reason: 'Wrong bill' }, 'r');
+  // A payment recorded as ineligible for HSA (0022).
+  await t.pay1({ amount: '21.00', hsaIneligible: 'yes' });
   const p3 = await t.pay1({ amount: '12.34' });
   await pay.voidPayment(pool, actor, { idempotencyKey: t.key(), paymentId: p3.id, voidedOn: '2026-04-02', reason: 'Entered twice' }, 'r');
   // A plan with a match, then a revision that carries it forward; a second plan that is cancelled.
@@ -348,6 +350,7 @@ test('a backup restores into an empty installation with every figure, document a
     assert.equal(result.backupId, m.backupId);
     assert.equal(result.archiveSha256, outcome.sha256);
     const pool = target.db.pool;
+    assert.equal((await pool.query(`select count(*)::int n from payment_hsa_ineligible`)).rows[0].n, 1, 'the ineligible marker travels in the backup');
 
     // Sessions are not restored: the old cookie means nothing, and signing in with the same password works.
     assert.equal(await authenticate(pool, f.config, f.cookie.split('=')[1]), null);
