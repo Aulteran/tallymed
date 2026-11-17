@@ -1395,6 +1395,21 @@ try {
     const overview = await text();
     assert.match(overview, /Bills awaiting a visit\s*\n?\s*2/);
     assert.match(overview, /Estimated, not confirmed/);
+    // 16:9 screens, the most common desktop shape: no sideways scroll at laptop size, and on a 1920x1080 screen the overview puts
+    // Needs attention beside the HSA card (two columns) so the summary fits on one screen.
+    for (const [width, height] of [[1366, 768], [1920, 1080]]) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${origin}/`);
+      const layout = await page.evaluate(() => {
+        const attention = document.querySelector('.overview .attention')?.getBoundingClientRect();
+        const side = document.querySelector('.overview .hsa-card')?.getBoundingClientRect();
+        return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, beside: !!attention && !!side && side.left >= attention.right && side.top < attention.bottom };
+      });
+      assert.ok(layout.scrollWidth <= layout.width, `no horizontal page scroll at ${width}x${height}: ${JSON.stringify(layout)}`);
+      assert.equal(layout.beside, width >= 1600, `Needs attention ${width >= 1600 ? 'sits beside' : 'stacks above'} the HSA card at ${width}x${height}`);
+      if (shots) await page.screenshot({ path: path.join(shots, `overview-${width}x${height}.png`) });
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`${origin}/bills?awaitingVisit=yes`);
     assert.match(await text(), /LAB-1/);
     await a11y('bills list');

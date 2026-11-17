@@ -65,7 +65,7 @@ All are plain classes or small server components; pages stay server-rendered for
 | Page header | Optional `p.crumb` back link, `h1`, then a `p` of meta text and status pills |
 | Card | `.card`; a card with `role="note"` or `role="alert"` becomes an amber or red callout |
 | Metric | `.metrics > .card` with a label `span`, a `strong` value and optional `.muted` help. Add `warn` (amber) to a card that needs attention |
-| Overview | A compact filter row; three key figures (`.key-figure`: open balance with a share-paid bar, upcoming and overdue installments); Needs attention when anything needs action; then two smaller cards, HSA reimbursements (stacked bar with a text legend carrying every amount) and Other figures. See `app/(app)/page.tsx` |
+| Overview | A compact filter row; three key figures (`.key-figure`: open balance with a share-paid bar, upcoming and overdue installments); Needs attention when anything needs action; then two smaller cards, HSA reimbursements (stacked bar with a text legend carrying every amount) and Other figures. From 1600px wide (1920x1080 and other 16:9 screens) wide pages widen to 96rem and the overview becomes two columns: Needs attention and Other figures, with the HSA card beside them. See `app/(app)/page.tsx` |
 | Needs attention | `NeedsAttention` renders only when something needs action: one row per item with the item (a link), the reason, and an importance pill whose text is Critical, Normal or Low. Critical: overdue installments, HSA payments needing review. Normal: unmatched documents, bills awaiting a visit, estimates to confirm. Low: possible duplicates (a hint) |
 | Button | `button` or `a.button` is primary; add `secondary` for outline. Destructive or corrective actions use secondary |
 | Form | `label` then control. `.row` lays filters out in a line. Checkbox labels wrap their input |
@@ -83,4 +83,4 @@ All are plain classes or small server components; pages stay server-rendered for
 
 ## Checks
 
-`npm run test:app-browser` drives the whole app in Chromium with axe on each screen and a phone-width overflow check. Set `TALLYMED_COLOR_SCHEME=dark` to run it in the dark theme (CI runs both) and `TALLYMED_SCREENSHOT_DIR=<folder>` to save a screenshot at each checkpoint. `npm run test:browser` and `npm run test:performance` cover the public site in both themes.
+`npm run test:app-browser` drives the whole app in Chromium with axe on each screen and a phone-width overflow check. Set `TALLYMED_COLOR_SCHEME=dark` to run it in the dark theme (CI runs both) and `TALLYMED_SCREENSHOT_DIR=<folder>` to save a screenshot at each checkpoint. It also checks the overview at the 16:9 sizes 1366x768 and 1920x1080 (no sideways scroll; two columns at 1920). `npm run test:browser` and `npm run test:performance` cover the public site in both themes, including 1366x768 and 1920x1080. Site screenshots are 1600x900 (16:9).

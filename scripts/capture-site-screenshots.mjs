@@ -54,7 +54,7 @@ try {
 
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   const newPage = async (colorScheme) => {
-    const page = await (await browser.newContext({ colorScheme, viewport: { width: 1440, height: 900 } })).newPage();
+    const page = await (await browser.newContext({ colorScheme, viewport: { width: 1600, height: 900 } })).newPage();
     return page;
   };
   const signIn = async (page) => {

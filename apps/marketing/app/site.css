@@ -38,6 +38,8 @@ a:focus-visible, button:focus-visible, summary:focus-visible, [tabindex]:focus-v
 h1, h2, h3, h4 { font-family: var(--font-display); text-wrap: balance; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .frame { width: min(100% - 2.5rem, 76rem); margin-inline: auto; }
+/* Wide 16:9 screens (1600px and up): a wider frame so the page does not sit in a narrow column on 1920x1080 or 2560x1440. */
+@media (min-width: 100rem) { .frame { width: min(100% - 5rem, 88rem); } }
 .skip { position: absolute; top: 1rem; left: 1rem; z-index: 10; padding: .5rem .75rem; border-radius: .375rem; background: var(--surface); color: var(--ink); transform: translateY(-300%); }
 .skip:focus { transform: none; }
 

@@ -1,5 +1,5 @@
-/** Real screenshots of the application running on fabricated data (see scripts/capture-site-screenshots.mjs). All are 1440 x 900. */
-export const screenSize = { width: 1440, height: 900 } as const;
+/** Real screenshots of the application running on fabricated data (see scripts/capture-site-screenshots.mjs). All are 1600 x 900 (16:9, the most common desktop shape). */
+export const screenSize = { width: 1600, height: 900 } as const;
 
 export const screens = [
   {

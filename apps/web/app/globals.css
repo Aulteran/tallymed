@@ -303,6 +303,16 @@ ul.rows li > a:first-child { flex: 1 1 12rem; font-weight: 500; }
 }
 
 .secondary-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); align-items: start; }
+/* Wide 16:9 screens (1600px and up, e.g. 1920x1080): wider pages, and the overview puts Needs attention and Other figures in a main
+   column with the HSA card beside them, so the summary fits on one screen. Without an attention list the secondary cards keep their two-column row. */
+@media (min-width: 100rem) {
+  main.wide, footer.notice, .undo-bar { max-width: 96rem; }
+  .overview-body:has(> .attention) { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(26rem, 1fr); grid-template-rows: auto 1fr; gap: var(--space-4); align-items: start; }
+  .overview-body:has(> .attention) > .attention { grid-column: 1; grid-row: 1; margin: 0; }
+  .overview-body:has(> .attention) > .secondary-grid { display: contents; }
+  .overview-body:has(> .attention) .more-card { grid-column: 1; grid-row: 2; }
+  .overview-body:has(> .attention) .hsa-card { grid-column: 2; grid-row: 1 / span 2; }
+}
 .card.compact { padding: var(--space-4) var(--space-5); margin: 0; }
 .card.compact h2 { font-size: var(--text-md); margin-bottom: var(--space-3); }
 .card.compact h3 { font-size: var(--text-sm); color: var(--fg-muted); margin: var(--space-4) 0 var(--space-1); }

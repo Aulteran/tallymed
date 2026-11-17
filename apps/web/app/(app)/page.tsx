@@ -76,6 +76,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
           <span className="key-note">{overdueNow && <span className="pill warn">Past due</span>} {plural(due.overdueCount, 'installment', 'installments')} past due · all family</span>
         </Link>
       </section>
+      <div className="overview-body">
       <NeedsAttention sources={{
         overdue: overdue.items, needsReview: hsaQueue.needsReview, unmatched,
         awaitingVisit: data!.awaitingVisit, estimates: data!.estimates, duplicates: data!.possibleDuplicates,
@@ -85,7 +86,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         estimates: filter({ status: 'estimate' }), duplicates: filter({ duplicates: 'yes' }),
       }} />
       <div className="secondary-grid">
-        <section className="card compact" aria-labelledby="sec-hsa">
+        <section className="card compact hsa-card" aria-labelledby="sec-hsa">
           <h2 id="sec-hsa">HSA reimbursements</h2>
           {hsaTotal > 0n
             ? <div className="stack-bar" aria-hidden="true">{hsaParts.map((part) => BigInt(part.cents) > 0n && <span key={part.key} className={`seg seg-${part.key}`} style={{ flexGrow: Number(BigInt(part.cents) * 1000n / hsaTotal) || 1 }} />)}</div>
@@ -99,7 +100,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
             <ul className="rows small">{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>
           </>}
         </section>
-        <section className="card compact" aria-labelledby="sec-more">
+        <section className="card compact more-card" aria-labelledby="sec-more">
           <h2 id="sec-more">Other figures</h2>
           <ul className="figure-list">
             <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Confirmed responsibility</span><span className="fig-value"><Money cents={t.confirmedResponsibilityCents} /></span><span className="fig-note">{plural(t.confirmedCount, 'bill', 'bills')}, after adjustments</span></Link></li>
@@ -109,6 +110,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
             <li><Link href={filter({ awaitingVisit: 'yes' })}><span className="fig-label">Bills awaiting a visit</span><span className="fig-value num">{t.awaitingVisitCount}</span><span className="fig-note">Not linked to a visit yet</span></Link></li>
           </ul>
         </section>
+      </div>
       </div>
     </>}
     <p className="muted footnote">Amounts are in USD. Installments and unapplied cash cover the whole family. HSA figures use payment dates, so the statement-date filters do not apply to them.</p>

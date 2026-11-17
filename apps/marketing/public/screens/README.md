@@ -1,6 +1,6 @@
 # Site screenshots
 
-Real screenshots of the TallyMed web app on fabricated household data (invented names, providers and amounts), 1440 x 900, light and dark.
+Real screenshots of the TallyMed web app on fabricated household data (invented names, providers and amounts), 1600 x 900 (16:9), light and dark.
 
 Regenerate with a disposable PostgreSQL server and a built web app:
 
