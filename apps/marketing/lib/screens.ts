@@ -1,11 +1,11 @@
-/** Real screenshots of the application running on fabricated data (see scripts/capture-site-screenshots.mjs). All are 1440 x 900. */
-export const screenSize = { width: 1440, height: 900 } as const;
+/** Real screenshots of the application running on fabricated data (see scripts/capture-site-screenshots.mjs). All are 1600 x 900 (16:9, the most common desktop shape). */
+export const screenSize = { width: 1600, height: 900 } as const;
 
 export const screens = [
   {
     id: 'dashboard', label: 'Dashboard', file: 'overview',
-    caption: 'The overview shows household responsibility, open balances, overdue installments and HSA totals at a glance.',
-    alt: { light: 'TallyMed overview in the light theme: cards for confirmed responsibility, open balance, overdue and upcoming installments and HSA amounts, with a navigation sidebar on the left.', dark: 'TallyMed overview in the dark theme: cards for confirmed responsibility, open balance, overdue and upcoming installments and HSA amounts, with a navigation sidebar on the left.' },
+    caption: 'The overview leads with the open balance and upcoming and overdue installments, and lists only what needs attention, each with a reason and an importance level.',
+    alt: { light: 'TallyMed overview in the light theme: large figures for the open balance with a share-paid bar, upcoming installments and overdue installments, then a Needs attention list marking one overdue installment Critical and three bills Normal, with a navigation sidebar on the left.', dark: 'TallyMed overview in the dark theme: large figures for the open balance with a share-paid bar, upcoming installments and overdue installments, then a Needs attention list marking one overdue installment Critical and three bills Normal, with a navigation sidebar on the left.' },
   },
   {
     id: 'bills', label: 'Bills', file: 'bills',

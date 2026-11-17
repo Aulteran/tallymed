@@ -3,24 +3,25 @@ import paths from '../../../../packages/brand/paths.json';
 const { mark: m, wordmark: w } = paths;
 
 /**
- * The ledger and medical cross mark, drawn inline so it follows the theme. `onDark` forces the white outline used on navy.
+ * The ledger and medical cross mark, drawn inline so it follows the theme. `onDark` forces the white outline and sprout green used on the ink background.
  * Geometry comes from packages/brand/paths.json, the same source as the SVG files.
  */
 function MarkShapes({ onDark }: { onDark?: boolean }) {
   const line = onDark ? '#FFFFFF' : 'var(--logo-line)';
   const paper = onDark ? 'none' : 'var(--logo-paper)';
+  const accent = onDark ? '#74C69B' : 'var(--logo-accent)';
   return <g fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth={4}>
-    <path d={m.spine} fill="#14B8A6" stroke={line} />
+    <path d={m.spine} fill={accent} stroke={line} />
     <path d={m.receipt} fill={paper} stroke={line} />
     <path d={m.lines} stroke={line} />
-    <path d={m.cross} fill="#14B8A6" strokeWidth={0} />
+    <path d={m.cross} fill={accent} strokeWidth={0} />
   </g>;
 }
 
 function Word({ x, baseline, scale = 1, onDark }: { x: number; baseline: number; scale?: number; onDark?: boolean }) {
   return <g transform={`translate(${x} ${baseline}) scale(${scale})`}>
     <path d={w.tally} fill={onDark ? '#FFFFFF' : 'var(--logo-line)'} />
-    <path d={w.med} fill="#14B8A6" />
+    <path d={w.med} fill={onDark ? '#74C69B' : 'var(--logo-accent)'} />
   </g>;
 }
 

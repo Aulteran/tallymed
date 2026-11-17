@@ -8,7 +8,7 @@ import { readTheme } from './components/theme.ts';
 const montserrat = localFont({ src: './fonts/montserrat-latin-variable.woff2', weight: '500 800', display: 'swap', variable: '--font-montserrat' });
 
 export const metadata: Metadata = { title: 'TallyMed', robots: { index: false, follow: false } };
-export const viewport: Viewport = { themeColor: '#0B2942' };
+export const viewport: Viewport = { themeColor: '#1F6B4A' };
 
 export default async function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   const theme = await readTheme();

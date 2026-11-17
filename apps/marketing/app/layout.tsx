@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   twitter: { card: 'summary_large_image', images: ogImages },
 };
 
-export const viewport: Viewport = { themeColor: '#0B2942' };
+export const viewport: Viewport = { themeColor: '#1F6B4A' };
 
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="en" className={montserrat.variable}><body>

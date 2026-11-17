@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 import { deployment } from '../apps/marketing/lib/deployment.mjs';
 import { serveExport } from './static-server.mjs';
 
-const viewports = { phone: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 }, desktop: { width: 1440, height: 900 } };
+const viewports = { phone: { width: 390, height: 844 }, tablet: { width: 820, height: 1180 }, desktop: { width: 1440, height: 900 }, laptop169: { width: 1366, height: 768 }, wide169: { width: 1920, height: 1080 } };
 const sections = ['hero-title', 'problem-title', 'features-title', 'preview-title', 'flow-title', 'host-title', 'ai-title', 'progress-title', 'faq-title'];
 const server = await serveExport(deployment.basePath);
 const base = server.origin + deployment.basePath;
@@ -62,7 +62,7 @@ try {
   ok(await page.locator('role=tab[name="Bills"]').getAttribute('aria-selected') === 'true', 'ArrowRight selects next tab');
   ok(await page.locator('role=tab[name="Bills"]').evaluate((el) => el === document.activeElement), 'Focus follows the selected tab');
   await page.getByRole('tabpanel').getByRole('img').scrollIntoViewIfNeeded();
-  ok(await page.getByRole('tabpanel').getByRole('img').evaluate((el) => el.complete && el.naturalWidth === 1440), 'Bills screenshot is visible and loaded');
+  ok(await page.getByRole('tabpanel').getByRole('img').evaluate((el) => el.complete && el.naturalWidth === 1600), 'Bills screenshot is visible and loaded');
   await page.keyboard.press('End');
   ok(await page.locator('role=tab[name="HSA"]').getAttribute('aria-selected') === 'true', 'End selects last tab');
   await page.keyboard.press('ArrowRight');
@@ -70,7 +70,7 @@ try {
   const previewText = await page.locator('#preview-title ~ .preview').innerText();
   ok(/fictional/i.test(previewText) && !/conceptual|not available yet/i.test(previewText), 'Screenshots are labelled as fictional data, not as a concept');
   const heroImage = page.locator('.hero-art img');
-  ok(await heroImage.getAttribute('alt') && await heroImage.getAttribute('width') === '1440' && await heroImage.getAttribute('height') === '900', 'Hero screenshot has alt text and dimensions');
+  ok(await heroImage.getAttribute('alt') && await heroImage.getAttribute('width') === '1600' && await heroImage.getAttribute('height') === '900', 'Hero screenshot has alt text and dimensions');
   await page.getByText('Can I use TallyMed today?').focus();
   await page.keyboard.press('Enter');
   ok(await page.locator('details[open]').count() === 1, 'FAQ opens with keyboard');

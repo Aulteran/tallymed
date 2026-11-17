@@ -62,8 +62,8 @@ test('brand assets use the concept palette and embed no raster image or outside 
   for (const file of ['mark.svg', 'mark-on-dark.svg', 'wordmark.svg', 'wordmark-on-dark.svg', 'lockup.svg', 'lockup-on-dark.svg', 'lockup-stacked.svg', 'lockup-stacked-on-dark.svg', 'app-icon.svg', 'app-icon-maskable.svg']) {
     const svg = readFileSync(new URL('../packages/brand/' + file, import.meta.url), 'utf8');
     assert.doesNotMatch(svg, /<image|data:|href=|url\(|<script|<text/i, file);
-    assert.match(svg, /#14B8A6/, file + ' uses the brand teal');
-    for (const colour of svg.match(/#[0-9a-f]{6}/gi)) assert.match(colour, /^#(0B2942|14B8A6|FFFFFF)$/i, file + ' uses ' + colour);
+    assert.match(svg, /#(1F6B4A|74C69B)/, file + ' uses the brand forest or sprout green');
+    for (const colour of svg.match(/#[0-9a-f]{6}/gi)) assert.match(colour, /^#(1A1A18|1F6B4A|74C69B|FFFFFF)$/i, file + ' uses ' + colour);
   }
 });
 
