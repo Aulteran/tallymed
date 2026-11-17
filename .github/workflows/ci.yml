@@ -11,7 +11,132 @@ concurrency:
 env:
   NEXT_TELEMETRY_DISABLED: "1"
 jobs:
-  verify:
+  unit:
+    name: unit (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci-disposable-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      TALLYMED_TEST_DATABASE_URL: postgres://postgres:ci-disposable-only@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        if: matrix.shard == 1
+        run: npm run typecheck
+      - run: node --test --test-shard=${{ matrix.shard }}/3
+  app-browser:
+    name: app-browser (${{ matrix.scheme }} theme, ${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [light, dark]
+        # Scenario groups of scripts/check-app-browser.mjs; together they cover every assertion once per theme.
+        scenario: [core, plans, records, admin]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci-disposable-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      TALLYMED_TEST_DATABASE_URL: postgres://postgres:ci-disposable-only@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/web/**/*.[jt]s', 'apps/web/**/*.[jt]sx', 'apps/web/**/*.mjs', 'apps/web/**/*.css', '!apps/web/.next/**', '!apps/web/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-
+      - run: npm run build -w @tallymed/web
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Verify the ${{ matrix.scenario }} expense screens and contrast in the ${{ matrix.scheme }} theme (disposable PostgreSQL)
+        run: npm run test:app-browser
+        env:
+          TALLYMED_COLOR_SCHEME: ${{ matrix.scheme }}
+          TALLYMED_SCENARIO: ${{ matrix.scenario }}
+  marketing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/marketing/.next/cache
+          key: ${{ runner.os }}-next-marketing-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/marketing/**/*.[jt]s', 'apps/marketing/**/*.[jt]sx', 'apps/marketing/**/*.mjs', 'apps/marketing/**/*.css', '!apps/marketing/.next/**', '!apps/marketing/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-marketing-${{ hashFiles('package-lock.json') }}-
+      - run: npm run build:marketing
+      - run: npm run test:export
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/playwright'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+      - name: Install Playwright Chromium and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies (browser cached)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - run: npm run test:browser
+      - run: npm run test:performance
+      - name: Verify repository-path export
+        run: npm run build:marketing && npm run test:export && npm run test:browser && npm run test:performance
+        env:
+          NEXT_PUBLIC_BASE_PATH: /tallymed-example
+          SITE_ORIGIN: https://example.github.io
+          TALLYMED_REPOSITORY: example/tallymed-example
+  proxy-restore:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -31,34 +156,24 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: npm run test:export
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/web/**/*.[jt]s', 'apps/web/**/*.[jt]sx', 'apps/web/**/*.mjs', 'apps/web/**/*.css', '!apps/web/.next/**', '!apps/web/node_modules/**') }}
+          restore-keys: |
+            ${{ runner.os }}-next-web-${{ hashFiles('package-lock.json') }}-
+      - run: npm run build -w @tallymed/web
       - name: Verify HTTPS proxy and network boundary (disposable PostgreSQL)
         run: npm run test:proxy
       - name: Verify backup and restore reconciliation with a PostgreSQL 17 client (disposable PostgreSQL)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-common
+          # The PGDG setup script runs its own apt-get update after adding the repository, so the client install needs no further update.
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -qq postgresql-client-17
+          sudo apt-get -o Acquire::Retries=3 install -y -qq postgresql-client-17
           PATH=/usr/lib/postgresql/17/bin:$PATH npm run test:restore
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run test:performance
-      - name: Verify expense screens in a browser (disposable PostgreSQL)
-        run: npm run test:app-browser
-      - name: Verify the same screens and contrast in the dark theme
-        run: npm run test:app-browser
-        env:
-          TALLYMED_COLOR_SCHEME: dark
-      - name: Verify repository-path export
-        run: npm run build:marketing && npm run test:export && npm run test:browser && npm run test:performance
-        env:
-          NEXT_PUBLIC_BASE_PATH: /tallymed-example
-          SITE_ORIGIN: https://example.github.io
-          TALLYMED_REPOSITORY: example/tallymed-example
   compose-smoke:
     runs-on: ubuntu-latest
     env:
@@ -115,3 +230,14 @@ jobs:
       - name: Remove disposable stack
         if: always()
         run: docker compose --env-file .env.example down --volumes
+  verify:
+    if: always()
+    needs: [unit, app-browser, marketing, proxy-restore, compose-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every verification job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          echo "$NEEDS" | jq -e 'to_entries | length == 5 and all(.value.result == "success")' > /dev/null
