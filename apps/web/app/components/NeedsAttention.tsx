@@ -36,7 +36,8 @@ export function moreLinks(s: AttentionSources, more: AttentionMore): MoreLink[] 
     if (rest > 0) links.push({ key, href, text: `${rest} more ${rest === 1 ? one : many}` });
   };
   const full = (key: string, shown: number, href: string, text: string) => { if (shown >= QUEUE_LIMIT) links.push({ key, href, text }); };
-  full('overdue', s.overdue.length, more.overdue, 'See all overdue installments');
+  // The plans list is not filtered by family member or provider, so the link says it opens the whole family's list.
+  full('overdue', s.overdue.length, more.overdue, 'See all overdue installments (all family)');
   counted('needsReview', s.needsReview.length, more.needsReview.total, more.needsReview.href, 'HSA payment that needs review', 'HSA payments that need review');
   counted('unmatched', s.unmatched.items.length, s.unmatched.count, more.unmatched, 'unmatched document', 'unmatched documents');
   counted('awaitingVisit', s.awaitingVisit.length, more.awaitingVisit.total, more.awaitingVisit.href, 'bill awaiting a visit', 'bills awaiting a visit');

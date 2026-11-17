@@ -29,7 +29,9 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
   const hsaLink = (state: string) => `/hsa?${new URLSearchParams({ ...hsaScope, state })}`;
   const t = data?.totals;
   const share = (part: string, whole: string) => { const w = BigInt(whole); if (w <= 0n) return 0; const p = BigInt(part) * 100n / w; return Number(p < 0n ? 0n : p > 100n ? 100n : p); };
-  const paidPct = t ? share((BigInt(t.confirmedResponsibilityCents) - BigInt(t.confirmedOpenBalanceCents)).toString(), t.confirmedResponsibilityCents) : 0;
+  // Share of responsibility covered by applied payments. The open balance nets provider credits against other bills, so the credit is
+  // added back: a credit on one bill must not make another bill's unpaid amount look paid. Whole-cent BigInt; Number only for the bar.
+  const paidPct = t ? share((BigInt(t.confirmedResponsibilityCents) - BigInt(t.confirmedOpenBalanceCents) - BigInt(t.confirmedCreditCents)).toString(), t.confirmedResponsibilityCents) : 0;
   const overdueNow = BigInt(due.overdueCents) > 0n;
   const hsaParts = [
     { key: 'available', label: 'HSA available', cents: hsaTotals.availableCents, note: 'Eligible, not yet claimed' },
@@ -63,7 +65,7 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
           {BigInt(t.confirmedResponsibilityCents) > 0n
             ? <><span className="progress" aria-hidden="true"><span style={{ width: `${paidPct}%` }} /></span>
               <span className="key-note">{paidPct}% paid of <Money cents={t.confirmedResponsibilityCents} /> confirmed responsibility</span></>
-            : <span className="key-note">No confirmed responsibility yet</span>}
+            : <span className="key-note">{Number(t.confirmedCount) > 0 ? 'Nothing owed on confirmed bills' : 'No confirmed responsibility yet'}</span>}
         </Link>
         <Link href="/plans?state=upcoming" className="key-figure">
           <span className="key-label">Upcoming installments</span>
