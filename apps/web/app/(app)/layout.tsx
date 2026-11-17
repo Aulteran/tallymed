@@ -46,7 +46,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
     <a className="skip" href="#main">Skip to content</a>
     <header className="shell">
       <div className="shell-bar">
-        <Link href="/" className="brand"><Lockup onDark title="TallyMed overview" /></Link>
+        <Link href="/" className="brand"><Lockup title="TallyMed overview" /></Link>
       </div>
       <ShellNav groups={groups}>
         <AccountMenu displayName={actor.displayName} roleLabel={roleLabel(actor.role)} initials={initials(actor.displayName)} csrf={csrf} initialTheme={await readTheme()} hasPin={actor.hasPin} />

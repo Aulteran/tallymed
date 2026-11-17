@@ -5,7 +5,8 @@ import { unmatchedSummary } from '../../server/services/documents.ts';
 import { hsaQueues, hsaSummary } from '../../server/services/hsa.ts';
 import { installmentSummary, listInstallmentQueue } from '../../server/services/plans.ts';
 import { AllocationLink } from '../components/hsa.tsx';
-import { Banner, Empty, flat, load, Money, Options, requireSession, StatePill, todayUtc, type SearchParams } from '../components/ui.tsx';
+import { NeedsAttention } from '../components/NeedsAttention.tsx';
+import { Banner, flat, load, Money, Options, requireSession, todayUtc, type SearchParams } from '../components/ui.tsx';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Overview · TallyMed' };
@@ -27,75 +28,84 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
   const unmatched = await unmatchedSummary(ctx.pool, actor, 5);
   const hsaLink = (state: string) => `/hsa?${new URLSearchParams({ ...hsaScope, state })}`;
   const t = data?.totals;
-  return <main id="main" className="wide">
-    <h1>Overview</h1>
+  const share = (part: string, whole: string) => { const w = BigInt(whole); if (w <= 0n) return 0; const p = BigInt(part) * 100n / w; return Number(p < 0n ? 0n : p > 100n ? 100n : p); };
+  const paidPct = t ? share((BigInt(t.confirmedResponsibilityCents) - BigInt(t.confirmedOpenBalanceCents)).toString(), t.confirmedResponsibilityCents) : 0;
+  const overdueNow = BigInt(due.overdueCents) > 0n;
+  const hsaParts = [
+    { key: 'available', label: 'HSA available', cents: hsaTotals.availableCents, note: 'Eligible, not yet claimed' },
+    { key: 'pending', label: 'HSA pending', cents: hsaTotals.pendingCents, note: 'Reserved by open claims' },
+    { key: 'received', label: 'HSA received', cents: hsaTotals.receivedCents, note: 'Reimbursed; provider balances unchanged' },
+  ];
+  // Geometry only: flex weights for the bar. Money is never computed from these numbers.
+  const hsaTotal = hsaParts.reduce((sum, part) => sum + BigInt(part.cents), 0n);
+  const plural = (n: string | number, one: string, many: string) => `${n} ${Number(n) === 1 ? one : many}`;
+  return <main id="main" className="wide overview">
+    <div className="page-head"><h1>Overview</h1></div>
     {params.notice === 'password_changed' && <p role="status">Your password was changed. Every other session was signed out.</p>}
     {params.notice === 'pin_set' && <p role="status">Your PIN was set. The screen now locks after a few minutes without activity.</p>}
     {params.notice === 'pin_changed' && <p role="status">Your PIN was changed.</p>}
     {params.error && <Banner code={params.error} />}
     <Banner invalid={invalid} />
-    <form method="get" className="card row" aria-label="Filters">
+    <form method="get" className="row filters" aria-label="Filters">
       <div><label htmlFor="memberId">Family member</label>
         <select id="memberId" name="memberId" defaultValue={params.memberId ?? ''}><Options items={members.items.map((m) => ({ id: m.id, name: m.name, archived: m.archivedAt !== null }))} blank="Everyone" /></select></div>
       <div><label htmlFor="providerId">Provider</label>
         <select id="providerId" name="providerId" defaultValue={params.providerId ?? ''}><Options items={providers.items.map((m) => ({ id: m.id, name: m.name, archived: m.archivedAt !== null }))} blank="All providers" /></select></div>
       <div><label htmlFor="from">Statements from</label><input id="from" name="from" type="date" defaultValue={params.from} /></div>
       <div><label htmlFor="to">Statements to</label><input id="to" name="to" type="date" defaultValue={params.to} /></div>
-      <div><button type="submit">Apply</button> <Link href="/">Clear</Link></div>
+      <div><button type="submit" className="secondary">Apply</button> <Link href="/">Clear</Link></div>
     </form>
     {t && <>
-      <h2 className="section-title" id="sec-resp">Household responsibility</h2>
-      <section className="metrics" aria-labelledby="sec-resp">
-        <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Confirmed responsibility</span><strong><Money cents={t.confirmedResponsibilityCents} /></strong><span className="muted">{t.confirmedCount} bills, after adjustments</span></div></Link>
-        <Link href={filter({ status: 'estimate' })}><div className="card"><span>Estimated, not confirmed</span><strong><Money cents={t.estimatedResponsibilityCents} /></strong><span className="muted">{t.estimateCount} {Number(t.estimateCount) === 1 ? 'estimate' : 'estimates'}, kept separate</span></div></Link>
-        <Link href={filter({ status: 'confirmed' })}><div className="card accent"><span>Confirmed open balance</span><strong><Money cents={t.confirmedOpenBalanceCents} /></strong><span className="muted">Responsibility minus net payments applied</span></div></Link>
-        {BigInt(t.confirmedCreditCents) > 0n && <Link href={filter({ status: 'confirmed' })}><div className="card"><span>Provider credits</span><strong><Money cents={t.confirmedCreditCents} /></strong><span className="muted">Payments applied above responsibility</span></div></Link>}
-        <Link href="/payments?unapplied=yes"><div className="card"><span>Unapplied cash</span><strong><Money cents={cash.unappliedCents} /></strong><span className="muted">Paid but not applied to a bill (all family)</span></div></Link>
-        <Link href="/plans?state=overdue"><div className={BigInt(due.overdueCents) > 0n ? 'card warn' : 'card'}><span>Overdue installments</span><strong><Money cents={due.overdueCents} /></strong><span className="muted">{due.overdueCount} installments past due (all family)</span></div></Link>
-        <Link href="/plans?state=upcoming"><div className="card"><span>Upcoming installments</span><strong><Money cents={due.upcomingCents} /></strong><span className="muted">{due.upcomingCount} installments not yet due (all family)</span></div></Link>
-        <Link href={filter({ awaitingVisit: 'yes' })}><div className="card"><span>Bills awaiting a visit</span><strong>{t.awaitingVisitCount}</strong></div></Link>
+      <section className="key-figures" aria-label="Key figures">
+        <Link href={filter({ status: 'confirmed' })} className="key-figure primary">
+          <span className="key-label">Confirmed open balance</span>
+          <strong><Money cents={t.confirmedOpenBalanceCents} /></strong>
+          <span className="progress" aria-hidden="true"><span style={{ width: `${paidPct}%` }} /></span>
+          <span className="key-note">{paidPct}% paid of <Money cents={t.confirmedResponsibilityCents} /> confirmed responsibility</span>
+        </Link>
+        <Link href="/plans?state=upcoming" className="key-figure">
+          <span className="key-label">Upcoming installments</span>
+          <strong><Money cents={due.upcomingCents} /></strong>
+          <span className="key-note">{plural(due.upcomingCount, 'installment', 'installments')} not yet due · all family</span>
+        </Link>
+        <Link href="/plans?state=overdue" className={overdueNow ? 'key-figure warn' : 'key-figure'}>
+          <span className="key-label">Overdue installments</span>
+          <strong><Money cents={due.overdueCents} /></strong>
+          <span className="key-note">{overdueNow && <span className="pill warn">Past due</span>} {plural(due.overdueCount, 'installment', 'installments')} past due · all family</span>
+        </Link>
       </section>
-      <h2 className="section-title" id="sec-hsa">HSA reimbursements</h2>
-      <section className="metrics" aria-labelledby="sec-hsa">
-        <Link href={hsaLink('available')}><div className="card accent"><span>HSA available</span><strong><Money cents={hsaTotals.availableCents} /></strong><span className="muted">Eligible and not yet claimed (statement dates do not filter this)</span></div></Link>
-        <Link href={hsaLink('pending')}><div className="card"><span>HSA pending</span><strong><Money cents={hsaTotals.pendingCents} /></strong><span className="muted">Reserved by open claims</span></div></Link>
-        <Link href={hsaLink('received')}><div className="card"><span>HSA received</span><strong><Money cents={hsaTotals.receivedCents} /></strong><span className="muted">Not household cash; provider balances unchanged</span></div></Link>
-        <Link href={hsaLink('needs_review')}><div className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'card warn' : 'card'}><span>HSA needs review</span><strong><Money cents={hsaTotals.needsReviewCents} /></strong><span className="muted">{hsaTotals.needsReviewCount} {Number(hsaTotals.needsReviewCount) === 1 ? 'payment above its ceiling' : 'payments above their ceiling'}</span></div></Link>
-      </section>
-      <h2 className="section-title">Needs attention</h2>
-      <div className="grid-2">
-      <div className="card">
-        <h2>Available HSA reimbursements</h2>
-        {hsaQueue.available.length === 0 ? <p>Nothing is available to claim in this view.</p> : <ul className="rows">{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>}
-      </div>
-      <div className="card">
-        <h2>HSA payments that need review</h2>
-        {hsaQueue.needsReview.length === 0 ? <p>None. Pending and received amounts fit within every eligible ceiling.</p> : <ul className="rows">{hsaQueue.needsReview.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.needsReviewCents} /></li>)}</ul>}
-      </div>
-      <div className="card">
-        <h2>Unmatched documents</h2>
-        {unmatched.count === 0 ? <p>None. Every document is attached to a record.</p> : <><ul className="rows">{unmatched.items.map((d) => <li key={d.id}><Link href={`/documents/${d.id}`}>{d.title}</Link></li>)}</ul><p><Link href="/documents?unmatched=yes">{unmatched.count} unmatched {unmatched.count === 1 ? 'document' : 'documents'}</Link></p></>}
-      </div>
-      <div className="card">
-        <h2>Overdue installments</h2>
-        {overdue.items.length === 0 ? <p>No installments are overdue in this view.</p> : <ul className="rows">{overdue.items.map((i) => <li key={i.installmentId}><Link href={`/plans/${i.planId}`}>{i.planName} #{i.seq} · due {i.dueDate}</Link> <Money cents={i.unpaidCents} /> <StatePill state={i.state} overdue /></li>)}</ul>}
-      </div>
-      <div className="card">
-        <h2>Bills awaiting a visit</h2>
-        {data!.awaitingVisit.length === 0 ? <p>None. Every bill in this view is linked to a visit.</p> : <ul className="rows">{data!.awaitingVisit.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.providerName} · {b.memberName} · {b.statementDate}</Link></li>)}</ul>}
-      </div>
-      <div className="card">
-        <h2>Estimates to confirm</h2>
-        {data!.estimates.length === 0 ? <p>No estimated amounts.</p> : <ul className="rows">{data!.estimates.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.providerName} · {b.memberName} · {b.statementDate}</Link> <Money cents={b.responsibilityCents} /></li>)}</ul>}
-      </div>
-      <div className="card">
-        <h2>Possible duplicates</h2>
-        {data!.possibleDuplicates.length === 0 ? <p>No similar bills found.</p> : <ul className="rows">{data!.possibleDuplicates.map((b) => <li key={b.id}><Link href={`/bills/${b.id}`}>{b.providerName} · {b.providerReference ?? 'no reference'} · {b.statementDate}</Link></li>)}</ul>}
-        <p className="muted">Hints only. TallyMed never merges bills automatically.</p>
-      </div>
+      <NeedsAttention sources={{
+        overdue: overdue.items, needsReview: hsaQueue.needsReview, unmatched,
+        awaitingVisit: data!.awaitingVisit, estimates: data!.estimates, duplicates: data!.possibleDuplicates,
+      }} />
+      <div className="secondary-grid">
+        <section className="card compact" aria-labelledby="sec-hsa">
+          <h2 id="sec-hsa">HSA reimbursements</h2>
+          {hsaTotal > 0n
+            ? <div className="stack-bar" aria-hidden="true">{hsaParts.map((part) => BigInt(part.cents) > 0n && <span key={part.key} className={`seg seg-${part.key}`} style={{ flexGrow: Number(BigInt(part.cents) * 1000n / hsaTotal) || 1 }} />)}</div>
+            : <p className="muted">No HSA amounts in this view yet.</p>}
+          <ul className="figure-list">
+            {hsaParts.map((part) => <li key={part.key}><Link href={hsaLink(part.key)}><span className={`swatch seg-${part.key}`} aria-hidden="true" /><span className="fig-label">{part.label}<span className="fig-note">{part.note}</span></span><span className="fig-value"><Money cents={part.cents} /></span></Link></li>)}
+            <li className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'is-warn' : undefined}><Link href={hsaLink('needs_review')}><span className="swatch" aria-hidden="true" /><span className="fig-label">HSA needs review<span className="fig-note">{plural(hsaTotals.needsReviewCount, 'payment above its ceiling', 'payments above their ceiling')}</span></span><span className="fig-value"><Money cents={hsaTotals.needsReviewCents} /></span></Link></li>
+          </ul>
+          {hsaQueue.available.length > 0 && <>
+            <h3>Ready to claim</h3>
+            <ul className="rows small">{hsaQueue.available.map((a) => <li key={a.allocationId}><AllocationLink a={a} /> <Money cents={a.availableCents} /></li>)}</ul>
+          </>}
+        </section>
+        <section className="card compact" aria-labelledby="sec-more">
+          <h2 id="sec-more">Other figures</h2>
+          <ul className="figure-list">
+            <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Confirmed responsibility<span className="fig-note">{plural(t.confirmedCount, 'bill', 'bills')}, after adjustments</span></span><span className="fig-value"><Money cents={t.confirmedResponsibilityCents} /></span></Link></li>
+            <li><Link href={filter({ status: 'estimate' })}><span className="fig-label">Estimated, not confirmed<span className="fig-note">{plural(t.estimateCount, 'estimate', 'estimates')}, kept separate</span></span><span className="fig-value"><Money cents={t.estimatedResponsibilityCents} /></span></Link></li>
+            <li><Link href="/payments?unapplied=yes"><span className="fig-label">Unapplied cash<span className="fig-note">Paid but not applied to a bill · all family</span></span><span className="fig-value"><Money cents={cash.unappliedCents} /></span></Link></li>
+            {BigInt(t.confirmedCreditCents) > 0n && <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Provider credits<span className="fig-note">Payments applied above responsibility</span></span><span className="fig-value"><Money cents={t.confirmedCreditCents} /></span></Link></li>}
+            <li><Link href={filter({ awaitingVisit: 'yes' })}><span className="fig-label">Bills awaiting a visit<span className="fig-note">Not linked to a visit yet</span></span><span className="fig-value num">{t.awaitingVisitCount}</span></Link></li>
+          </ul>
+        </section>
       </div>
     </>}
-    <p className="muted">Amounts are in USD. HSA figures use payment dates; the statement-date filters above do not apply to them.</p>
+    <p className="muted footnote">Amounts are in USD. Installments and unapplied cash cover the whole family. HSA figures use payment dates, so the statement-date filters do not apply to them.</p>
   </main>;
 }
 

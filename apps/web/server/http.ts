@@ -220,11 +220,11 @@ const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt
  * interpolation; the colours are the design tokens from app/globals.css and follow the system theme.
  */
 const RESULT_PAGE_BODY = '<style>:root{color-scheme:light dark}'
-  + 'body{font:1rem/1.55 system-ui,sans-serif;margin:0;padding:3rem 1rem;background:light-dark(#F4F7F9,#061725);color:light-dark(#0B2942,#E9EEF2)}'
-  + 'main{max-width:44rem;margin:0 auto;padding:2rem 1.5rem;background:light-dark(#FFFFFF,#0B2942);border:1px solid light-dark(#D5DEE5,#1F4663);border-top:4px solid #14B8A6;border-radius:.625rem}'
+  + 'body{font:1rem/1.55 system-ui,sans-serif;margin:0;padding:3rem 1rem;background:light-dark(#F6F5F2,#111110);color:light-dark(#1A1A18,#ECEAE5)}'
+  + 'main{max-width:44rem;margin:0 auto;padding:2rem 1.5rem;background:light-dark(#FFFFFF,#1A1918);border:1px solid light-dark(#E2DFD8,#33312D);border-top:4px solid #1F6B4A;border-radius:.625rem}'
   + 'h1{font-size:1.375rem;line-height:1.2;margin:0 0 1rem}'
-  + 'code{display:block;padding:.75rem 1rem;border-radius:.375rem;background:light-dark(#E9EEF2,#113550);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}'
-  + 'a{color:light-dark(#0A6B62,#5FE0CF);font-weight:600}a:focus-visible{outline:3px solid light-dark(#0A6B62,#5FE0CF);outline-offset:2px}'
+  + 'code{display:block;padding:.75rem 1rem;border-radius:.375rem;background:light-dark(#EFEDE8,#242320);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}'
+  + 'a{color:light-dark(#1F6B4A,#74C69B);font-weight:600}a:focus-visible{outline:3px solid light-dark(#1F6B4A,#74C69B);outline-offset:2px}'
   + '</style><body><main>';
 const wantsHtml = (req: Request) => (req.headers.get('accept') ?? '').includes('text/html');
 
