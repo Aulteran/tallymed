@@ -14,7 +14,7 @@ The first milestone delivers a public introduction and a dedicated roadmap. The 
 8. Development progress with a link to the standalone roadmap.
 9. FAQ and footer with source, license, documentation and contributions.
 
-Use the brand palette (navy `#0B2942`, teal `#14B8A6`, mist gray `#E9EEF2`, amber `#F59E0B`) with light and dark themes, and the ledger and cross logo from `packages/brand`, as described in the [design system](design-system.md). Use local assets and optimized static previews. Keep keyboard focus visible, handle reduced motion, check contrast, and verify layouts across phone, tablet and desktop.
+Use the brand palette (ink `#1A1A18`, forest `#1F6B4A`, sprout `#74C69B` (dark theme), amber for warnings) with light and dark themes, and the ledger and cross logo from `packages/brand`, as described in the [design system](design-system.md). Use local assets and optimized static previews. Keep keyboard focus visible, handle reduced motion, check contrast, and verify layouts across phone, tablet and desktop.
 
 ## Roadmap and launch
 
