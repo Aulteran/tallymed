@@ -73,6 +73,8 @@ try {
   await page.fill('#displayName', 'Alex Example');
   await page.fill('#email', 'alex@example.test');
   await page.fill('#password', password);
+  await page.fill('#pin', '482916');
+  await page.fill('#confirmPin', '482916');
   await page.click('button[type=submit]');
   await page.waitForURL(`${origin}/login?notice=setup_complete`);
   await signIn(page);
@@ -80,7 +82,7 @@ try {
   const add = async (listPath, button, formAction, fill) => {
     await page.goto(`${origin}${listPath}`);
     await page.click(`.page-head .page-action button:has-text("${button}")`);
-    await page.locator('dialog.form-modal').waitFor({ state: 'visible' });
+    await page.locator('dialog.form-modal[open]').first().waitFor({ state: 'visible' });
     await fill();
     await page.click(`form[action="${formAction}"] button[type=submit]`);
     await page.waitForURL(/\/[0-9a-f-]{36}$/);
@@ -119,7 +121,7 @@ try {
 
   const pay = async (billId, paidOn, amount, reference, allocate) => {
     await page.goto(`${origin}/payments?billId=${billId}`);
-    await page.locator('dialog.form-modal').waitFor({ state: 'visible' });
+    await page.locator('dialog.form-modal[open]').first().waitFor({ state: 'visible' });
     await page.fill('#paidOn', paidOn);
     await page.fill('#amount', amount);
     await page.fill('#reference', reference);
@@ -136,8 +138,8 @@ try {
   // A six-installment plan on the imaging bill: the first installment paid, the second part-paid, the third overdue.
   await add('/plans', 'Create plan', '/api/expenses/plans/create', async () => {
     await page.fill('#name', 'Imaging payment plan'); await page.selectOption('#providerId', { label: 'Sample Imaging' });
-    await page.selectOption('#billId', { value: imagingBill }); await page.fill('#totalAmount', '450.00');
-    await page.fill('#installmentCount', '6'); await page.fill('#firstDueDate', '2026-09-20');
+    await page.check(`#bill_${imagingBill}`); await page.uncheck('#matchExisting');
+    await page.fill('#new-total', '450.00'); await page.fill('#new-count', '6'); await page.fill('#new-first', '2026-09-20');
   });
   const planUrl = page.url();
   for (const [amount, paidOn] of [['75.00', '2026-09-20'], ['50.00', '2026-10-16']]) {

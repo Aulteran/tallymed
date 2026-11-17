@@ -1078,7 +1078,7 @@ try {
     assert.match(await text(), /Synthetic statement[\s\S]*Unmatched/);
     await a11y('document detail');
     await page.goto(`${origin}/`);
-    assert.match(await text(), /Needs attention[\s\S]*Synthetic statement\s*\n?\s*Unmatched document: it is not attached to any record yet\.\s*\n?\s*Importance: Normal/);
+    assert.match(await text(), /Needs attention[\s\S]*Synthetic statement\s*\n?\s*Unmatched document: it is not attached to any record yet\.\s*\n?\s*Importance:\s*Normal/);
     await page.goto(billUrl);
     const option = await page.locator('select[name=documentId] option', { hasText: 'Synthetic statement' }).first().getAttribute('value');
     await page.selectOption('select[name=documentId]', option);

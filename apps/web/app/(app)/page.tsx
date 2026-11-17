@@ -85,8 +85,8 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
             ? <div className="stack-bar" aria-hidden="true">{hsaParts.map((part) => BigInt(part.cents) > 0n && <span key={part.key} className={`seg seg-${part.key}`} style={{ flexGrow: Number(BigInt(part.cents) * 1000n / hsaTotal) || 1 }} />)}</div>
             : <p className="muted">No HSA amounts in this view yet.</p>}
           <ul className="figure-list">
-            {hsaParts.map((part) => <li key={part.key}><Link href={hsaLink(part.key)}><span className={`swatch seg-${part.key}`} aria-hidden="true" /><span className="fig-label">{part.label}<span className="fig-note">{part.note}</span></span><span className="fig-value"><Money cents={part.cents} /></span></Link></li>)}
-            <li className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'is-warn' : undefined}><Link href={hsaLink('needs_review')}><span className="swatch" aria-hidden="true" /><span className="fig-label">HSA needs review<span className="fig-note">{plural(hsaTotals.needsReviewCount, 'payment above its ceiling', 'payments above their ceiling')}</span></span><span className="fig-value"><Money cents={hsaTotals.needsReviewCents} /></span></Link></li>
+            {hsaParts.map((part) => <li key={part.key}><Link href={hsaLink(part.key)}><span className={`swatch seg-${part.key}`} aria-hidden="true" /><span className="fig-label">{part.label}</span><span className="fig-value"><Money cents={part.cents} /></span><span className="fig-note">{part.note}</span></Link></li>)}
+            <li className={BigInt(hsaTotals.needsReviewCents) > 0n ? 'is-warn' : undefined}><Link href={hsaLink('needs_review')}><span className="swatch" aria-hidden="true" /><span className="fig-label">HSA needs review</span><span className="fig-value"><Money cents={hsaTotals.needsReviewCents} /></span><span className="fig-note">{plural(hsaTotals.needsReviewCount, 'payment above its ceiling', 'payments above their ceiling')}</span></Link></li>
           </ul>
           {hsaQueue.available.length > 0 && <>
             <h3>Ready to claim</h3>
@@ -96,11 +96,11 @@ export default async function Overview({ searchParams }: { searchParams: SearchP
         <section className="card compact" aria-labelledby="sec-more">
           <h2 id="sec-more">Other figures</h2>
           <ul className="figure-list">
-            <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Confirmed responsibility<span className="fig-note">{plural(t.confirmedCount, 'bill', 'bills')}, after adjustments</span></span><span className="fig-value"><Money cents={t.confirmedResponsibilityCents} /></span></Link></li>
-            <li><Link href={filter({ status: 'estimate' })}><span className="fig-label">Estimated, not confirmed<span className="fig-note">{plural(t.estimateCount, 'estimate', 'estimates')}, kept separate</span></span><span className="fig-value"><Money cents={t.estimatedResponsibilityCents} /></span></Link></li>
-            <li><Link href="/payments?unapplied=yes"><span className="fig-label">Unapplied cash<span className="fig-note">Paid but not applied to a bill · all family</span></span><span className="fig-value"><Money cents={cash.unappliedCents} /></span></Link></li>
-            {BigInt(t.confirmedCreditCents) > 0n && <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Provider credits<span className="fig-note">Payments applied above responsibility</span></span><span className="fig-value"><Money cents={t.confirmedCreditCents} /></span></Link></li>}
-            <li><Link href={filter({ awaitingVisit: 'yes' })}><span className="fig-label">Bills awaiting a visit<span className="fig-note">Not linked to a visit yet</span></span><span className="fig-value num">{t.awaitingVisitCount}</span></Link></li>
+            <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Confirmed responsibility</span><span className="fig-value"><Money cents={t.confirmedResponsibilityCents} /></span><span className="fig-note">{plural(t.confirmedCount, 'bill', 'bills')}, after adjustments</span></Link></li>
+            <li><Link href={filter({ status: 'estimate' })}><span className="fig-label">Estimated, not confirmed</span><span className="fig-value"><Money cents={t.estimatedResponsibilityCents} /></span><span className="fig-note">{plural(t.estimateCount, 'estimate', 'estimates')}, kept separate</span></Link></li>
+            <li><Link href="/payments?unapplied=yes"><span className="fig-label">Unapplied cash</span><span className="fig-value"><Money cents={cash.unappliedCents} /></span><span className="fig-note">Paid but not applied to a bill · all family</span></Link></li>
+            {BigInt(t.confirmedCreditCents) > 0n && <li><Link href={filter({ status: 'confirmed' })}><span className="fig-label">Provider credits</span><span className="fig-value"><Money cents={t.confirmedCreditCents} /></span><span className="fig-note">Payments applied above responsibility</span></Link></li>}
+            <li><Link href={filter({ awaitingVisit: 'yes' })}><span className="fig-label">Bills awaiting a visit</span><span className="fig-value num">{t.awaitingVisitCount}</span><span className="fig-note">Not linked to a visit yet</span></Link></li>
           </ul>
         </section>
       </div>
