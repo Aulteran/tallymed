@@ -10,11 +10,12 @@ export function Mark({ onDark, className }: { onDark?: boolean; className?: stri
 function MarkShapes({ onDark }: { onDark?: boolean }) {
   const line = onDark ? '#FFFFFF' : 'var(--logo-line)';
   const paper = onDark ? 'none' : 'var(--logo-paper)';
+  const accent = onDark ? '#74C69B' : 'var(--logo-accent)';
   return <g fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth={4}>
-    <path d={m.spine} fill="#14B8A6" stroke={line} />
+    <path d={m.spine} fill={accent} stroke={line} />
     <path d={m.receipt} fill={paper} stroke={line} />
     <path d={m.lines} stroke={line} />
-    <path d={m.cross} fill="#14B8A6" strokeWidth={0} />
+    <path d={m.cross} fill={accent} strokeWidth={0} />
   </g>;
 }
 
@@ -25,7 +26,7 @@ export function Lockup({ onDark }: { onDark?: boolean }) {
     <MarkShapes onDark={onDark} />
     <g transform={`translate(${64 + gap} ${32 + w.capHeight / 2 + 1})`}>
       <path d={w.tally} fill={onDark ? '#FFFFFF' : 'var(--logo-line)'} />
-      <path d={w.med} fill="#14B8A6" />
+      <path d={w.med} fill={onDark ? '#74C69B' : 'var(--logo-accent)'} />
     </g>
   </svg>;
 }

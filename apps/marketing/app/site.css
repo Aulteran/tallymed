@@ -1,34 +1,34 @@
 @import "tailwindcss";
 
 /*
- * TallyMed marketing site. Same tokens as the app (docs/design-system.md): navy, teal, mist gray and amber from the brand
- * concept, with light-dark() pairs so the page follows the visitor's system theme.
+ * TallyMed marketing site. Same tokens as the app (docs/design-system.md, "Ink and Forest"): warm ink neutrals and one
+ * forest green accent, with light-dark() pairs so the page follows the visitor's system theme.
  */
 :root {
   color-scheme: light dark;
-  --navy: #0B2942;
-  --teal: #14B8A6;
-  --mist: #E9EEF2;
-  --amber: #F59E0B;
-  --paper: light-dark(#FFFFFF, #061725);
-  --band: light-dark(#F1F5F8, #0A2238);
-  --surface: light-dark(#FFFFFF, #0B2942);
-  --surface-2: light-dark(#E9EEF2, #113550);
-  --ink: light-dark(#0B2942, #E9EEF2);
-  --muted: light-dark(#496073, #A8BDCC);
-  --border: light-dark(#D5DEE5, #1F4663);
-  --border-strong: light-dark(#7B8FA1, #6585A0);
-  --link: light-dark(#0A6B62, #5FE0CF);
-  --focus: light-dark(#0A6B62, #5FE0CF);
-  --accent-soft: light-dark(#D7F4EF, #0D3F45);
-  --accent-soft-fg: light-dark(#07564F, #7CEBDC);
-  --warn-soft: light-dark(#FEF0CD, #3D2C07);
-  --warn-fg: light-dark(#7A4300, #FBC656);
-  --logo-line: light-dark(#0B2942, #FFFFFF);
+  --forest: light-dark(#1F6B4A, #74C69B);
+  --on-forest: light-dark(#FFFFFF, #0E1F16);
+  --forest-hover: light-dark(#175A3D, #8FD3AE);
+  --paper: light-dark(#FFFFFF, #111110);
+  --band: light-dark(#F6F5F2, #161514);
+  --surface: light-dark(#FFFFFF, #1A1918);
+  --surface-2: light-dark(#EFEDE8, #242320);
+  --ink: light-dark(#1A1A18, #ECEAE5);
+  --muted: light-dark(#5C584F, #A8A398);
+  --border: light-dark(#E2DFD8, #33312D);
+  --border-strong: light-dark(#8C877C, #77726A);
+  --link: light-dark(#1F6B4A, #74C69B);
+  --focus: light-dark(#1F6B4A, #74C69B);
+  --accent-soft: light-dark(#E3EFE7, #18301F);
+  --accent-soft-fg: light-dark(#17573B, #93D8B1);
+  --warn-soft: light-dark(#FBEFD5, #33270E);
+  --warn-fg: light-dark(#7A4A00, #F2C063);
+  --logo-line: light-dark(#1A1A18, #FFFFFF);
   --logo-paper: light-dark(#FFFFFF, transparent);
+  --logo-accent: light-dark(#1F6B4A, #74C69B);
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-display: var(--font-montserrat), var(--font-body);
-  --shadow: 0 1px 2px light-dark(rgb(11 41 66 / .06), rgb(0 0 0 / .3)), 0 8px 24px light-dark(rgb(11 41 66 / .07), rgb(0 0 0 / .35));
+  --shadow: 0 1px 2px light-dark(rgb(26 26 24 / .06), rgb(0 0 0 / .3)), 0 8px 24px light-dark(rgb(26 26 24 / .07), rgb(0 0 0 / .35));
 }
 
 body { background: var(--paper); color: var(--ink); font: 1rem/1.6 var(--font-body); }

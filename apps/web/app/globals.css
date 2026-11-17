@@ -8,49 +8,52 @@
 :root {
   color-scheme: light dark;
 
-  /* Brand */
-  --navy: #0B2942;
-  --teal: #14B8A6;
-  --mist: #E9EEF2;
-  --amber: #F59E0B;
+  /* Brand ("Ink and Forest", 2026-11-17): warm ink neutrals, one forest green accent, amber and red for status only. */
+  --ink: #1A1A18;
+  --forest: #1F6B4A;
+  --sprout: #74C69B;
+  --paper: #F6F5F2;
 
   /* Surfaces and text */
-  --bg: light-dark(#F4F7F9, #061725);
-  --surface: light-dark(#FFFFFF, #0B2942);
-  --surface-2: light-dark(#E9EEF2, #113550);
-  --line: light-dark(#D5DEE5, #1F4663);
-  --line-strong: light-dark(#7B8FA1, #6585A0);
-  --fg: light-dark(#0B2942, #E9EEF2);
-  --fg-muted: light-dark(#496073, #A8BDCC);
-  --link: light-dark(#0A6B62, #5FE0CF);
-  --focus: light-dark(#0A6B62, #5FE0CF);
+  --bg: light-dark(#F6F5F2, #111110);
+  --surface: light-dark(#FFFFFF, #1A1918);
+  --surface-2: light-dark(#EFEDE8, #242320);
+  --line: light-dark(#E2DFD8, #33312D);
+  --line-strong: light-dark(#8C877C, #77726A);
+  --fg: light-dark(#1A1A18, #ECEAE5);
+  --fg-muted: light-dark(#5C584F, #A8A398);
+  --link: light-dark(#1F6B4A, #74C69B);
+  --focus: light-dark(#1F6B4A, #74C69B);
 
-  /* Roles */
-  --accent: var(--teal);
-  --accent-hover: light-dark(#0FA595, #3CCDBD);
-  --on-accent: var(--navy);
-  --accent-soft: light-dark(#D7F4EF, #0D3F45);
-  --accent-soft-fg: light-dark(#07564F, #7CEBDC);
-  --warn-soft: light-dark(#FEF0CD, #3D2C07);
-  --warn-fg: light-dark(#7A4300, #FBC656);
-  --warn-line: light-dark(#F59E0B, #B97706);
-  --danger-soft: light-dark(#FDE8E6, #401816);
-  --danger-fg: light-dark(#A61B12, #FFB1A8);
-  --danger-line: light-dark(#E5584C, #B4443A);
+  /* Roles. The accent is text-safe in both themes (6.4:1 on white, 8:1 on the dark surface). */
+  --accent: light-dark(#1F6B4A, #74C69B);
+  --accent-hover: light-dark(#175A3D, #8FD3AE);
+  --on-accent: light-dark(#FFFFFF, #0E1F16);
+  --accent-soft: light-dark(#E3EFE7, #18301F);
+  --accent-soft-fg: light-dark(#17573B, #93D8B1);
+  --strong: light-dark(#1A1A18, #ECEAE5);
+  --on-strong: light-dark(#FFFFFF, #1A1918);
+  --warn-soft: light-dark(#FBEFD5, #33270E);
+  --warn-fg: light-dark(#7A4A00, #F2C063);
+  --warn-line: light-dark(#C98512, #A8710F);
+  --danger-soft: light-dark(#FBE8E6, #3A1714);
+  --danger-fg: light-dark(#A3261B, #FFB0A6);
+  --danger-line: light-dark(#D9584B, #B4443A);
   --danger-solid: #B42318;
   --danger-solid-hover: #912018;
 
-  /* Sidebar stays navy in both themes */
-  --shell-bg: light-dark(#0B2942, #071C2E);
-  --shell-fg: #E9EEF2;
-  --shell-muted: #A3B8C8;
-  --shell-line: #1F4663;
-  --shell-active: rgb(255 255 255 / 0.09);
-  --shell-danger: #FF6B5E;
+  /* Sidebar: a quiet paper panel in light, a warm charcoal panel in dark. No coloured edge. */
+  --shell-bg: light-dark(#FBFAF8, #161514);
+  --shell-fg: light-dark(#1A1A18, #ECEAE5);
+  --shell-muted: light-dark(#5C584F, #A8A398);
+  --shell-line: light-dark(#E2DFD8, #2E2C29);
+  --shell-active: light-dark(#EDEBE5, #2A2825);
+  --shell-danger: light-dark(#A3261B, #FFB0A6);
 
   /* Logo colours (inline SVG reads these) */
-  --logo-line: light-dark(#0B2942, #FFFFFF);
+  --logo-line: light-dark(#1A1A18, #FFFFFF);
   --logo-paper: light-dark(#FFFFFF, transparent);
+  --logo-accent: light-dark(#1F6B4A, #74C69B);
 
   /* Type */
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -75,8 +78,8 @@
   --radius-md: .625rem;
   --radius-lg: .875rem;
   --radius-pill: 999px;
-  --shadow-1: 0 1px 2px light-dark(rgb(11 41 66 / .06), rgb(0 0 0 / .3));
-  --shadow-2: 0 6px 20px light-dark(rgb(11 41 66 / .10), rgb(0 0 0 / .45));
+  --shadow-1: 0 1px 2px light-dark(rgb(26 26 24 / .06), rgb(0 0 0 / .3));
+  --shadow-2: 0 6px 20px light-dark(rgb(26 26 24 / .10), rgb(0 0 0 / .45));
   --sidebar: 15.5rem;
 }
 :root[data-theme="light"] { color-scheme: light; }
