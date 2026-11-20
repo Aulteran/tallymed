@@ -1,6 +1,6 @@
 # Release drills (owner checklist)
 
-These are the checks M07 needs before a stable release that no cloud thread can run: they need a Docker daemon, published images, a real reverse proxy and your hardware. Run them against the images the release will name, using **fabricated data only**. Record each result in the table at the end and in `.project/STATUS.md`. The commands come from the [operations guide](operations.md); `dc` is the shorthand defined there:
+These are the checks M07 needs before a stable release that no cloud thread can run: they need a Docker daemon, published images, a real reverse proxy and your hardware. Run them against the images the release will name, using **fabricated data only**. Record each result in the table at the end and in the TallyMed project in Notion. The commands come from the [operations guide](operations.md); `dc` is the shorthand defined there:
 
 ```sh
 dc() { docker compose --env-file deploy/.env -f deploy/compose.release.yaml "$@"; }
@@ -104,7 +104,7 @@ Needs two builds. After the release commit exists, make a second commit on `dev`
 
 ## 7. Secret scan before the tag
 
-Already done on the history at the review commit (see `.project/STATUS.md`). Repeat on the release commit:
+Already done on the history at the review commit (see the TallyMed project in Notion). Repeat on the release commit:
 
 ```sh
 git log --all -p | grep -aEi 'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_|sk-ant-|-----BEGIN [A-Z ]*PRIVATE KEY'   # expect nothing

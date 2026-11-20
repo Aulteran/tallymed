@@ -1,7 +1,7 @@
 // Use cases for document management: upload through quarantine and validation, versions, typed attachments with link history,
 // authorized download, removal, and the storage verification and cleanup commands.
 //
-// Order of writes (see DECISIONS.md, Document Management): bytes are validated, written to quarantine, read back and checksummed,
+// Order of writes (see the Document Management decisions in the TallyMed Notion project): bytes are validated, written to quarantine, read back and checksummed,
 // then promoted into the object area; only then does one transaction record the rows. A failure at any step removes the object,
 // and a crash between promote and commit leaves an unreferenced object that `cleanupStorage` removes after a grace period. A row
 // therefore never points at bytes that were not stored and verified. Document writers take the parent record's lock first

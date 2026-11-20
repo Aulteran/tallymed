@@ -1,6 +1,6 @@
 // Upload validation for documents. Everything about a file comes from its bytes, never from the name or the declared type:
 // the declared type and the extension must agree with what the content sniffer found, or the upload is refused.
-// Allowlist (conservative starter default, recorded in DECISIONS.md): PDF, PNG, JPEG.
+// Allowlist (conservative starter default, recorded in the TallyMed Notion project): PDF, PNG, JPEG.
 import { createHash } from 'node:crypto';
 import { crc32, inflateSync } from 'node:zlib';
 import { AppError } from './errors.ts';

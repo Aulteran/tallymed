@@ -18,7 +18,7 @@ Use the brand palette (ink `#1A1A18`, forest `#1F6B4A`, sprout `#74C69B` (dark t
 
 ## Roadmap and launch
 
-The public content file is `apps/marketing/lib/roadmap.json`. Each item has only a descriptive name, a status and a short description. Keep internal milestone IDs out of display text, URLs, structured metadata, route payloads, client data and source maps. Never import `.project/` into the site. Update public status when a maintainer accepts the underlying work and the required evidence exists. An opened or merged PR by itself does not prove acceptance. For Marketing Website, verify the deployed site first and then publish the completion update.
+The public content file is `apps/marketing/lib/roadmap.json`. Each item has only a descriptive name, a status and a short description. Keep internal milestone IDs out of display text, URLs, structured metadata, route payloads, client data and source maps. Never import internal planning material into the site. Update public status when a maintainer accepts the underlying work and the required evidence exists. An opened or merged PR by itself does not prove acceptance. For Marketing Website, verify the deployed site first and then publish the completion update.
 
 Support GitHub Pages repository paths and a custom-domain root. Include page metadata, canonical URLs, an Open Graph preview image using the mark, and a sitemap. Build a static site with Next.js, TypeScript and Tailwind. Use no tracking by default. No registration, waitlist, blog or runtime server is needed. Test the root and repository-path exports, and exercise the deployed links and assets. Add automated accessibility and viewport checks plus a reproducible performance check to M00.
 
