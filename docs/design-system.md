@@ -1,6 +1,6 @@
 # Design system
 
-TallyMed uses one visual language for the private app (`apps/web`) and the public site (`apps/marketing`). It keeps the "Ledger + Cross" logo drawing in the "Ink and Forest" palette (brand refresh of 2026-11-17, which retired the navy and turquoise palette). The decisions are in `.project/DECISIONS.md` under "Interface redesign decisions" and "Brand refresh and minimal dashboard decisions".
+TallyMed uses one visual language for the private app (`apps/web`) and the public site (`apps/marketing`). It keeps the "Ledger + Cross" logo drawing in the "Ink and Forest" palette (brand refresh of 2026-11-17, which retired the navy and turquoise palette). The design decisions are recorded in the TallyMed project in Notion (Decisions database).
 
 ## Brand assets
 

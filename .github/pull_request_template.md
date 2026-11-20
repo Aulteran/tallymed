@@ -12,4 +12,4 @@ Record the reviewed commit SHA, findings and dispositions. Include separate fina
 
 ## Handoff
 
-Update `.project/STATUS.md` when the work changes the next action. Public progress requires maintainer acceptance and supporting evidence.
+Record the outcome and next action in the TallyMed project in Notion when the work changes them. Public progress requires maintainer acceptance and supporting evidence.

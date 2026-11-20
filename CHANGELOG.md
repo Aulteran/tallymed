@@ -9,7 +9,7 @@ All notable changes to TallyMed are recorded here. The project follows [Semantic
 
 ## 0.1.0 — first self-hosted release (draft, not yet tagged)
 
-> **Status: prepared, not published.** Nothing below is a stable release until the owner has run the drills in [docs/release-drills.md](docs/release-drills.md), recorded the results in `.project/STATUS.md`, and decided to tag. Fill in the commit, image digests and drill results at the bottom first.
+> **Status: prepared, not published.** Nothing below is a stable release until the owner has run the drills in [docs/release-drills.md](docs/release-drills.md), recorded the results in the TallyMed project in Notion, and decided to tag. Fill in the commit, image digests and drill results at the bottom first.
 
 TallyMed is a self-hosted medical expense ledger for one household. Use fabricated data when you first try it.
 

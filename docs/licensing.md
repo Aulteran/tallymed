@@ -40,7 +40,7 @@ No GPL-only, AGPL-incompatible, source-available or non-commercial licence appea
 ## Recommendations (not blocking)
 
 - **Drop `sharp` from the web image.** The app does not use `next/image`, so removing `node_modules/@img` from the runtime stage (or turning off image optimisation) would shrink the image and remove the LGPL binaries. It needs a Docker build and a smoke test, so it was not done blind.
-- **Base-image sources.** `node:24-bookworm-slim` and `postgres:17-alpine` bring Debian, Alpine and PostgreSQL packages under their own licences (including GPL and LGPL). Sources are available from those distributions; nothing is modified. Digest-pinning the base images (already noted in DECISIONS.md) makes the exact set reproducible.
+- **Base-image sources.** `node:24-bookworm-slim` and `postgres:17-alpine` bring Debian, Alpine and PostgreSQL packages under their own licences (including GPL and LGPL). Sources are available from those distributions; nothing is modified. Digest-pinning the base images (already noted as an accepted first-release risk) makes the exact set reproducible.
 
 ## Not checked
 
